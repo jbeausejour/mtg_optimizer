@@ -1,0 +1,7 @@
+Flask
+flask-cors
+requests
+deap
+pandas
+beautifulsoup4
+lxml

@@ -1,0 +1,21 @@
+{
+    "special_site_flag" : true,
+    
+    "save_all_results_to_csv" : true,
+    
+    "best_site_strat" : false,
+    "nsga_algo_strat" : false,
+    "milp_strat" : true,
+    "hybrid_strat" : false,
+    
+    "min_store" : 9,
+    "find_min_store" : true,
+    
+    "use_previous_csv_results" : false,  
+    
+    "sites_path" : "./sites",
+    "results_path" : "./results",
+    "data_path" : "./data",
+    "debug_mode": false
+  }
+  
