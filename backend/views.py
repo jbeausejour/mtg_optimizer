@@ -1,45 +1,40 @@
-from flask import Blueprint, request, jsonify
-from services import get_all_sites, add_site, update_site, delete_site
+from flask import Blueprint, jsonify, request
+from models import db, Site, Card
+from services import get_all_sites, add_site, delete_site, update_site
+from mtg_utils import fetch_all_card_details
+import pandas as pd
 
-# Example card list stored in a file or database
-CARD_LIST_FILE = 'data/card_list.txt'
+views = Blueprint('views', __name__)
 
-app = Blueprint('views', __name__)
-
-@app.route('/get_site_list', methods=['GET'])
+@views.route('/get_site_list', methods=['GET'])
 def get_site_list():
     sites = get_all_sites()
-    site_list = [{
-        'id': site.id,
-        'name': site.name,
-        'url': site.url,
-        'parse_method': site.parse_method,
-        'type': site.type
-    } for site in sites]
-    return jsonify(site_list)
+    return jsonify([site.to_dict() for site in sites])
 
-@app.route('/add_site', methods=['POST'])
+@views.route('/add_site', methods=['POST'])
 def add_site_route():
-    data = request.get_json()
-    response, status = add_site(data)
-    return jsonify(response), status
+    data = request.json
+    site = add_site(data)
+    return jsonify(site.to_dict())
 
-@app.route('/update_site/<int:site_id>', methods=['PUT'])
-def update_site_route(site_id):
-    data = request.get_json()
-    response = update_site(site_id, data)
-    return jsonify(response)
-
-@app.route('/delete_site/<int:site_id>', methods=['DELETE'])
+@views.route('/delete_site/<int:site_id>', methods=['DELETE'])
 def delete_site_route(site_id):
-    response = delete_site(site_id)
-    return jsonify(response)
+    delete_site(site_id)
+    return jsonify({'message': 'Site deleted successfully'})
 
-@app.route('/get_card_list', methods=['GET'])
-def get_card_list():
-    try:
-        with open(CARD_LIST_FILE, 'r') as file:
-            card_list = file.read()
-        return card_list, 200
-    except Exception as e:
-        return str(e), 500
+@views.route('/update_site/<int:site_id>', methods=['PUT'])
+def update_site_route(site_id):
+    data = request.json
+    site = update_site(site_id, data)
+    return jsonify(site.to_dict())
+
+@views.route('/search_cards', methods=['POST'])
+def search_cards():
+    data = request.json
+    card_list = data['card_list']
+    special_site_flag = data['special_site_flag']
+    sites_results_df = fetch_all_card_details(card_list, special_site_flag)
+    if sites_results_df is not None and not sites_results_df.empty:
+        return jsonify(sites_results_df.to_dict(orient='records'))
+    else:
+        return jsonify([])

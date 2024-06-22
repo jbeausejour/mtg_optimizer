@@ -1,26 +1,25 @@
-from flask import Flask, send_from_directory
-from flask_cors import CORS
+from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from models import db
+from flask_cors import CORS
 
-app = Flask(__name__, static_url_path='', static_folder='static')
-CORS(app)
+db = SQLAlchemy()
 
-# Configure the SQLite database
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site_data.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+def create_app():
+    app = Flask(__name__, static_folder='static', template_folder='templates')
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sites.db'
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db.init_app(app)
+    CORS(app)
+    db.init_app(app)
 
-@app.route('/')
-def index():
-    return send_from_directory('static', 'index.html')
+    from views import views
+    app.register_blueprint(views)
 
-# Import and register the views
-from views import app as views_app
-app.register_blueprint(views_app)
+    with app.app_context():
+        db.create_all()
+
+    return app
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()  # Create tables
+    app = create_app()
     app.run(debug=True)

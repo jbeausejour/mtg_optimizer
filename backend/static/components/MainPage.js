@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 
 const MainPage = () => {
   const [cardList, setCardList] = useState('');
-  
+  const [searchResult, setSearchResult] = useState(null);
+
   useEffect(() => {
     fetchCardList();
   }, []);
-  
+
   const fetchCardList = async () => {
     const response = await fetch('/get_card_list');
     const data = await response.text();
@@ -17,9 +18,14 @@ const MainPage = () => {
     setCardList('');
   };
 
-  const handleSearch = () => {
-    console.log('Search initiated with card list:', cardList);
-    // Implement your search logic here
+  const handleSearch = async () => {
+    const response = await fetch('/search_cards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardList })
+    });
+    const result = await response.json();
+    setSearchResult(result);
   };
 
   return (
@@ -35,6 +41,12 @@ const MainPage = () => {
       <br />
       <button onClick={handleClearList}>Clear List</button>
       <button onClick={handleSearch}>Search</button>
+      {searchResult && (
+        <div>
+          <h2>Search Results</h2>
+          <pre>{JSON.stringify(searchResult, null, 2)}</pre>
+        </div>
+      )}
     </div>
   );
 };

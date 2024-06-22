@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTG Optimizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/17.0.2/umd/react.production.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/17.0.2/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.15.0/babel.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const SiteForm = ({ onAdd }) => {
+            const [site, setSite] = useState({ name: '', url: '', parse_method: '', type: '' });
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                onAdd(site);
+                setSite({ name: '', url: '', parse_method: '', type: '' });
+            };
+
+            return (
+                <div>
+                    <h2>Add New Site</h2>
+                    <form onSubmit={handleSubmit}>
+                        <input
+                            type="text"
+                            placeholder="Name"
+                            value={site.name}
+                            onChange={(e) => setSite({ ...site, name: e.target.value })}
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="URL"
+                            value={site.url}
+                            onChange={(e) => setSite({ ...site, url: e.target.value })}
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="Parse Method"
+                            value={site.parse_method}
+                            onChange={(e) => setSite({ ...site, parse_method: e.target.value })}
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="Type"
+                            value={site.type}
+                            onChange={(e) => setSite({ ...site, type: e.target.value })}
+                            required
+                        />
+                        <button type="submit">Add Site</button>
+                    </form>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [sites, setSites] = useState([]);
+
+            useEffect(() => {
+                fetch('/get_site_list')
+                    .then(response => response.json())
+                    .then(data => setSites(data));
+            }, []);
+
+            const handleAddSite = (site) => {
+                fetch('/add_site', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(site),
+                })
+                .then(response => response.json())
+                .then(newSite => setSites([...sites, newSite]));
+            };
+
+            return (
+                <div>
+                    <h1>MTG Optimizer</h1>
+                    <SiteForm onAdd={handleAddSite} />
+                    <ul>
+                        {sites.map(site => (
+                            <li key={site.id}>{site.name}</li>
+                        ))}
+                    </ul>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
