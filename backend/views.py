@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from models import db, Site
+from models import db, Site, CardScan
 from services import get_all_sites, add_site, update_site, delete_site
 import requests
 from flask_cors import CORS
@@ -63,6 +63,28 @@ def get_card_price(name):
     card_url = card_url_from_name(name)
     return scrape_price(card_url) if card_url else {'error': 'Card not found'}
 
+@views.route('/get_site_list', methods=['GET'])
+def get_site_list():
+    sites = get_all_sites()
+    return jsonify([site.to_dict() for site in sites])
+
+@views.route('/add_site', methods=['POST'])
+def add_site_route():
+    data = request.json
+    result, status = add_site(data)
+    return jsonify(result), status
+
+@views.route('/update_site/<int:site_id>', methods=['PUT'])
+def update_site_route(site_id):
+    data = request.json
+    result, status = update_site(site_id, data)
+    return jsonify(result), status
+
+@views.route('/delete_site/<int:site_id>', methods=['DELETE'])
+def delete_site_route(site_id):
+    result, status = delete_site(site_id)
+    return jsonify(result), status
+
 @views.route('/fetch_card', methods=['GET'])
 def fetch_card():
     card_name = request.args.get('name')
@@ -76,9 +98,15 @@ def fetch_card():
     # Fetch data from MTGStocks
     mtgstocks_data = get_card_price(card_name)
     
+    # Fetch previous scan info from the database
+    previous_scan = db.session.query(CardScan).filter_by(name=card_name).first()
+    previous_scan_data = previous_scan.to_dict() if previous_scan else None
+    
     card_data = {
         'scryfall': scryfall_data,
-        'mtgstocks': mtgstocks_data
+        'mtgstocks': mtgstocks_data,
+        'previous_scan': previous_scan_data
     }
 
     return jsonify(card_data)
+

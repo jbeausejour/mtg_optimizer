@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { List, Card } from 'antd';
+import axios from 'axios';
 
 const Results = () => {
+  const { scanId } = useParams();
   const [results, setResults] = useState([]);
 
   useEffect(() => {
-    fetch('/api/results')
-      .then(response => response.json())
-      .then(data => setResults(data))
+    axios.get(`/api/results/${scanId}`)
+      .then(response => setResults(response.data))
       .catch(error => console.error('Error fetching results:', error));
-  }, []);
+  }, [scanId]);
 
   return (
     <div>

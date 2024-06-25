@@ -51,3 +51,16 @@ class Card(db.Model):
 
     def __hash__(self):
         return hash((self.Site, self.Name, self.Edition, self.Version, self.Foil, self.Quality, self.Language, self.Quantity, self.Price))
+
+
+class CardScan(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    scan_data = db.Column(db.JSON, nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'scan_data': self.scan_data
+        }

@@ -15,6 +15,10 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site_data.db'
     app.config['UPLOAD_FOLDER'] = 'uploads'
 
+    # Explicitly set the environment and debug mode
+    app.config['ENV'] = 'development'
+    app.config['DEBUG'] = True
+
     # Initialize the database with the app
     db.init_app(app)
     migrate = Migrate(app, db)  # Initialize Flask-Migrate

@@ -1,12 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Button, message, Row, Col, Card, List, Modal } from 'antd';
-import CardForm from './CardForm';
+import axios from 'axios';
+import { useLocation } from 'react-router-dom';
+import ThemeContext from './ThemeContext';
+import './Optimize.css';
 
 const Optimize = () => {
   const [cards, setCards] = useState([]);
   const [sites, setSites] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [cardData, setCardData] = useState(null);
+  const location = useLocation();
+  const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
     fetch('/api/cards')
@@ -31,9 +37,15 @@ const Optimize = () => {
     }
   };
 
-  const handleCardClick = (card) => {
+  const handleCardClick = async (card) => {
     setSelectedCard(card);
-    setIsModalVisible(true);
+    try {
+      const response = await axios.get(`/fetch_card?name=${card.card}`);
+      setCardData(response.data);
+      setIsModalVisible(true);
+    } catch (error) {
+      console.error('Error fetching card data:', error);
+    }
   };
 
   const handleModalClose = () => {
@@ -41,7 +53,7 @@ const Optimize = () => {
   };
 
   return (
-    <div>
+    <div className={`optimize ${theme}`}>
       <h1>Optimize</h1>
       <Button type="primary" onClick={handleOptimize}>Run Optimization</Button>
       <Row gutter={16}>
@@ -78,7 +90,21 @@ const Optimize = () => {
           </Button>
         ]}
       >
-        <CardForm />
+        {cardData && (
+          <div>
+            <Card title="Scryfall Data">
+              <pre>{JSON.stringify(cardData.scryfall, null, 2)}</pre>
+            </Card>
+            <Card title="MTGStocks Data">
+              <pre>{JSON.stringify(cardData.mtgstocks, null, 2)}</pre>
+            </Card>
+            {cardData.previous_scan && (
+              <Card title="Previous Scan Data">
+                <pre>{JSON.stringify(cardData.previous_scan, null, 2)}</pre>
+              </Card>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

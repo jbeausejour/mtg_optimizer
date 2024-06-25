@@ -34,6 +34,11 @@ const CardForm = () => {
           <Card title="MTGStocks Data">
             <pre>{JSON.stringify(cardData.mtgstocks, null, 2)}</pre>
           </Card>
+          {cardData.previous_scan && (
+            <Card title="Previous Scan Data">
+              <pre>{JSON.stringify(cardData.previous_scan, null, 2)}</pre>
+            </Card>
+          )}
         </div>
       )}
     </div>
