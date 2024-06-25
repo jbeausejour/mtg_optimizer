@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+__pycache__/*
+__pypackages__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints
+# Django stuff:
+*.log
+
+mtg_optimizer.code-workspace
+.vscode/
+static/
+build/
+node_modules/
+results/
+logs/
+package-lock.json
