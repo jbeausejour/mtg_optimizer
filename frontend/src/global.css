@@ -1,0 +1,142 @@
+:root {
+  --background-color-light: #ffffff;
+  --background-color-dark: #1c1c1c;
+  --text-color-light: #000000;
+  --text-color-dark: #ffffff;
+  --table-background-color-light: #f8f8f8;
+  --table-background-color-dark: #333333;
+  --table-border-color-light: #dddddd;
+  --table-border-color-dark: #444444;
+  --card-background-color-dark: #2c2c2c;
+  --button-background-color-light: #1677ff;
+  --button-background-color-dark: #1677ff;
+  --hover-background-color-dark: #000000;
+  --hover-background-color-light: #ffffff;
+  --hover-text-color-dark: #000000;
+  --hover-text-color-light: #ffffff;
+  --card-head-title-color-light: #dddddd;
+  --card-head-title-color-dark: #2c2c2c;
+  --ant-table-thead-color-light: #ffffff;
+  --ant-table-thead-color-dark: #2c2c2c;
+  --ant-table-row-color-light: #ffffff;
+  --ant-table-row-color-dark: #2c2c2c;
+  --ant-table-cell-row-hover-color-dark: #dc0c0c;
+}
+
+[data-theme='light'] {
+  --background-color: var(--background-color-light);
+  --text-color: var(--text-color-light);
+  --table-background-color: var(--table-background-color-light);
+  --table-border-color: var(--table-border-color-light);
+  --card-background-color: var(--background-color-light);
+  --button-background-color: var(--button-background-color-light);
+  --hover-text-color: var(--hover-text-color-light);
+  --hover-background-color: var(--hover-background-color-light);
+  --card-head-title-color: var(--card-head-title-color-light);
+  --ant-table-thead-color: var(--ant-table-thead-color-light);
+  --ant-table-row-color: var(--ant-table-row-color-light);
+}
+
+[data-theme='dark'] {
+  --background-color: var(--background-color-dark);
+  --text-color: var(--text-color-dark);
+  --table-background-color: var(--table-background-color-dark);
+  --table-border-color: var(--table-border-color-dark);
+  --card-background-color: var(--card-background-color-dark);
+  --button-background-color: var(--button-background-color-dark);
+  --hover-text-color: var(--hover-text-color-dark);
+  --hover-background-color: var(--hover-background-color-dark);
+  --card-head-title-color: var(--card-head-title-color-dark);
+  --ant-table-thead-color: var(--ant-table-thead-color-dark);
+  --ant-table-row-color: var(--ant-table-row-color-dark);
+}
+
+body {
+  background-color: var(--background-color);
+  color: var(--text-color);
+}
+
+.ant-layout-header, 
+.ant-layout-footer,
+.ant-menu,
+.list-item,
+.layout,
+.table, 
+.App,
+.dashboard,
+.results,
+.site-management {
+  background-color: var(--background-color);
+  color: var(--text-color);
+}
+
+.ant-table-tbody .ant-table-row:nth-child(even) {
+  background-color: rgb(3, 136, 213);
+  color: var(--text-color);
+}
+
+.ant-table-tbody > tr.ant-table-row:hover > td,
+.ant-table-tbody > tr > td.ant-table-cell-row-hover {
+  background-color: var(--ant-table-cell-row-hover-color-dark);
+}
+
+.ant-table {
+  background-color: var(--card-head-title-color);
+  color: var(--text-color);
+}
+.ant-card-body,
+.ant-card-head-title, 
+.ant-table-thead {
+  background-color: var(--ant-table-thead-color);
+  color: var(--text-color);
+}
+
+.ant-table-row {
+  background-color: var(--ant-table-row-color);
+  color: var(--text-color);
+}
+
+
+.ant-card {
+  background-color: var(--card-background-color);
+}
+
+.ant-input {
+  background-color: var(--background-color);
+  color: var(--text-color);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th, .table td {
+  border: 1px solid var(--table-border-color);
+  padding: 8px;
+}
+
+.table th {
+  background-color: var(--table-background-color);
+  color: var(--text-color);
+}
+
+.table td {
+  color: var(--text-color);
+}
+
+.table tbody tr:hover {
+  background-color: var(--hover-background-color);
+  color: var(--hover-text-color);
+}
+
+.list-item {
+  background-color: var(--background-color);
+  color: var(--text-color);
+}
+
+.section {
+  padding: 20px;
+  background-color: var(--background-color);
+  color: var(--text-color);
+}

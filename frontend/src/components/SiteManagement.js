@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Table, Input, Button, Form, message } from 'antd';
 import { SaveOutlined, EditOutlined } from '@ant-design/icons';
+import ThemeContext from './ThemeContext';
+import '../global.css';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
   const [modifiedSites, setModifiedSites] = useState({});
   const [form] = Form.useForm();
+  const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
     fetchSiteList();
@@ -137,7 +140,7 @@ const SiteManagement = () => {
   };
 
   return (
-    <div>
+    <div className={`site-management section ${theme}`}>
       <h1>Site Management</h1>
       <Button
         type="primary"

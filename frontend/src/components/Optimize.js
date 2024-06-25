@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Button, message, Row, Col, Card, List, Modal } from 'antd';
 import axios from 'axios';
-import { useLocation } from 'react-router-dom';
 import ThemeContext from './ThemeContext';
-import './Optimize.css';
+import '../global.css';
 
 const Optimize = () => {
   const [cards, setCards] = useState([]);
@@ -11,7 +10,6 @@ const Optimize = () => {
   const [selectedCard, setSelectedCard] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [cardData, setCardData] = useState(null);
-  const location = useLocation();
   const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
@@ -53,29 +51,33 @@ const Optimize = () => {
   };
 
   return (
-    <div className={`optimize ${theme}`}>
+    <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
-      <Button type="primary" onClick={handleOptimize}>Run Optimization</Button>
+      <Button type="primary" onClick={handleOptimize} className={`optimize-button ${theme}`}>
+        Run Optimization
+      </Button>
       <Row gutter={16}>
         <Col span={12}>
-          <Card title="MTG Card List">
+          <Card title="MTG Card List" className={`ant-card ${theme}`}>
             <List
               bordered
               dataSource={cards}
               renderItem={card => (
-                <List.Item onClick={() => handleCardClick(card)}>
+                <List.Item className={`list-item ${theme}`} onClick={() => handleCardClick(card)}>
                   {card.card}
                 </List.Item>
               )}
+              className={`ant-table ${theme}`}
             />
           </Card>
         </Col>
         <Col span={12}>
-          <Card title="Site List">
+          <Card title="Site List" className={`ant-card ${theme}`}>
             <List
               bordered
               dataSource={sites}
-              renderItem={site => <List.Item>{site.name}</List.Item>}
+              renderItem={site => <List.Item className={`list-item ${theme}`}>{site.name}</List.Item>}
+              className={`ant-table ${theme}`}
             />
           </Card>
         </Col>
@@ -92,14 +94,14 @@ const Optimize = () => {
       >
         {cardData && (
           <div>
-            <Card title="Scryfall Data">
+            <Card title="Scryfall Data" className={`ant-card ${theme}`}>
               <pre>{JSON.stringify(cardData.scryfall, null, 2)}</pre>
             </Card>
-            <Card title="MTGStocks Data">
+            <Card title="MTGStocks Data" className={`ant-card ${theme}`}>
               <pre>{JSON.stringify(cardData.mtgstocks, null, 2)}</pre>
             </Card>
             {cardData.previous_scan && (
-              <Card title="Previous Scan Data">
+              <Card title="Previous Scan Data" className={`ant-card ${theme}`}>
                 <pre>{JSON.stringify(cardData.previous_scan, null, 2)}</pre>
               </Card>
             )}

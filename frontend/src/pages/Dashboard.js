@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button } from 'antd';
 import axios from 'axios';
 import ThemeContext from '../components/ThemeContext';
-import './Dashboard.css';
+import '../global.css';
 
 const Dashboard = () => {
   const [totalSites, setTotalSites] = useState(0);
@@ -31,7 +31,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className={`dashboard ${theme}`}>
+    <div className={`dashboard section ${theme}`}>
       <h1>Dashboard</h1>
       <Row gutter={16}>
         <Col span={8}>

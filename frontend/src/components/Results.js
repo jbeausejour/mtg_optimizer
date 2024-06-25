@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { List, Card } from 'antd';
 import axios from 'axios';
+import ThemeContext from './ThemeContext';
+import '../global.css';
 
 const Results = () => {
   const { scanId } = useParams();
   const [results, setResults] = useState([]);
+  const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
     axios.get(`/api/results/${scanId}`)
@@ -14,7 +17,7 @@ const Results = () => {
   }, [scanId]);
 
   return (
-    <div>
+    <div className={`results section ${theme}`}>
       <h1>Optimization Results</h1>
       <List
         bordered
