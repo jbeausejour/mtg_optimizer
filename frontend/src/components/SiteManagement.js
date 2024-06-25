@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import SiteList from './SiteList';
-import SiteForm from './SiteForm';
+import { Table, Input, Button, Form, message } from 'antd';
+import { SaveOutlined, EditOutlined } from '@ant-design/icons';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
-  const [show, setShow] = useState(false);
-  const [editSite, setEditSite] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [form] = Form.useForm();
 
   useEffect(() => {
     fetchSiteList();
@@ -16,83 +16,133 @@ const SiteManagement = () => {
       const response = await fetch('/get_site_list');
       if (response.ok) {
         const data = await response.json();
-        setSites(data);
+        setSites(data.map(item => ({ ...item, key: item.id })));
       } else {
-        console.error('Failed to fetch site list:', response.status);
+        message.error('Failed to fetch site list');
       }
     } catch (error) {
       console.error('Error fetching site list:', error);
+      message.error('Error fetching site list');
     }
   };
 
-  const handleAddSite = async (newSite) => {
+  const handleSave = async (row) => {
     try {
-      const response = await fetch('/add_site', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSite)
-      });
-      if (response.ok) {
-        fetchSiteList();
-        handleClose();
-      } else {
-        console.error('Failed to add site:', response.status);
-      }
-    } catch (error) {
-      console.error('Error adding site:', error);
-    }
-  };
-
-  const handleUpdateSite = async (id, updatedSite) => {
-    try {
-      const response = await fetch(`/update_site/${id}`, {
+      const response = await fetch(`/update_site/${row.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedSite)
+        body: JSON.stringify(row)
       });
       if (response.ok) {
-        fetchSiteList();
-        handleClose();
+        message.success('Site updated successfully');
       } else {
-        console.error('Failed to update site:', response.status);
+        message.error('Failed to update site');
       }
     } catch (error) {
       console.error('Error updating site:', error);
+      message.error('Error updating site');
     }
   };
 
-  const handleDeleteSite = async (id) => {
+  const saveAll = async () => {
     try {
-      const response = await fetch(`/delete_site/${id}`, {
-        method: 'DELETE'
-      });
-      if (response.ok) {
-        fetchSiteList();
-      } else {
-        console.error('Failed to delete site:', response.status);
+      const rows = await form.validateFields();
+      const updatedSites = sites.map(site => ({ ...site, ...rows[site.key] }));
+      setSites(updatedSites);
+      for (const site of updatedSites) {
+        await handleSave(site);
       }
-    } catch (error) {
-      console.error('Error deleting site:', error);
+      setIsEditing(false);
+    } catch (errInfo) {
+      console.log('Validate Failed:', errInfo);
     }
   };
 
-  const handleClose = () => setShow(false);
-  const handleShow = (site = null) => {
-    setEditSite(site);
-    setShow(true);
+  const EditableCell = ({
+    editing,
+    dataIndex,
+    title,
+    record,
+    children,
+    ...restProps
+  }) => {
+    return (
+      <td {...restProps}>
+        {editing ? (
+          <Form.Item
+            name={[record.key, dataIndex]}
+            style={{ margin: 0 }}
+            rules={[{ required: true, message: `Please Input ${title}!` }]}
+          >
+            <Input />
+          </Form.Item>
+        ) : (
+          children
+        )}
+      </td>
+    );
+  };
+
+  const columns = [
+    { title: 'Name', dataIndex: 'name', key: 'name', editable: true },
+    { title: 'URL', dataIndex: 'url', key: 'url', editable: true },
+    { title: 'Parse Method', dataIndex: 'parse_method', key: 'parse_method', editable: true },
+    { title: 'Type', dataIndex: 'type', key: 'type', editable: true },
+  ];
+
+  const mergedColumns = columns.map((col) => {
+    if (!col.editable) {
+      return col;
+    }
+    return {
+      ...col,
+      onCell: (record) => ({
+        record,
+        dataIndex: col.dataIndex,
+        title: col.title,
+        editing: isEditing,
+      }),
+    };
+  });
+
+  const handleEditMode = () => {
+    if (isEditing) {
+      saveAll();
+    } else {
+      // Set initial form values
+      const initialValues = sites.reduce((acc, site) => {
+        acc[site.key] = site;
+        return acc;
+      }, {});
+      form.setFieldsValue(initialValues);
+      setIsEditing(true);
+    }
   };
 
   return (
     <div>
       <h1>Site Management</h1>
-      <button onClick={() => handleShow()}>Add New Site</button>
-      <SiteList sites={sites} onDelete={handleDeleteSite} onUpdate={handleShow} />
-      <SiteForm
-        show={show}
-        handleClose={handleClose}
-        handleSave={editSite ? handleUpdateSite : handleAddSite}
-        editSite={editSite}
-      />
+      <Button
+        type="primary"
+        icon={isEditing ? <SaveOutlined /> : <EditOutlined />}
+        onClick={handleEditMode}
+      >
+        {isEditing ? 'Save All' : 'Edit Mode'}
+      </Button>
+      <Form form={form} component={false}>
+        <Table
+          components={{
+            body: {
+              cell: EditableCell,
+            },
+          }}
+          bordered
+          dataSource={sites}
+          columns={mergedColumns}
+          rowClassName="editable-row"
+          pagination={false}
+        />
+      </Form>
     </div>
   );
 };

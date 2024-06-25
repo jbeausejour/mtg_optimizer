@@ -1,20 +1,25 @@
 import logging
 
-def configure_logger(filename, log_level_file, log_level_console):
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+# Setup logger
+logger = logging.getLogger('mtg_logger')
+logger.setLevel(logging.DEBUG)
 
-    fh = logging.FileHandler(filename)
-    fh.setLevel(log_level_file)
+# Create file handler
+fh = logging.FileHandler('mtg_debug.log')
+fh.setLevel(logging.DEBUG)
 
-    ch = logging.StreamHandler()
-    ch.setLevel(log_level_console)
+# Create console handler
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
+# Create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
 
-    logger.addHandler(fh)
-    logger.addHandler(ch)
+# Add the handlers to the logger
+logger.addHandler(fh)
+logger.addHandler(ch)
 
+def get_logger():
     return logger

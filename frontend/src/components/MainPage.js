@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { List, Card, Row, Col } from 'antd';
 
 const MainPage = () => {
   const [cards, setCards] = useState([]);
@@ -6,43 +7,38 @@ const MainPage = () => {
 
   useEffect(() => {
     fetch('/api/cards')
-      .then(response => {
-        console.log('Cards response status:', response.status);
-        return response.json();
-      })
-      .then(data => {
-        console.log('Cards data:', data);
-        setCards(data);
-      })
+      .then(response => response.json())
+      .then(data => setCards(data))
       .catch(error => console.error('Error fetching cards:', error));
 
     fetch('/api/sites')
-      .then(response => {
-        console.log('Sites response status:', response.status);
-        return response.json();
-      })
-      .then(data => {
-        console.log('Sites data:', data);
-        setSites(data);
-      })
+      .then(response => response.json())
+      .then(data => setSites(data))
       .catch(error => console.error('Error fetching sites:', error));
   }, []);
 
   return (
     <div>
-      <h1>MTG Card List</h1>
-      <ul>
-        {cards.map((card, index) => (
-          <li key={index}>{card.card}</li>
-        ))}
-      </ul>
-
-      <h1>Site List</h1>
-      <ul>
-        {sites.map((site, index) => (
-          <li key={index}>{site.site}</li>
-        ))}
-      </ul>
+      <Row gutter={16}>
+        <Col span={12}>
+          <Card title="MTG Card List">
+            <List
+              bordered
+              dataSource={cards}
+              renderItem={card => <List.Item>{card.card}</List.Item>}
+            />
+          </Card>
+        </Col>
+        <Col span={12}>
+          <Card title="Site List">
+            <List
+              bordered
+              dataSource={sites}
+              renderItem={site => <List.Item>{site.name}</List.Item>}
+            />
+          </Card>
+        </Col>
+      </Row>
     </div>
   );
 };
