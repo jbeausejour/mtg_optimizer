@@ -63,6 +63,7 @@ def get_card_price(name):
     card_url = card_url_from_name(name)
     return scrape_price(card_url) if card_url else {'error': 'Card not found'}
 
+
 @views.route('/get_site_list', methods=['GET'])
 def get_site_list():
     sites = get_all_sites()
@@ -87,6 +88,9 @@ def delete_site_route(site_id):
 
 @views.route('/fetch_card', methods=['GET'])
 def fetch_card():
+    """
+    Fetch card data from Scryfall API and MTGStocks, along with previous scan info from the database.
+    """
     card_name = request.args.get('name')
     
     # Fetch data from Scryfall API

@@ -5,6 +5,7 @@ import { SaveOutlined, EditOutlined } from '@ant-design/icons';
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
+  const [modifiedSites, setModifiedSites] = useState({});
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -26,12 +27,12 @@ const SiteManagement = () => {
     }
   };
 
-  const handleSave = async (row) => {
+  const handleSave = async (id, data) => {
     try {
-      const response = await fetch(`/update_site/${row.id}`, {
+      const response = await fetch(`/update_site/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(row)
+        body: JSON.stringify(data)
       });
       if (response.ok) {
         message.success('Site updated successfully');
@@ -47,15 +48,31 @@ const SiteManagement = () => {
   const saveAll = async () => {
     try {
       const rows = await form.validateFields();
-      const updatedSites = sites.map(site => ({ ...site, ...rows[site.key] }));
+      const updatedSites = sites.map(site => {
+        const changes = rows[site.key] || {};
+        return { ...site, ...changes };
+      });
       setSites(updatedSites);
       for (const site of updatedSites) {
-        await handleSave(site);
+        if (modifiedSites[site.key]) {
+          await handleSave(site.id, modifiedSites[site.key]);
+        }
       }
       setIsEditing(false);
+      setModifiedSites({});
     } catch (errInfo) {
       console.log('Validate Failed:', errInfo);
     }
+  };
+
+  const handleChange = (key, field, value) => {
+    setModifiedSites(prev => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        [field]: value,
+      }
+    }));
   };
 
   const EditableCell = ({
@@ -74,7 +91,7 @@ const SiteManagement = () => {
             style={{ margin: 0 }}
             rules={[{ required: true, message: `Please Input ${title}!` }]}
           >
-            <Input />
+            <Input onChange={(e) => handleChange(record.key, dataIndex, e.target.value)} />
           </Form.Item>
         ) : (
           children

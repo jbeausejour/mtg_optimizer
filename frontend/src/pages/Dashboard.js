@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useContext, useHistory } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button } from 'antd';
 import axios from 'axios';
 import ThemeContext from '../components/ThemeContext';
@@ -8,7 +9,7 @@ const Dashboard = () => {
   const [totalSites, setTotalSites] = useState(0);
   const [totalCards, setTotalCards] = useState(0);
   const [latestScans, setLatestScans] = useState([]);
-  const history = useHistory();
+  const navigate = useNavigate();
   const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
@@ -26,7 +27,7 @@ const Dashboard = () => {
   }, []);
 
   const handleCardClick = (path) => {
-    history.push(path);
+    navigate(path);
   };
 
   return (
@@ -37,7 +38,7 @@ const Dashboard = () => {
           <Card 
             title="Total Sites" 
             bordered={false}
-            onClick={() => handleCardClick('/sites')}
+            onClick={() => handleCardClick('/site-management')}
             style={{ cursor: 'pointer' }}
           >
             {totalSites}

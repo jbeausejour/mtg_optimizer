@@ -1,56 +1,28 @@
+
 :root {
   --background-color-light: #ffffff;
   --text-color-light: #000000;
-  --background-color-dark: #1c1c1c;
+  --background-color-dark: #1e1e1e;
   --text-color-dark: #ffffff;
 }
 
-[data-theme='light'] {
-  --background-color: var(--background-color-light);
-  --text-color: var(--text-color-light);
+body.light {
+  background-color: var(--background-color-light);
+  color: var(--text-color-light);
 }
 
-[data-theme='dark'] {
-  --background-color: var(--background-color-dark);
-  --text-color: var(--text-color-dark);
+body.dark {
+  background-color: var(--background-color-dark);
+  color: var(--text-color-dark);
 }
 
-body {
-  background-color: var(--background-color);
-  color: var(--text-color);
+/* Additional styling for the card lists */
+.card-list {
+  background-color: var(--background-color-light);
+  color: var(--text-color-light);
 }
 
-.ant-card {
-  background-color: var(--background-color);
-  color: var(--text-color);
-}
-
-.ant-list-item {
-  background-color: var(--background-color);
-  color: var(--text-color);
-}
-
-.ant-btn-link {
-  color: var(--text-color);
-}
-
-/* Additional styles to ensure proper text color and background */
-.ant-layout {
-  background-color: var(--background-color);
-  color: var(--text-color);
-}
-
-.ant-layout-header {
-  background-color: var(--background-color);
-  color: var(--text-color);
-}
-
-.ant-layout-content {
-  background-color: var(--background-color);
-  color: var(--text-color);
-}
-
-.ant-layout-footer {
-  background-color: var(--background-color);
-  color: var(--text-color);
+body.dark .card-list {
+  background-color: var(--background-color-dark);
+  color: var(--text-color-dark);
 }
