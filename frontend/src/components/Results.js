@@ -11,7 +11,7 @@ const Results = () => {
   const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
-    axios.get(`/api/results/${scanId}`)
+    axios.get(`/api/v1/results/${scanId}`)
       .then(response => setResults(response.data))
       .catch(error => console.error('Error fetching results:', error));
   }, [scanId]);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Button, message, Row, Col, Card, List, Modal } from 'antd';
 import axios from 'axios';
+import { Button, message, Row, Col, Card, List, Modal } from 'antd';
 import ThemeContext from './ThemeContext';
 import '../global.css';
 
@@ -12,22 +12,20 @@ const Optimize = () => {
   const [cardData, setCardData] = useState(null);
   const { theme } = useContext(ThemeContext);
 
+ 
   useEffect(() => {
-    fetch('/api/cards')
-      .then(response => response.json())
-      .then(data => setCards(data))
+    axios.get('/api/v1/cards')
+      .then(response => setCards(response.data))
       .catch(error => console.error('Error fetching cards:', error));
 
-    fetch('/api/sites')
-      .then(response => response.json())
-      .then(data => setSites(data))
+    axios.get('/api/v1/sites')
+      .then(response => setSites(response.data))
       .catch(error => console.error('Error fetching sites:', error));
   }, []);
 
   const handleOptimize = async () => {
     try {
-      const response = await fetch('/api/optimize', { method: 'POST' });
-      const result = await response.json();
+      const response = await axios.post('/api/v1/optimize');
       message.success('Optimization completed successfully!');
     } catch (error) {
       message.error('Optimization failed!');
@@ -38,7 +36,7 @@ const Optimize = () => {
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     try {
-      const response = await axios.get(`/fetch_card?name=${card.card}`);
+      const response = await axios.get(`/api/v1/fetch_card?name=${card.card}`);
       setCardData(response.data);
       setIsModalVisible(true);
     } catch (error) {

@@ -1,13 +1,13 @@
-from flask import Blueprint, jsonify, request
-from models import db, Site, CardScan
-from services import get_all_sites, add_site, update_site, delete_site
+from flask import Blueprint, jsonify, request, abort
+from services import get_all_cards, get_all_sites, add_site, get_card_by_id, update_site, delete_site
 import requests
-from flask_cors import CORS
 from htmldom import htmldom
-from fuzzywuzzy import process
 from html import unescape
 import urllib
+from fuzzywuzzy import process
+import logging
 
+logger = logging.getLogger(__name__)
 views = Blueprint('views', __name__)
 
 SCRYFALL_API_URL = "https://api.scryfall.com/cards/named"
@@ -63,54 +63,61 @@ def get_card_price(name):
     card_url = card_url_from_name(name)
     return scrape_price(card_url) if card_url else {'error': 'Card not found'}
 
-
-@views.route('/get_site_list', methods=['GET'])
+@views.route('/sites', methods=['GET'])
 def get_site_list():
     sites = get_all_sites()
     return jsonify([site.to_dict() for site in sites])
 
-@views.route('/add_site', methods=['POST'])
+@views.route('/sites', methods=['POST'])
 def add_site_route():
     data = request.json
     result, status = add_site(data)
     return jsonify(result), status
 
-@views.route('/update_site/<int:site_id>', methods=['PUT'])
+@views.route('/sites/<int:site_id>', methods=['PUT'])
 def update_site_route(site_id):
     data = request.json
     result, status = update_site(site_id, data)
     return jsonify(result), status
 
-@views.route('/delete_site/<int:site_id>', methods=['DELETE'])
+@views.route('/sites/<int:site_id>', methods=['DELETE'])
 def delete_site_route(site_id):
     result, status = delete_site(site_id)
     return jsonify(result), status
 
+@views.route('/cards', methods=['GET'])
+def get_cards():
+    
+    logger.debug("/cards in models")
+    print("/cards in models")
+
+    cards = get_all_cards()
+    return jsonify([card.to_dict() for card in cards])
+
+@views.route('/cards/<int:card_id>', methods=['GET'])
+def get_card(card_id):
+    card = get_card_by_id(card_id)
+    if not card:
+        abort(404, description="Card not found")
+    return jsonify(card.to_dict())
+
 @views.route('/fetch_card', methods=['GET'])
 def fetch_card():
-    """
-    Fetch card data from Scryfall API and MTGStocks, along with previous scan info from the database.
-    """
     card_name = request.args.get('name')
-    
-    # Fetch data from Scryfall API
     scryfall_response = requests.get(SCRYFALL_API_URL, params={'fuzzy': card_name})
-    if scryfall_response.status_code != 200:
+    if (scryfall_response.status_code != 200):
         return jsonify({'error': 'Failed to fetch data from Scryfall API'}), scryfall_response.status_code
     scryfall_data = scryfall_response.json()
-    
-    # Fetch data from MTGStocks
+
     mtgstocks_data = get_card_price(card_name)
-    
-    # Fetch previous scan info from the database
-    previous_scan = db.session.query(CardScan).filter_by(name=card_name).first()
-    previous_scan_data = previous_scan.to_dict() if previous_scan else None
-    
+
+#    previous_scan = db.session.query(CardScan).filter_by(name=card_name).first()
+#    previous_scan_data = previous_scan.to_dict() if previous_scan else None
+#
     card_data = {
         'scryfall': scryfall_data,
         'mtgstocks': mtgstocks_data,
-        'previous_scan': previous_scan_data
+        'previous_scan': ""# previous_scan_data
     }
 
     return jsonify(card_data)
-

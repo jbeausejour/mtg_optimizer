@@ -1,0 +1,16 @@
+# Backend Terminal Installation
+pip install -r requirements.txt
+
+# Frontend Terminal Installation
+npm install
+
+
+# Backend Terminal Run command
+Flask run
+
+# Frontend Terminal Build&Run command
+$env:NODE_OPTIONS="--openssl-legacy-provider"
+npm cache clean --force
+npm run build
+xcopy .\build\*  "..\backend\static\" /s /e /y
+npm start

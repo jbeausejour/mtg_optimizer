@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Table, Input, Button, Form, message } from 'antd';
+import axios from 'axios';
 import { SaveOutlined, EditOutlined } from '@ant-design/icons';
 import ThemeContext from './ThemeContext';
 import '../global.css';
@@ -17,13 +18,8 @@ const SiteManagement = () => {
 
   const fetchSiteList = async () => {
     try {
-      const response = await fetch('/get_site_list');
-      if (response.ok) {
-        const data = await response.json();
-        setSites(data.map(item => ({ ...item, key: item.id })));
-      } else {
-        message.error('Failed to fetch site list');
-      }
+      const response = await axios.get('/api/v1/sites');
+      setSites(response.data.map(item => ({ ...item, key: item.id })));
     } catch (error) {
       console.error('Error fetching site list:', error);
       message.error('Error fetching site list');
@@ -32,16 +28,8 @@ const SiteManagement = () => {
 
   const handleSave = async (id, data) => {
     try {
-      const response = await fetch(`/update_site/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      if (response.ok) {
-        message.success('Site updated successfully');
-      } else {
-        message.error('Failed to update site');
-      }
+      await axios.put(`/api/v1/sites/${id}`, data);
+      message.success('Site updated successfully');
     } catch (error) {
       console.error('Error updating site:', error);
       message.error('Error updating site');

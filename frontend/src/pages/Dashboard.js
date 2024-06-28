@@ -13,19 +13,18 @@ const Dashboard = () => {
   const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
-    axios.get('/api/sites')
+    axios.get('/api/v1/sites')
       .then(response => setTotalSites(response.data.length))
       .catch(error => console.error('Error fetching sites:', error));
 
-    axios.get('/api/cards')
+    axios.get('/api/v1/cards')
       .then(response => setTotalCards(response.data.length))
       .catch(error => console.error('Error fetching cards:', error));
 
-    axios.get('/api/scans?limit=5')
+    axios.get('/api/v1/scans?limit=5')
       .then(response => setLatestScans(response.data))
       .catch(error => console.error('Error fetching scans:', error));
   }, []);
-
   const handleCardClick = (path) => {
     navigate(path);
   };

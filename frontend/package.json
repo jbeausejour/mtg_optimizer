@@ -2,13 +2,17 @@
   "name": "mtg_optimizer",
   "version": "0.1.0",
   "private": true,
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
+  },
   "dependencies": {
     "antd": "^5.18.3",
     "axios": "^1.7.2",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "react-router-dom": "^6.0.0",
-    "react-scripts": "4.0.3"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.24.0",
+    "react-scripts": "^5.0.1",
+    "@babel/plugin-transform-private-property-in-object": "^7.24.7"
   },
   "scripts": {
     "start": "react-scripts start",

@@ -10,6 +10,7 @@ export const ThemeProvider = ({ children }) => {
   });
 
   const toggleTheme = () => {
+    console.log('Toggling theme'); // Debug log
     setTheme((prevTheme) => {
       const newTheme = prevTheme === 'light' ? 'dark' : 'light';
       // Save the new theme value to localStorage
@@ -20,6 +21,7 @@ export const ThemeProvider = ({ children }) => {
 
   useEffect(() => {
     document.body.className = theme;
+    console.log('Theme set on body:', theme); // Debug log
   }, [theme]);
 
   return (
