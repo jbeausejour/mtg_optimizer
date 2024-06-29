@@ -7,7 +7,7 @@ import Dashboard from './pages/Dashboard';
 import SiteManagement from './components/SiteManagement';
 import Optimize from './components/Optimize';
 import Results from './components/Results';
-import './App.css';
+//import './App.css';
 import './global.css';
 
 const { Header, Content, Footer } = Layout;

@@ -52,3 +52,23 @@ class Card(db.Model):
     def __hash__(self):
         return hash((self.Site, self.Name, self.Edition, self.Version, self.Foil, self.Quality, self.Language, self.Quantity, self.Price))
 
+class Card_list(db.Model):
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    Name = db.Column(db.String(255), nullable=False)
+    Edition = db.Column(db.String(255), nullable=True)
+    Version = db.Column(db.String(255), nullable=True)
+    Foil = db.Column(db.Boolean, nullable=True, default=False)
+    Quality = db.Column(db.String(255), nullable=False)
+    Language = db.Column(db.String(255), nullable=False, default="English")
+    Quantity = db.Column(db.Integer, nullable=False, default=1)
+
+    def to_dict(self):
+        return {
+            'Name': self.Name,
+            'Edition': self.Edition,
+            'Version': self.Version,
+            'Foil': self.Foil,
+            'Quality': self.Quality,
+            'Language': self.Language,
+            'Quantity': self.Quantity
+        } 

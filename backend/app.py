@@ -44,7 +44,6 @@ def create_app():
     with open(config_path) as config_file:
         config = json.load(config_file)
 
-
     # Register blueprints using the function from routes.py
     from routes import register_blueprints
     register_blueprints(app)

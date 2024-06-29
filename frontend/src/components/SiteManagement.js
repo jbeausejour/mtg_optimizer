@@ -147,7 +147,7 @@ const SiteManagement = () => {
           bordered
           dataSource={sites}
           columns={mergedColumns}
-          rowClassName="editable-row"
+          rowClassName="editable-row custom-hover-row"
           pagination={false}
         />
       </Form>

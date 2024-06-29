@@ -12,7 +12,6 @@ const Optimize = () => {
   const [cardData, setCardData] = useState(null);
   const { theme } = useContext(ThemeContext);
 
- 
   useEffect(() => {
     axios.get('/api/v1/cards')
       .then(response => setCards(response.data))
@@ -61,8 +60,11 @@ const Optimize = () => {
               bordered
               dataSource={cards}
               renderItem={card => (
-                <List.Item className={`list-item ${theme}`} onClick={() => handleCardClick(card)}>
-                  {card.card}
+                <List.Item 
+                  className={`list-item custom-hover-row ${theme}`} 
+                  onClick={() => handleCardClick(card)}
+                >
+                  {card.Name}
                 </List.Item>
               )}
               className={`ant-table ${theme}`}
@@ -74,7 +76,11 @@ const Optimize = () => {
             <List
               bordered
               dataSource={sites}
-              renderItem={site => <List.Item className={`list-item ${theme}`}>{site.name}</List.Item>}
+              renderItem={site => (
+                <List.Item className={`list-item custom-hover-row ${theme}`}>
+                  {site.name}
+                </List.Item>
+              )}
               className={`ant-table ${theme}`}
             />
           </Card>

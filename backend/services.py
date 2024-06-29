@@ -1,12 +1,12 @@
-from models import db, Site, Card
+from models import db, Site, Card, Card_list
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 def get_all_sites():
-    logger.debug("get_all_sites")
-    print("get_all_sites")
+    #logger.debug("get_all_sites")
+    #print("get_all_sites")
     return Site.query.all()
 
 def get_site_by_id(site_id):
@@ -54,12 +54,12 @@ def delete_site(site_id):
     return {'message': 'Site deleted successfully'}
 
 def get_all_cards():
-    logger.debug("/cards in models")
-    print("/cards in models")
-    print(db.engine)
-    print(Site.query.all())
-    return Card.query.all()
+    #logger.debug("LOG: /cards in Services")
+    #print("/cards in services")
+    #print(db.engine)
+    #print(Card_list.query.all())
+    return Card_list.query.all()
 
 def get_card_by_id(card_id):
-    return Card.query.get(card_id)
+    return Card_list.query.get(card_id)
  

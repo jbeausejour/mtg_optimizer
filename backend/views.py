@@ -88,8 +88,8 @@ def delete_site_route(site_id):
 @views.route('/cards', methods=['GET'])
 def get_cards():
     
-    logger.debug("/cards in models")
-    print("/cards in models")
+    #logger.debug("LOG: /cards in models")
+    #print("/cards in models")
 
     cards = get_all_cards()
     return jsonify([card.to_dict() for card in cards])
