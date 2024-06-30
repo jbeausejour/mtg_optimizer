@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Table, Input, Button, Form, message } from 'antd';
+import { Table, Input, Button, Form, message, Switch } from 'antd';
 import axios from 'axios';
 import { SaveOutlined, EditOutlined } from '@ant-design/icons';
 import ThemeContext from './ThemeContext';
-import '../global.css';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
   const [modifiedSites, setModifiedSites] = useState({});
   const [form] = Form.useForm();
-  const { theme } = useContext(ThemeContext);
+
+  const { isDarkMode } = useContext(ThemeContext);
 
   useEffect(() => {
     fetchSiteList();
@@ -94,9 +94,23 @@ const SiteManagement = () => {
   const columns = [
     { title: 'Name', dataIndex: 'name', key: 'name', editable: true },
     { title: 'URL', dataIndex: 'url', key: 'url', editable: true },
-    { title: 'Parse Method', dataIndex: 'parse_method', key: 'parse_method', editable: true },
+    { title: 'Method', dataIndex: 'method', key: 'method', editable: true },
+    { 
+      title: 'Active', 
+      dataIndex: 'active', 
+      key: 'active', 
+      editable: true,
+      render: (_, record) => (
+        <Switch checked={record.active} onChange={(checked) => handleSwitchChange(record.key, checked)} />
+      )
+    },
+    { title: 'Country', dataIndex: 'country', key: 'country', editable: true },
     { title: 'Type', dataIndex: 'type', key: 'type', editable: true },
   ];
+  
+  const handleSwitchChange = (key, checked) => {
+    handleChange(key, 'active', checked);
+  };
 
   const mergedColumns = columns.map((col) => {
     if (!col.editable) {
@@ -128,7 +142,7 @@ const SiteManagement = () => {
   };
 
   return (
-    <div className={`site-management section ${theme}`}>
+    <div className="site-management section">
       <h1>Site Management</h1>
       <Button
         type="primary"
@@ -147,7 +161,7 @@ const SiteManagement = () => {
           bordered
           dataSource={sites}
           columns={mergedColumns}
-          rowClassName="editable-row custom-hover-row"
+          rowClassName="editable-row"
           pagination={false}
         />
       </Form>

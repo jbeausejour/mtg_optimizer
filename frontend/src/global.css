@@ -1,59 +1,53 @@
 :root {
-  /* Light theme colors */
-  --color-bg-primary: #ffffff;
-  --color-bg-secondary: #f8f8f8;
-  --color-text-primary: #000000;
-  --color-text-secondary: #333333;
-  --color-border: #dddddd;
-  --color-accent: #1677ff;
-  --color-hover: #e6f7ff;
+  /* Light theme constants */
+  --const-color-bg-primary: #ffffff;
+  --const-color-bg-secondary: #f8f8f8;
+  --const-color-text-primary: #000000;
+  --const-color-text-secondary: #333333;
+  --const-color-border: #dddddd;
+  --const-color-accent: #1677ff;
+  --const-color-hover: #e6f7ff;
 
-  /* Default theme mapping (light) */
-  --color-bg: var(--color-bg-primary);
-  --color-bg-alt: var(--color-bg-secondary);
-  --color-text: var(--color-text-primary);
-  --color-text-alt: var(--color-text-secondary);
-  --color-border: var(--color-border);
-  --color-accent: var(--color-accent);
-  --color-hover: var(--color-hover);
+  /* Light theme variables */
+  --color-bg: var(--const-color-bg-primary);
+  --color-bg-alt: var(--const-color-bg-secondary);
+  --color-text: var(--const-color-text-primary);
+  --color-text-alt: var(--const-color-text-secondary);
+  --color-border: var(--const-color-border);
+  --color-accent: var(--const-color-accent);
+  --color-hover: var(--const-color-hover);
 
   /* Light theme button colors */
-  --button-background-color: #1677ff;
-  --hover-background-color: #4096ff;
-  --hover-text-color: #f8f8f8;
+  --btn-background-color: #1677ff;
+  --btn-hover-background-color: #4096ff;
+  --btn-hover-text-color: #f8f8f8;
   --btn-text-color: #ffffff;
-
 }
 
 [data-theme='dark'] {
-  /* Dark theme colors */
-  --color-bg-primary: #1c1c1c;
-  --color-bg-secondary: #2c2c2c;
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #dddddd;
-  --color-border: #444444;
-  --color-accent: #1677ff;
-  --color-hover: #003a8c;
+  /* Dark theme constants */
+  --const-color-bg-primary: #1c1c1c;
+  --const-color-bg-secondary: #2c2c2c;
+  --const-color-text-primary: #ffffff;
+  --const-color-text-secondary: #dddddd;
+  --const-color-border: #444444;
+  --const-color-accent: #1677ff;
+  --const-color-hover: #003a8c;
 
-  /* Dark theme mapping */
-  --color-bg: var(--color-bg-primary);
-  --color-bg-alt: var(--color-bg-secondary);
-  --color-text: var(--color-text-primary);
-  --color-text-alt: var(--color-text-secondary);
-  --color-border: var(--color-border);
-  --color-accent: var(--color-accent);
-  --color-hover: var(--color-hover);
+  /* Dark theme variables */
+  --color-bg: var(--const-color-bg-primary);
+  --color-bg-alt: var(--const-color-bg-secondary);
+  --color-text: var(--const-color-text-primary);
+  --color-text-alt: var(--const-color-text-secondary);
+  --color-border: var(--const-color-border);
+  --color-accent: var(--const-color-accent);
+  --color-hover: var(--const-color-hover);
   
   /* Dark theme button colors */
-  --button-background-color: #1677ff;
-  --hover-background-color: #4096ff;
-  --hover-text-color: #2c2c2c;
+  --btn-background-color: #1677ff;
+  --btn-hover-background-color: #4096ff;
+  --btn-hover-text-color: #2c2c2c;
   --btn-text-color: #1c1c1c;
-}
-
-.ant-table-tbody > tr.custom-hover-row:hover > td {
-  background-color: #003a8c !important;
-  color: white !important;
 }
 
 /* Global Styles */
@@ -79,16 +73,19 @@ body {
 .ant-table {
   background-color: var(--color-bg-alt);
   color: var(--color-text);
+  border-color: var(--color-border);
 }
 
 .ant-table-thead > tr > th {
   background-color: var(--color-bg-alt);
   color: var(--color-text-alt);
+  border-color: var(--color-border);
 }
 
 .ant-table-tbody > tr > td {
   background-color: var(--color-bg);
   color: var(--color-text);
+  border-color: var(--color-border);
 }
 
 .ant-table-tbody > tr:nth-child(even) > td {
@@ -97,59 +94,93 @@ body {
 
 .ant-table-tbody > tr:hover > td {
   background-color: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* List Styles */
+.ant-list {
+  border-color: var(--color-border);
+}
+
+.ant-list-item {
+  border-color: var(--color-border);
+}
+
+.list-item,
+.ant-list-item {
+  background-color: var(--color-bg);
+  color: var(--color-text) !important;
+}
+
+.list-item.custom-hover-row:hover,
+.ant-list-item.custom-hover-row:hover {
+  background-color: var(--color-hover) !important;
+  color: var(--color-text) !important;
+  cursor: pointer;
 }
 
 /* Card Styles */
 .ant-card {
   background-color: var(--color-bg-alt);
-  color: var(--color-text);
+  border-color: var(--color-border);
 }
 
 .ant-card-head-title,
 .ant-card-body {
-  color: var(--color-text-primary);
+  color: var(--color-text);
 }
 
 /* Input Styles */
 .ant-input {
   background-color: var(--color-bg);
-  color: var(--color-text-primary);
+  color: var(--color-text);
   border-color: var(--color-border);
 }
 
-/* Base styles for the button */
+/* Button Styles */
 .ant-btn-primary {
-  border: none !important;
-}
-
-/* Light mode styles */
-.ant-btn-primary {
-  background-color:var(--button-background-color) !important;
+  background-color: var(--btn-background-color) !important;
   color: var(--btn-text-color) !important;
+  border: none !important;
 }
 
 .ant-btn-primary:hover,
 .ant-btn-primary:focus,
 .ant-btn-primary:active {
-  background-color: var(--hover-background-color) !important;
-  color: var(--hover-text-color) !important;
+  background-color: var(--btn-hover-background-color) !important;
+  color: var(--btn-hover-text-color) !important;
 }
 
-/* Ensure proper text color in modal */
+/* Modal Styles */
+.ant-modal-content {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+.ant-modal-header {
+  background-color: var(--color-bg-alt);
+  color: var(--color-text);
+}
+
 .ant-modal-title,
 .ant-modal-body {
-  color: var(--text-color);
+  color: var(--color-text);
 }
 
 /* Adjust pre tag color for JSON display */
 pre {
-  color: var(--text-color);
+  color: var(--color-text);
+  background-color: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  padding: 10px;
+  border-radius: 4px;
 }
 
 /* Custom Table Styles */
 .table {
   width: 100%;
   border-collapse: collapse;
+  border-color: var(--color-border);
 }
 
 .table th, 
@@ -165,12 +196,6 @@ pre {
 
 .table tbody tr:hover {
   background-color: var(--color-hover);
-}
-
-/* List Item Styles */
-.list-item,
-.ant-list-item {
-  background-color: var(--color-bg);
   color: var(--color-text);
 }
 

@@ -2,73 +2,68 @@ from app import db
 
 class Site(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False)
+    name = db.Column(db.String(255), unique=True, nullable=False)
     url = db.Column(db.String(255), unique=True, nullable=False)
-    parse_method = db.Column(db.String(100), nullable=False)
-    type = db.Column(db.String(10), nullable=False)
+    method = db.Column(db.String(50), nullable=False)
+    active = db.Column(db.Boolean, nullable=False)
+    country = db.Column(db.String(50), nullable=False)
+    type = db.Column(db.String(50), nullable=False)
 
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
             'url': self.url,
-            'parse_method': self.parse_method,
+            'method': self.method,
+            'active': self.active,
+            'country': self.country,
             'type': self.type
         }
 
 class Card(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    Site = db.Column(db.String(255), nullable=False)
-    Name = db.Column(db.String(255), nullable=False)
-    Edition = db.Column(db.String(255), nullable=False)
-    Version = db.Column(db.String(255), nullable=True)
-    Foil = db.Column(db.Boolean, nullable=False, default=False)
-    Quality = db.Column(db.String(255), nullable=False)
-    Language = db.Column(db.String(255), nullable=False)
-    Quantity = db.Column(db.Integer, nullable=False)
-    Price = db.Column(db.Float, nullable=False)
+    site = db.Column(db.String(255), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    edition = db.Column(db.String(255), nullable=False)
+    version = db.Column(db.String(255), nullable=True)
+    foil = db.Column(db.Boolean, nullable=False, default=False)
+    quality = db.Column(db.String(255), nullable=False)
+    language = db.Column(db.String(255), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    price = db.Column(db.Float, nullable=False)
 
     def to_dict(self):
         return {
-            'Site': self.Site,
-            'Name': self.Name,
-            'Edition': self.Edition,
-            'Version': self.Version,
-            'Foil': self.Foil,
-            'Quality': self.Quality,
-            'Language': self.Language,
-            'Quantity': self.Quantity,
-            'Price': self.Price
+            'id': self.id,
+            'site': self.site,
+            'name': self.name,
+            'edition': self.edition,
+            'version': self.version,
+            'foil': self.foil,
+            'quality': self.quality,
+            'language': self.language,
+            'quantity': self.quantity,
+            'price': self.price
         }
-
-    def __eq__(self, other):
-        if not isinstance(other, Card):
-            return False
-        return (
-            (self.Site, self.Name, self.Edition, self.Version, self.Foil, self.Quality, self.Language, self.Quantity, self.Price) ==
-            (other.Site, other.Name, other.Edition, other.Version, other.Foil, other.Quality, other.Language, other.Quantity, other.Price)
-        )
-
-    def __hash__(self):
-        return hash((self.Site, self.Name, self.Edition, self.Version, self.Foil, self.Quality, self.Language, self.Quantity, self.Price))
 
 class Card_list(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    Name = db.Column(db.String(255), nullable=False)
-    Edition = db.Column(db.String(255), nullable=True)
-    Version = db.Column(db.String(255), nullable=True)
-    Foil = db.Column(db.Boolean, nullable=True, default=False)
-    Quality = db.Column(db.String(255), nullable=False)
-    Language = db.Column(db.String(255), nullable=False, default="English")
-    Quantity = db.Column(db.Integer, nullable=False, default=1)
+    name = db.Column(db.String(255), nullable=False)
+    edition = db.Column(db.String(255), nullable=True)
+    version = db.Column(db.String(255), nullable=True)
+    foil = db.Column(db.Boolean, nullable=True, default=False)
+    quality = db.Column(db.String(255), nullable=False)
+    language = db.Column(db.String(255), nullable=False, default="English")
+    quantity = db.Column(db.Integer, nullable=False, default=1)
 
     def to_dict(self):
         return {
-            'Name': self.Name,
-            'Edition': self.Edition,
-            'Version': self.Version,
-            'Foil': self.Foil,
-            'Quality': self.Quality,
-            'Language': self.Language,
-            'Quantity': self.Quantity
-        } 
+            'id': self.id,
+            'name': self.name,
+            'edition': self.edition,
+            'version': self.version,
+            'foil': self.foil,
+            'quality': self.quality,
+            'language': self.language,
+            'quantity': self.quantity
+        }

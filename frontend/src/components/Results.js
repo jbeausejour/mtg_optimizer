@@ -17,7 +17,7 @@ const Results = () => {
   }, [scanId]);
 
   return (
-    <div className={`results section ${theme}`}>
+    <div className={`results section`}>
       <h1>Optimization Results</h1>
       <List
         bordered
