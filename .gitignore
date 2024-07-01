@@ -7,7 +7,7 @@ __pypackages__/
 .ipynb_checkpoints
 # Django stuff:
 *.log
-
+.env
 mtg_optimizer.code-workspace
 .vscode/
 static/

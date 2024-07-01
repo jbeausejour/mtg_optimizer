@@ -2,34 +2,41 @@ from flask import Flask, jsonify, request, send_from_directory, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-import json
-import os
+from celery_app import make_celery
+from dotenv import load_dotenv
+from logger import setup_logging
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
+load_dotenv()
 
 # Initialize the database
 db = SQLAlchemy()
 
 def create_app():
+    
     app = Flask(__name__, static_folder='static', template_folder='templates', instance_relative_config=True)
     CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
-
-    # Determine the absolute path to the database
-    base_dir = os.path.abspath(os.path.dirname(__file__))
-    database_path = os.path.join(base_dir, 'instance', 'site_data.db')
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = os.getenv('SQLALCHEMY_TRACK_MODIFICATIONS', 'False').lower() == 'true'
+    app.config['DEBUG'] = os.getenv('DEBUG', 'False').lower() == 'true'
+    app.config['CELERY_BROKER_URL'] = os.getenv('CELERY_BROKER_URL')
+    app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND')
+    
+    print(f"FLASK_DEBUG environment variable: {os.getenv('FLASK_DEBUG')}")
+    print(f"app.config['DEBUG']: {app.config['DEBUG']}")
+    print(f"app.debug: {app.debug}")
 
     app.config.from_mapping(
-        SECRET_KEY='your_secret_key',
-        SQLALCHEMY_DATABASE_URI=f'sqlite:///{database_path}',
-        SQLALCHEMY_TRACK_MODIFICATIONS=False,
         UPLOAD_FOLDER='uploads',
-        ENV='development',
-        DEBUG=True
+        ENV='development'
     )
 
+    setup_logging(app)
     # Initialize the database with the app
     db.init_app(app)
 
@@ -38,16 +45,11 @@ def create_app():
 
     migrate = Migrate(app, db)  # Initialize Flask-Migrate
 
-    # Load data from JSON and text files
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(base_dir, 'data', 'config.json')
-    with open(config_path) as config_file:
-        config = json.load(config_file)
-
     # Register blueprints using the function from routes.py
     from routes import register_blueprints
     register_blueprints(app)
 
+    print(f"after")
     with app.app_context():
         @app.route('/')
         def index():
@@ -57,6 +59,7 @@ def create_app():
 
         @app.route('/static/<path:path>')
         def send_static(path):
+            print(f"after static")
             full_path = os.path.join(app.static_folder, path)
             app.logger.debug(f"Requested static file: {full_path}")
             app.logger.debug(f"Static folder: {app.static_folder}")
@@ -70,9 +73,14 @@ def create_app():
     return app
 
 if __name__ == '__main__':
-    
+
     logger.debug("Running from main")
-    print("Running from main")
+    print("Running from main", flush=True)
     app = create_app()
+    print(f"after 2")
+    celery = make_celery(app)
+    print(f"after 3")
     with app.app_context():
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        print(f"after 4")
+        logger.debug("Starting Flask app")
+        app.run(host='0.0.0.0', port=5000)  # Remove debug=True from here

@@ -8,7 +8,7 @@ const CardForm = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.get(`/fetch_card?name=${cardName}`);
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/fetch_card?name=${cardName}`);
       setCardData(response.data);
     } catch (error) {
       console.error('Error fetching card data:', error);

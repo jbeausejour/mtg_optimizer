@@ -1,191 +1,227 @@
-import datetime
-from deap import base, creator, tools
-import random
-from functools import partial
+import pulp
 import pandas as pd
 from mtg_logger import *
 
 logger = None
 
-def set_deap_logger(new_logger):
+
+def set_milp_logger(new_logger):
     global logger
     logger = new_logger
 
-creator.create("FitnessMulti", base.Fitness, weights=(-1.0, 1.0, 1.0, -1.0))
-creator.create("Individual", list, fitness=creator.FitnessMulti)
+def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
+    Total_price = 0.0
+    results = []
+    total_card_nbr = 0
 
-def custom_crossover(ind1, ind2):
-    for i in range(len(ind1)):
-        if random.random() < 0.5:
-            ind1[i], ind2[i] = ind2[i], ind1[i]
-    return ind1, ind2
+    # Iterate over each card and store combination
+    for card, store_dict in buy_vars.items():
+        for store, var in store_dict.items():
+            quantity = var.value()
+            if quantity > 0:  # If this variable is part of the solution
+                price_per_unit = costs[card][store]
+                card_store_total_price = quantity * price_per_unit
 
-def custom_mutation(individual, card_details_df, buylist, indpb=0.05):
-    for i in range(len(individual)):
-        if random.random() < indpb:
-            mutation_index = random.randrange(len(individual))
-            card_name = buylist.iloc[mutation_index]['Name']
-            available_options = card_details_df[card_details_df['Name'] == card_name]
-            if not available_options.empty:
-                selected_option = available_options.sample(n=1)
-                individual[mutation_index] = selected_option.index.item()
-    return individual,
+                if price_per_unit != 10000:
+                    Total_price += card_store_total_price
+                    total_card_nbr += quantity
+                    # Find the original index of the card in card_details_df
+                    original_index = card_details_df[(card_details_df['Name'] == card) & (card_details_df['Site'] == store)].index[0]
+                    original_card = card_details_df.loc[original_index]
 
-def evaluate_solution_wrapper(card_details_df, buylist):
-    def evaluate_solution(individual):
-        total_cost = 0
-        total_quality_score = 0
-        stores = set()
-        card_counters = {row['Name']: row['Quantity'] for _, row in buylist.iterrows()}
-        card_availability = {row['Name']: 0 for _, row in buylist.iterrows()}
-        language_penalty = 999
-        quality_weights = {'NM': 9, 'LP': 7, 'MP': 3, 'HP': 1, 'DMG': 0}
-        missing_cards_penalty = 0
-        store_diversity_penalty = 0
-        all_cards_present = all(card_counters[getattr(card_row, 'Name')] > 0 for card_row in card_details_df.itertuples())
-        if not all_cards_present:
-            return (float('inf'),)
-        for idx in individual:
-            if idx not in card_details_df.index:
-                print(f"Invalid index: {idx}")
-                continue
-            card_row = card_details_df.loc[idx]
-            card_name = card_row['Name']
-            if card_counters[card_name] > 0:
-                card_counters[card_name] -= 1
-                card_availability[card_name] += card_row['Quantity']
-                card_price = card_row['Price']
-                if card_row['Language'] != 'English':
-                    card_price *= language_penalty
-                total_cost += card_price
-                total_quality_score += quality_weights.get(card_row['Quality'], 0)
-                stores.add(card_row['Site'])
-        missing_cards_penalty = 10000 * sum(count for count in card_counters.values() if count > 0)
-        store_diversity_penalty = 100 * (len(stores) - 1)
-        card_quality = total_quality_score / len(individual) if individual else 0
-        all_available = all(card_availability[name] >= qty for name, qty in card_counters.items())
-        availability_score = 1 if all_available else 0
-        num_stores = len(stores)
-        return (total_cost + missing_cards_penalty + store_diversity_penalty, -card_quality, -availability_score, num_stores)
-    return evaluate_solution
+                    # Append the result to the list
+                    results.append({
+                        "Original_Index": original_index,
+                        "Original_Card": original_card,
+                        "Card": card, 
+                        "Store": store, 
+                        "Quantity": quantity, 
+                        "Price": price_per_unit,
+                        "Total Price": card_store_total_price
+                    })
 
-def initialize_individual(card_details_df, buylist):
-    individual = []
-    for _, card in buylist.iterrows():
-        available_options = card_details_df[card_details_df['Name'] == card['Name']]
-        if not available_options.empty:
-            selected_option = available_options.sample(n=1)
-            individual.append(selected_option.index.item())
-        else:
-            print(f"Card {card['Name']} not available in any store!")
-    return creator.Individual(individual)
+                # Log the message if not limited output
+                if not limited_output:
+                    message_type = "Cannot Buy" if price_per_unit == 10000 else "Buy"
+                    message_color = "b_red" if price_per_unit == 10000 else "b_green"
+                    message = [
+                        ("[INFO] ", "d_yellow"),
+                        (f"{message_type} ", "rst"),
+                        (f"{quantity} ", "b_cyan"),
+                        ("x ", "rst"),
+                        (f"{card} ", "b_cyan"),
+                        ("from ", "rst"),
+                        (f"{store if price_per_unit != 10000 else 'any stores'} ", message_color),
+                        ("at a price of ", "rst"),
+                        (f"${price_per_unit} ", message_color),
+                        ("each, totalizing ", "rst"),
+                        (f"${card_store_total_price}", message_color)
+                    ]
+                    logger.info(color_msg(message))
 
-def initialize_population(n, card_details_df, buylist):
-    return [initialize_individual(card_details_df, buylist) for _ in range(n)]
 
-def initialize_population_with_milp(n, card_details_df, buylist, milp_solution):
-    population = [initialize_individual(card_details_df, buylist) for _ in range(n-1)]
-    milp_individual = milp_solution_to_individual(milp_solution)
-    population.insert(0, milp_individual)
-    return population
+    # Create and sort the DataFrame
+    results_df = pd.DataFrame(results)
+    sorted_results_df = results_df.sort_values(by=['Store', 'Card'])
+    sorted_results_df.reset_index(drop=True, inplace=True)
 
-def initialize_toolbox(card_details_df, buylist):
-    toolbox = base.Toolbox()
-    toolbox.register("mate", custom_crossover)
-    toolbox.register("select", tools.selNSGA2)
-    toolbox.register("attr_idx", random.randint, 0, len(card_details_df) - 1)
-    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_idx, n=sum(buylist['Quantity']))
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-    custom_mutation_with_args = partial(custom_mutation, card_details_df=card_details_df, buylist=buylist)
-    toolbox.register("mutate", custom_mutation_with_args)
-    evaluate_function = evaluate_solution_wrapper(card_details_df, buylist)
-    toolbox.register("evaluate", evaluate_function)
-    return toolbox
+    # Log additional information
+    num_stores_used = results_df['Store'].nunique()
+    store_usage_counts = sorted_results_df[sorted_results_df['Price'] != 10000]['Store'].value_counts()
+    store_usage_str = ', '.join([f"{store}: {count}" for store, count in store_usage_counts.items()])
 
-def milp_solution_to_individual(milp_solution):
-    return creator.Individual(milp_solution)
-
-def run_nsga_ii(card_details_df, buylist, milp_solution=None):
-    toolbox =initialize_toolbox(card_details_df, buylist)
-    NGEN = 1000
-    MU = 3000
-    CXPB = 0.5
-    MUTPB = 0.2
-    ELITISM_SIZE = int(0.1 * MU)
-    if milp_solution:
-        milp_individual = milp_solution_to_individual(milp_solution)
-        pop = initialize_population_with_milp(MU, card_details_df, buylist, milp_individual)
-    else:
-        pop = toolbox.population_custom(n=MU)
-    fitnesses = map(toolbox.evaluate, pop)
-    for ind, fit in zip(pop, fitnesses):
-        ind.fitness.values = fit
-    pareto_front = tools.ParetoFront()
-    convergence_threshold = 0.01
-    num_generations_threshold = 10
-    best_fitness_so_far = float('inf')
-    generations_without_improvement = 0
-    for gen in range(NGEN):
-        last_time = datetime.datetime.now()
-        offspring = toolbox.select(pop, len(pop))
-        offspring = list(map(toolbox.clone, offspring))
-        for child1, child2 in zip(offspring[::2], offspring[1::2]):
-            if random.random() < CXPB:
-                toolbox.mate(child1, child2)
-                del child1.fitness.values
-                del child2.fitness.values
-        for mutant in offspring:
-            if random.random() < MUTPB:
-                toolbox.mutate(mutant)
-                del mutant.fitness.values
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = map(toolbox.evaluate, invalid_ind)
-        for ind, fit in zip(invalid_ind, fitnesses):
-            ind.fitness.values = fit
-        top_individuals = tools.selBest(pop, ELITISM_SIZE)
-        offspring.extend(top_individuals)
-        pop[:] = offspring
-        pareto_front.update(pop)
-        current_time = datetime.datetime.now()
-        delta_time = current_time - last_time
-        delta_time_str = str(delta_time)
-        logger.warning(color_msg([("[INFOS] ", "d_yellow"), ("Ran gen:", "rst"), (str(gen), "d_cyan"), (" T[", "rst"), (delta_time_str, "d_cyan"), ("]", "rst")]))
-        avg_fitness = sum(ind.fitness.values[0] for ind in pop) / len(pop)
-        best_fitness = tools.selBest(pop, 1)[0].fitness.values
-        logger.warning(color_msg([("[INFOS] ", "d_yellow"), (f"Generation [","rst"), (f"{gen}","d_cyan"), (f"]: Avg Fitness = ","rst"), (f"{avg_fitness:.2f}","d_green"), (f", Best Fitness = ","rst"), (f"{best_fitness}","d_green")]))
-        current_best_fitness = tools.selBest(pop, 1)[0].fitness.values[0]
-        if (best_fitness_so_far - current_best_fitness) / best_fitness_so_far > convergence_threshold:
-            best_fitness_so_far = current_best_fitness
-            generations_without_improvement = 0
-        else:
-            generations_without_improvement += 1
-        if generations_without_improvement >= num_generations_threshold:
-            logger.warning(color_msg([("[INFOS] ", "d_yellow"), (f"Convergence reached after {gen} generations.","rst")]))
-            break
-    return pareto_front
-
-def extract_purchasing_plan(solution, card_details_df, buylist):
-    purchasing_plan = []
-    for idx in solution:
-        if idx not in card_details_df.index:
-            print(f"Invalid index: {idx}")
-            continue
-        card_row = card_details_df.loc[idx]
-        card_name = card_row['Name']
-        if card_name in buylist['Name'].values:
-            buylist_row = buylist[buylist['Name'] == card_name].iloc[0]
-            required_quantity = buylist_row['Quantity']
-            if required_quantity > 0:
-                available_quantity = min(card_row['Quantity'], required_quantity)
-                purchase_details = {
-                    'Name': card_name,
-                    'Quantity': available_quantity,
-                    'Site': card_row['Site'],
-                    'Quality': card_row['Quality'],
-                    'Price': card_row['Price'],
-                    'Total Price': card_row['Price'] * available_quantity
+    if not limited_output:
+        logger.info(color_msg([("[INFO] ", "d_yellow"), ("Minimum number of different sites to order from: ", "rst"), (f"{num_stores_used}", "b_green")]))
+        logger.info(color_msg([("[INFO] ", "d_yellow"), ("Sites to order from: ", "rst"), (store_usage_str, "b_green")]))
+        logger.info(color_msg([("[INFO] ", "d_yellow"), ("Total price of all purchases ", "rst"), (f"${Total_price:.2f}", "b_green")]))
+        logger.info(color_msg([("[INFO] ", "d_yellow"), ("Total number of cards purchased: ", "rst"), (f"{total_card_nbr}/{total_qty}", "b_green")]))
+    iteration_results = {
+                    "nbr_card_in_solution": total_card_nbr,
+                    "Total_price": Total_price,
+                    "Number_store": num_stores_used,
+                    "List_stores":store_usage_str,
+                    "sorted_results_df": sorted_results_df
                 }
-                purchasing_plan.append(purchase_details)
-                buylist.at[buylist[buylist['Name'] == card_name].index[0], 'Quantity'] = required_quantity - available_quantity
-    buylist = buylist[buylist['Quantity'] > 0]
-    return purchasing_plan
+    return iteration_results
+
+def run_pulp(standardized_cards_df, available_cards_to_buy_df, min_store, find_min_store):
+
+    # Extract unique cards and stores
+    unique_cards = available_cards_to_buy_df['Name'].unique()
+    unique_stores = standardized_cards_df['Site'].unique()
+    total_qty = len(available_cards_to_buy_df)
+
+    # A high cost to assign for unavailable card-store combinations
+    high_cost = 10000  # Adjust this value as needed
+
+    # Create a dictionary of costs for each card in each store
+    costs = {}
+    for card in unique_cards:
+        costs[card] = {}
+        for store in unique_stores:
+            price = standardized_cards_df[(standardized_cards_df['Name'] == card) & (standardized_cards_df['Site'] == store)]['Weighted_Price'].min()
+            if pd.isna(price):  # If the price is NaN, assign a high cost
+                costs[card][store] = high_cost
+            else:
+                costs[card][store] = price
+
+    all_iterations_results = []
+    no_optimal_found = False
+    if find_min_store == False:
+
+        prob, buy_vars = setup_prob(costs, unique_cards, unique_stores, available_cards_to_buy_df, min_store)
+        # Check if the problem was solved successfully
+        if pulp.LpStatus[prob.status] != 'Optimal':
+            print("Solver did not find an optimal solution.")
+            no_optimal_found = True
+        
+        if no_optimal_found:
+            return None
+        else:
+            all_iterations_results = process_result(buy_vars, costs, False, total_qty, standardized_cards_df)
+            return all_iterations_results[0]["sorted_results_df"], None
+    else:
+        message = [
+            ("[INFO] ", "d_yellow"),
+            ("Starting iterative algo", "rst")
+        ]
+        logger.info(color_msg(message))
+        still_going = True
+        iteration = 1
+        current_min = min_store
+        while still_going and current_min>=1:
+            
+            message = [
+                ("[info] ", "d_yellow"),
+                ("Iteration [", "rst"),
+                (f"{iteration}","d_cyan"),
+                ("]: Current number of diff. stores: ", "rst"),
+                (f"{current_min}","d_cyan")
+            ]
+            logger.info(color_msg(message))
+            
+            prob, buy_vars = setup_prob(costs, unique_cards, unique_stores, available_cards_to_buy_df, current_min)
+
+            # Check if the problem was solved successfully
+            if pulp.LpStatus[prob.status] != 'Optimal':
+                print("Solver did not find an optimal solution.")
+                still_going = False
+            else:
+                limited_output = True
+                iteration_results = process_result(buy_vars, costs, limited_output, total_qty, standardized_cards_df) 
+                all_iterations_results.append(iteration_results)
+
+                message_color = "b_red" if iteration_results['nbr_card_in_solution'] != total_qty else "b_green"
+                message = [
+                    ("[info] ", "d_yellow"),
+                    ("Iteration [", "rst"),
+                    (f"{iteration}","d_cyan"),
+                    ("]: Total price ", "rst"),
+                    (f"{iteration_results['Total_price']:.2f}$ ","d_cyan"),
+                    (f"{int(iteration_results['nbr_card_in_solution'])}/{total_qty}",message_color)
+                ]
+                logger.info(color_msg(message))
+                
+                iteration+=1
+                current_min -= 1
+                
+        if no_optimal_found:
+            return None
+        else:
+            # Initialize with the first iteration's results
+            least_expensive_and_complete_iteration = all_iterations_results[0]
+            min_total_price = least_expensive_and_complete_iteration["Total_price"]
+
+            # Iterate through all iterations to find the least expensive one
+            for iteration_result in all_iterations_results:
+                if iteration_result["Total_price"] < min_total_price and iteration_results['nbr_card_in_solution'] == total_qty:
+                    min_total_price = iteration_result["Total_price"]
+                    least_expensive_and_complete_iteration = iteration_result
+                    
+            message = [
+                ("[INFO] ", "d_yellow"),
+                ("Best Iteration is with ", "rst"),
+                (f"{least_expensive_and_complete_iteration['Number_store']}","d_green"),
+                (" stores with a total price of: ", "rst"),
+                (f"{least_expensive_and_complete_iteration['Total_price']:.2f}$","d_cyan"),
+            ]
+            logger.info(color_msg(message))
+
+            message = [
+                ("[INFO] ", "d_yellow"),
+                ("Using these 'stores: #cards': ", "rst")
+            ]
+            logger.info(color_msg(message))
+            for store in least_expensive_and_complete_iteration['List_stores'].split(','):
+                message = [
+                    ("[INFO] ", "d_yellow"),
+                    (f"{store}","d_cyan")
+                ]
+                logger.info(color_msg(message))
+            
+            return least_expensive_and_complete_iteration['sorted_results_df'], all_iterations_results
+    
+def setup_prob(costs, unique_cards, unique_stores, buylist, min_store):
+    # Create a LP problem
+    prob = pulp.LpProblem("MTGCardOptimization", pulp.LpMinimize)
+
+    # Variables: whether to buy a card from a specific store
+    buy_vars = pulp.LpVariable.dicts("Buy", (unique_cards, unique_stores), 0, 1, pulp.LpBinary)
+    store_vars = pulp.LpVariable.dicts("Store", unique_stores, 0, 1, pulp.LpBinary)
+
+    # Objective: Minimize cost
+    prob += pulp.lpSum([buy_vars[card][store] * costs[card][store] for card in unique_cards for store in unique_stores])
+
+    # Constraints: Ensure each card is bought in the required quantity
+    for card in unique_cards:
+        required_quantity = buylist[buylist['Name'] == card]['Quantity'].iloc[0]
+        prob += pulp.lpSum([buy_vars[card][store] for store in unique_stores]) == required_quantity
+
+    for store in unique_stores:
+        prob += store_vars[store] >= pulp.lpSum(buy_vars[card][store] for card in unique_cards) / len(unique_cards)
+
+    prob += pulp.lpSum(store_vars[store] for store in unique_stores) <= min_store
+    # Solve the problem without printing solver messages
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+
+    return prob, buy_vars

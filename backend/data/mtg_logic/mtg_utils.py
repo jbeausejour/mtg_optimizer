@@ -4,6 +4,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from data.mtg_logic.mtg_logger import *
+from data.mtg_logic.mtg_scrapper import *
 from data.mtg_logic.mtg_utils import *
 
 # Create a dictionary to map qualities to weights

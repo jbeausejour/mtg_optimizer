@@ -4,7 +4,7 @@ DROP TABLE IF EXISTS cards;
 DROP TABLE IF EXISTS card_list;
 
 -- Create sites table
-CREATE TABLE sites (
+CREATE TABLE site (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     url VARCHAR(255) NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE sites (
 );
 
 -- Create cards table
-CREATE TABLE cards (
+CREATE TABLE card (
     id SERIAL PRIMARY KEY,
     site VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -38,4 +38,29 @@ CREATE TABLE card_list (
     quality VARCHAR(255) NOT NULL,
     language VARCHAR(255) NOT NULL DEFAULT 'English',
     quantity INTEGER NOT NULL DEFAULT 1
+);
+
+-- Create card_list table
+CREATE TABLE optimization_result (
+    id SERIAL PRIMARY KEY,
+    card_names JSON NOT NULL,
+    results JSON,
+    timestamp DateTime
+);
+
+CREATE TABLE scan (
+    id SERIAL PRIMARY KEY,
+    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    card_names JSON NOT NULL
+);
+
+-- Create scan_result table
+CREATE TABLE scan_result (
+    id SERIAL PRIMARY KEY,
+    scan_id INTEGER NOT NULL,
+    card_id INTEGER NOT NULL,
+    site VARCHAR(100) NOT NULL,
+    price FLOAT NOT NULL,
+    FOREIGN KEY (scan_id) REFERENCES scan(id),
+    FOREIGN KEY (card_id) REFERENCES card(id)
 );

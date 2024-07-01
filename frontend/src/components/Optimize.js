@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
 import { Button, message, Row, Col, Card, List, Modal, Switch, Descriptions, Image, Tag, Typography, Table } from 'antd';
 import ThemeContext from './ThemeContext';
+import CardListInput from './CardListInput';
 import '../global.css';
 
 const { Title, Text } = Typography;
@@ -81,6 +82,8 @@ const Optimize = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [cardData, setCardData] = useState(null);
   const [selectedSites, setSelectedSites] = useState({});
+  const [taskId, setTaskId] = useState(null);
+  const [taskStatus, setTaskStatus] = useState(null);
   const { theme } = useContext(ThemeContext);
 
   useEffect(() => {
@@ -88,9 +91,18 @@ const Optimize = () => {
     fetchSites();
   }, []);
 
+  useEffect(() => {
+    if (taskId) {
+      const interval = setInterval(() => {
+        checkTaskStatus(taskId);
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [taskId]);
+
   const fetchCards = async () => {
     try {
-      const response = await axios.get('/api/v1/cards');
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/cards`);
       setCards(response.data);
     } catch (error) {
       console.error('Error fetching cards:', error);
@@ -100,7 +112,7 @@ const Optimize = () => {
 
   const fetchSites = async () => {
     try {
-      const response = await axios.get('/api/v1/sites');
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/sites`);
       setSites(response.data);
       const initialSelected = {};
       response.data.forEach(site => {
@@ -116,18 +128,48 @@ const Optimize = () => {
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
-      const response = await axios.post('/api/v1/optimize', { sites: sitesToOptimize });
-      message.success('Optimization completed successfully!');
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/optimize`, { sites: sitesToOptimize });
+      setTaskId(response.data.task_id);
+      message.success('Optimization task started!');
     } catch (error) {
-      message.error('Optimization failed!');
+      message.error('Failed to start optimization task');
       console.error('Error during optimization:', error);
     }
   };
 
+  const checkTaskStatus = async (id) => {
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/task_status/${id}`);
+      setTaskStatus(response.data.status);
+      if (response.data.state === 'SUCCESS') {
+        message.success('Optimization completed successfully!');
+        setTaskId(null);
+        // Redirect to the results page
+        if (response.data.result && response.data.result.scan_id) {
+          history.push(`/results/${response.data.result.scan_id}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking task status:', error);
+    }
+  };
+
+  const handleCardListSubmit = async (cardList) => {
+    try {
+      await axios.post(`${process.env.REACT_APP_API_URL}/card_list`, { cardList });
+      message.success('Card list submitted successfully');
+      fetchCards();
+    } catch (error) {
+      message.error('Failed to submit card list');
+      console.error('Error submitting card list:', error);
+    }
+  };
+
+
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     try {
-      const response = await axios.get(`/api/v1/fetch_card?name=${card.name}`);
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/v1/fetch_card?name=${card.name}`);
       
       // Format MTGStocks data
       const mtgStocksData = response.data.mtgstocks;
@@ -167,12 +209,14 @@ const Optimize = () => {
     }));
   };
 
-  return (
+return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
+      <CardListInput onSubmit={handleCardListSubmit} />
       <Button type="primary" onClick={handleOptimize} className={`optimize-button ${theme}`}>
         Run Optimization
       </Button>
+      {taskStatus && <p>Task Status: {taskStatus}</p>}
       <Row gutter={16}>
         <Col span={12}>
           <Card title="MTG Card List" className={`ant-card ${theme}`}>
