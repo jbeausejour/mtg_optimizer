@@ -2,7 +2,6 @@ from flask import Flask, jsonify, request, send_from_directory, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from celery_app import make_celery
 from dotenv import load_dotenv
 from logger import setup_logging
 import logging

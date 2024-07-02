@@ -169,7 +169,7 @@ const Optimize = () => {
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/v1/fetch_card?name=${card.name}`);
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/fetch_card?name=${card.name}`);
       
       // Format MTGStocks data
       const mtgStocksData = response.data.mtgstocks;
@@ -264,7 +264,7 @@ return (
       </Row>
       <Modal
         title={selectedCard ? selectedCard.name : ''}
-        visible={isModalVisible}
+        open={isModalVisible}
         onCancel={handleModalClose}
         width={800}
         footer={[
