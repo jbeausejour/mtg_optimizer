@@ -9,15 +9,13 @@ views = Blueprint('views', __name__)
 
 @views.route('/cards', methods=['GET'])
 def get_cards():
-    print("ROUTEEEEEEEEEEE")
-    logger.info("Cards route hit!")
+    print("cards route hit!")
     cards = get_all_cards()
-    print(cards)
+    #print(cards)
     return jsonify([card.to_dict() for card in cards])
 
 @views.route('/sites', methods=['GET'])
 def get_site_list():
-    logger.info("sites route hit!")
     print("sites route hit!")
     sites = get_all_sites()
     return jsonify([site.to_dict() for site in sites])
