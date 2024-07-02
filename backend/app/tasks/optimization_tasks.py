@@ -1,12 +1,9 @@
 #from optimization import run_optimization
-from models import db, Card, Scan, ScanResult
-import celery
-from app import create_app
+from app.models.scan import Scan, ScanResult
+from backend.app import create_app, db
 
-@celery.shared_task(bind=True)
-def optimize_cards(self, card_list, sites):
-    self.update_state(state='PROGRESS', meta={'status': 'Optimization in progress...'})
-    
+#@celery.shared_task(bind=True)
+def optimize_cards(card_list, sites):
     app = create_app()
     with app.app_context():
         new_scan = Scan()
@@ -14,7 +11,7 @@ def optimize_cards(self, card_list, sites):
         db.session.commit()
 
         config = {
-            'filename': f'optimization_task_{self.request.id}',
+            'filename': f'optimization_task_{new_scan.id}',
             'log_level_file': 'INFO',
             'log_level_console': 'INFO',
             'special_site_flag': True,
@@ -25,10 +22,11 @@ def optimize_cards(self, card_list, sites):
             'find_min_store': False
         }
 
-        results= ""
-        #results = run_optimization([card.name for card in card_list], config)
+        results = ""
+        # Uncomment this when you have the run_optimization function ready
+        # results = run_optimization([card.name for card in card_list], config)
 
-        for card in results['sites_results']:
+        for card in results.get('sites_results', []):
             result = ScanResult(
                 scan_id=new_scan.id,
                 card_id=card['id'],

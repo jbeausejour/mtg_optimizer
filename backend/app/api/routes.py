@@ -1,4 +1,4 @@
-from views import views
+from api.views import views
 import logging
 
 logger = logging.getLogger(__name__)

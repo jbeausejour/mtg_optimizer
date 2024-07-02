@@ -3,7 +3,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from dotenv import load_dotenv
-from celery_app import make_celery
+from app.tasks.celery_app import make_celery
 import logging
 import os
 
@@ -26,8 +26,8 @@ def create_app():
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
-    app.config['CELERY_BROKER_URL'] = os.getenv('CELERY_BROKER_URL')
-    app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND')
+    #app.config['CELERY_BROKER_URL'] = os.getenv('CELERY_BROKER_URL')
+    #app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND')
 
     app.logger.setLevel(logging.DEBUG)
     # Initialize the database with the app
@@ -39,7 +39,7 @@ def create_app():
     migrate = Migrate(app, db)  # Initialize Flask-Migrate
 
     # Register blueprints using the function from routes.py
-    from routes import register_blueprints
+    from app.api.routes import register_blueprints
     register_blueprints(app)
 
     print(f"after")
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     #logger.debug("Running from main")
     print("Running from main", flush=True)
     app = create_app()
-    celery = make_celery(app)
+    #celery = make_celery(app)
     with app.app_context():
         #logger.debug("Starting Flask app")
         app.run(debug=True, host='0.0.0.0', port=5000)

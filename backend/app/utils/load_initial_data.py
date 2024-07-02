@@ -1,7 +1,8 @@
 import os
 import csv
-from app import create_app, db
-from models import Site, Card, Card_list
+from backend.app import create_app, db
+from app.models.site import Site
+from app.models.card import Card_list
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 SITE_LIST_FILE = os.path.join(DATA_DIR, 'site_list.txt')

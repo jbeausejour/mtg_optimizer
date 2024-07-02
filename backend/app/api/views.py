@@ -1,8 +1,12 @@
-from flask import Blueprint, jsonify, request, Response
-from tasks import optimize_cards
-from services import get_all_cards, get_all_sites, get_card_versions, fetch_card_data, get_scan_results, get_all_scan_results
+from flask import Blueprint, jsonify, request
+from app.tasks.optimization_tasks import optimize_cards
+from app.services.card_service import get_all_cards, get_card_versions, fetch_card_data
+from app.services.site_service import get_all_sites
+from app.services.scan_service import get_scan_results, get_all_scan_results
+from app.utils.data_fetcher import DataFetcher
 import logging
-from functools import wraps
+import asyncio
+
 
 logger = logging.getLogger(__name__)
 views = Blueprint('views', __name__)
@@ -53,8 +57,12 @@ def fetch_card():
 def optimize():
     sites = request.json.get('sites', [])
     card_list = get_all_cards()  # Assuming this function exists in your services
-    task = optimize_cards.delay(card_list, sites)
-    return jsonify({'task_id': task.id}), 202
+
+    # Run the optimization synchronously
+    result = optimize_cards(card_list, sites)
+
+    # Return the result immediately
+    return jsonify(result), 200
 
 @views.route('/results/<int:scan_id>', methods=['GET'])
 def get_results(scan_id):
@@ -65,3 +73,20 @@ def get_results(scan_id):
 def get_scans():
     scans = get_all_scan_results()
     return jsonify([scan.to_dict() for scan in scans])
+
+@views.route('/update_card_data', methods=['POST'])
+def update_card_data():
+    try:
+        # Run the asynchronous update_all_cards method
+        asyncio.run(DataFetcher.update_all_cards())
+        
+        return jsonify({
+            "status": "success",
+            "message": "Card data update process has been initiated."
+        }), 202  # 202 Accepted
+    except Exception as e:
+        logger.error(f"Error updating card data: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": f"An error occurred: {str(e)}"
+        }), 500
