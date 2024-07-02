@@ -5,6 +5,7 @@ flask-migrate==4.0.7
 htmldom==2.0
 fuzzywuzzy==0.18.0
 deap==1.4.1
+pulp==2.8.0
 pandas==2.2.2
 requests==2.32.2
 beautifulsoup4==4.12.3
