@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import 'antd/dist/reset.css';
 import './global.css';
-import { ThemeProvider } from './components/ThemeContext';
+import { ThemeProvider } from './utils/ThemeContext';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 

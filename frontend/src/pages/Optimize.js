@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
 import { Button, message, Row, Col, Card, List, Modal, Switch, Descriptions, Image, Tag, Typography, Table } from 'antd';
-import ThemeContext from './ThemeContext';
-import CardListInput from './CardListInput';
+import ThemeContext from '../utils/ThemeContext';
+import CardListInput from '../components/CardListInput';
 import '../global.css';
-
-const { Title, Text } = Typography;
+import { Select, InputNumber } from 'antd';
 
 const ScryfallCard = ({ data }) => (
   <Card title="Scryfall Data" className="ant-card">
@@ -88,6 +87,8 @@ const Optimize = () => {
   const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
   const [minStore, setMinStore] = useState(2);
   const [findMinStore, setFindMinStore] = useState(false);
+  const { Option } = Select;
+  const { Title, Text } = Typography;
   
 
   useEffect(() => {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button } from 'antd';
 import axios from 'axios';
-import ThemeContext from '../components/ThemeContext';
+import ThemeContext from '../utils/ThemeContext';
 import '../global.css';
 
 const Dashboard = () => {

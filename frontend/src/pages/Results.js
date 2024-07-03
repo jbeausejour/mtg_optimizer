@@ -3,7 +3,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, Table } from 'antd';
 import axios from 'axios';
-import ThemeContext from './ThemeContext';
+import ThemeContext from '../utils/ThemeContext';
 import '../global.css';
 
 const Results = () => {

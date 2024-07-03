@@ -2,11 +2,11 @@ import React, { useContext, useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Layout, Menu } from 'antd';
 import { BulbOutlined } from '@ant-design/icons';
-import ThemeContext from './components/ThemeContext';
+import ThemeContext from './utils/ThemeContext';
 import Dashboard from './pages/Dashboard';
-import SiteManagement from './components/SiteManagement';
-import Optimize from './components/Optimize';
-import Results from './components/Results';
+import SiteManagement from './pages/SiteManagement';
+import Optimize from './pages/Optimize';
+import Results from './pages/Results';
 import './global.css';
 
 const { Header, Content, Footer } = Layout;

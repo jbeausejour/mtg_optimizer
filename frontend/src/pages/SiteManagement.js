@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Table, Input, Button, Form, message, Switch } from 'antd';
 import axios from 'axios';
 import { SaveOutlined, EditOutlined } from '@ant-design/icons';
-import ThemeContext from './ThemeContext';
+import ThemeContext from '../utils/ThemeContext';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
