@@ -1,8 +1,9 @@
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium_stealth import stealth
+
+CHROME_DRIVER_PATH = r"C:/Users/beauju/Downloads/chromedriver-win64/chromedriver.exe"
 
 class SeleniumDriver:
     @staticmethod
@@ -14,8 +15,9 @@ class SeleniumDriver:
         options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        
-        driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+
+        service = Service(CHROME_DRIVER_PATH)
+        driver = webdriver.Chrome(service=service, options=options)
         
         stealth(driver,
             languages=["en-US", "en"],

@@ -12,7 +12,7 @@ from app import db
 from app.utils.data_fetcher import DataFetcher
 from app.utils.optimization import OptimizationEngine
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import random
 import json
@@ -26,6 +26,33 @@ class CardService:
     def get_all_cards():
         print('Getting cards!')
         return Card_list.query.all()
+
+    @staticmethod
+    def get_recent_card_data(card_name):
+        one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+        recent_data = CardData.query.filter_by(card_name=card_name).filter(CardData.scan_timestamp > one_hour_ago).first()
+        
+        if recent_data:
+            return {
+                'scryfall': {
+                    'name': recent_data.card_name,
+                    'oracle_id': recent_data.oracle_id,
+                    'multiverse_ids': list(map(int, recent_data.multiverse_ids.split(','))),
+                    'reserved': recent_data.reserved,
+                    'lang': recent_data.lang,
+                    'set': recent_data.set_code,
+                    'set_name': recent_data.set_name,
+                    'collector_number': recent_data.collector_number,
+                    'variation': recent_data.variation,
+                    'promo': recent_data.promo,
+                    'prices': json.loads(recent_data.prices),
+                    'purchase_uris': json.loads(recent_data.purchase_uris)
+                },
+                'cardconduit': json.loads(recent_data.cardconduit_data),
+                'purchase_data': json.loads(recent_data.purchase_data),
+                'scan_timestamp': recent_data.scan_timestamp.isoformat()
+            }
+        return None
 
     @staticmethod
     def get_card_versions(card_name):
@@ -52,6 +79,11 @@ class CardService:
 
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
+        # Check for recent data first
+        recent_data = CardService.get_recent_card_data(card_name)
+        if recent_data:
+            return recent_data
+
         scryfall_data = CardService.fetch_scryfall_data(card_name, set_code, language)
         cardconduit_data = CardService.fetch_cardconduit_data(card_name)
         
@@ -59,7 +91,7 @@ class CardService:
         scryfall_data['version'] = version
 
         # Fetch prices from purchase URIs
-        purchase_data = CardService.fetch_purchase_data(scryfall_data['purchase_uris'])
+        purchase_data = CardService.fetch_purchase_data(scryfall_data.get('purchase_uris', {}))
 
         # Combine all data
         combined_data = {
@@ -180,18 +212,19 @@ class CardService:
         card_data = CardData(
             card_name=data['scryfall']['name'],
             oracle_id=data['scryfall']['oracle_id'],
-            multiverse_ids=','.join(map(str, data['scryfall']['multiverse_ids'])),
-            reserved=data['scryfall']['reserved'],
-            lang=data['scryfall']['lang'],
-            set_code=data['scryfall']['set'],
-            set_name=data['scryfall']['set_name'],
-            collector_number=data['scryfall']['collector_number'],
-            variation=data['scryfall']['variation'],
-            promo=data['scryfall']['promo'],
-            prices=json.dumps(data['scryfall']['prices']),
-            purchase_uris=json.dumps(data['scryfall']['purchase_uris']),
+            multiverse_ids=','.join(map(str, data['scryfall'].get('multiverse_ids', []))),
+            reserved=data['scryfall'].get('reserved', False),
+            lang=data['scryfall'].get('lang', ''),
+            set_code=data['scryfall'].get('set', ''),
+            set_name=data['scryfall'].get('set_name', ''),
+            collector_number=data['scryfall'].get('collector_number', ''),
+            variation=data['scryfall'].get('variation', False),
+            promo=data['scryfall'].get('promo', False),
+            prices=json.dumps(data['scryfall'].get('prices', {})),
+            purchase_uris=json.dumps(data['scryfall'].get('purchase_uris', {})),
             cardconduit_data=json.dumps(data['cardconduit']),
-            scan_timestamp=datetime.utcnow()
+            purchase_data=json.dumps(data['purchase_data']),
+            scan_timestamp=datetime.now(timezone.utc)
         )
         
         db.session.add(card_data)

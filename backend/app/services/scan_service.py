@@ -1,4 +1,4 @@
-from app.models.scan import Scan
+from app.models.scan import Scan, ScanResult
 
 class ScanService:
     @staticmethod

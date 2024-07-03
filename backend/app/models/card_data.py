@@ -1,11 +1,11 @@
 from app import db
-from datetime import datetime
+from datetime import datetime, timezone
 
 class CardData(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     card_name = db.Column(db.String(255), nullable=False)
     oracle_id = db.Column(db.String(255), nullable=False)
-    multiverse_ids = db.Column(db.String(255))  # Store as comma-separated string
+    multiverse_ids = db.Column(db.String(255))
     reserved = db.Column(db.Boolean)
     lang = db.Column(db.String(10))
     set_code = db.Column(db.String(10))
@@ -16,7 +16,8 @@ class CardData(db.Model):
     prices = db.Column(db.JSON)  # Store Scryfall prices as JSON
     purchase_uris = db.Column(db.JSON)  # Store purchase URIs as JSON
     cardconduit_data = db.Column(db.JSON)  # Store CardConduit data as JSON
-    scan_timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    scan_timestamp = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    purchase_data = db.Column(db.JSON)
 
     def __repr__(self):
         return f'<CardData {self.card_name}>'

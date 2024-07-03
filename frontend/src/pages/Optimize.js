@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
-import { Button, message, Row, Col, Card, List, Modal, Switch, Descriptions, Image, Tag, Typography, Table } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, Descriptions, Image, Tag, Typography, Table, Spin } from 'antd';
 import ThemeContext from '../utils/ThemeContext';
 import CardListInput from '../components/CardListInput';
 import '../global.css';
@@ -88,6 +88,7 @@ const Optimize = () => {
   const [minStore, setMinStore] = useState(2);
   const [findMinStore, setFindMinStore] = useState(false);
   const { Option } = Select;
+  const [isLoading, setIsLoading] = useState(false);
   const { Title, Text } = Typography;
   
 
@@ -178,33 +179,21 @@ const Optimize = () => {
 
   const handleCardClick = async (card) => {
     setSelectedCard(card);
+    setIsLoading(true);
     try {
       const response = await axios.get(`${process.env.REACT_APP_API_URL}/fetch_card?name=${card.name}`);
       
-      // Format MTGStocks data
-      const mtgStocksData = response.data.mtgstocks;
-      const formattedMTGStocksData = {
-        name: mtgStocksData.name,
-        set: mtgStocksData.set,
-        link: mtgStocksData.link,
-        prices: {
-          market: mtgStocksData.prices.market || 'N/A',
-          low: mtgStocksData.prices.low || 'N/A',
-          median: mtgStocksData.prices.median || 'N/A',
-          high: mtgStocksData.prices.high || 'N/A',
-          foil: mtgStocksData.prices.foil || 'N/A',
-          avg: mtgStocksData.prices.avg || 'N/A',
-        }
-      };
-
-      setCardData({
-        ...response.data,
-        mtgstocks: formattedMTGStocksData
-      });
+      if (response.data.error) {
+        throw new Error(response.data.error);
+      }
+      
+      setCardData(response.data);
       setIsModalVisible(true);
     } catch (error) {
       console.error('Error fetching card data:', error);
-      message.error('Failed to fetch card data');
+      message.error(`Failed to fetch card data: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -284,19 +273,28 @@ return (
           </Button>
         ]}
       >
-        {cardData && (
+        {isLoading ? (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Spin size="large" />
+            <p>Loading card data...</p>
+          </div>
+        ) : cardData ? (
           <div>
             <ScryfallCard data={cardData.scryfall} />
             <MTGStocksCard data={cardData.mtgstocks} />
-            {cardData.previous_scan && (
-              <Card title="Previous Scan Data" className={`ant-card ${theme}`}>
-                <pre>{JSON.stringify(cardData.previous_scan, null, 2)}</pre>
+            {cardData.cardconduit && (
+              <Card title="CardConduit Data" className={`ant-card ${theme}`}>
+                <pre>{JSON.stringify(cardData.cardconduit, null, 2)}</pre>
+              </Card>
+            )}
+            {cardData.purchase_data && (
+              <Card title="Purchase Data" className={`ant-card ${theme}`}>
+                <pre>{JSON.stringify(cardData.purchase_data, null, 2)}</pre>
               </Card>
             )}
           </div>
-        )}
+        ) : null}
       </Modal>
-      // In the return statement, add:
       <Select
         value={optimizationStrategy}
         onChange={setOptimizationStrategy}
