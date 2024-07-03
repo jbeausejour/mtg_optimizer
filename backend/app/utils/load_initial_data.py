@@ -1,6 +1,6 @@
 import os
 import csv
-from backend.app import create_app, db
+from app import create_app, db
 from app.models.site import Site
 from app.models.card import Card_list
 

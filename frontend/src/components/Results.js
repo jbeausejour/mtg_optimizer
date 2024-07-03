@@ -20,23 +20,29 @@ const Results = () => {
   const columns = [
     {
       title: 'Card Name',
-      dataIndex: 'card_name',
+      dataIndex: ['Original_Card', 'Name'],
       key: 'card_name',
     },
     {
       title: 'Quantity',
-      dataIndex: 'quantity',
+      dataIndex: 'Quantity',
       key: 'quantity',
     },
     {
       title: 'Price',
-      dataIndex: 'price',
+      dataIndex: 'Price',
       key: 'price',
       render: (price) => `$${price.toFixed(2)}`,
     },
     {
+      title: 'Total Price',
+      dataIndex: 'Total Price',
+      key: 'total_price',
+      render: (price) => `$${price.toFixed(2)}`,
+    },
+    {
       title: 'Site',
-      dataIndex: 'site',
+      dataIndex: 'Store',
       key: 'site',
     },
   ];
@@ -47,7 +53,7 @@ const Results = () => {
     <div className={`results section ${theme}`}>
       <h1>Optimization Results</h1>
       <Card title={`Scan Date: ${new Date(scan.date).toLocaleString()}`}>
-        <Table dataSource={scan.results} columns={columns} />
+        <Table dataSource={scan.sorted_results_df} columns={columns} />
       </Card>
     </div>
   );

@@ -1,4 +1,4 @@
-from backend.app import db
+from app import db
 from datetime import datetime, timezone
 
 class Scan(db.Model):
@@ -17,19 +17,11 @@ class ScanResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     scan_id = db.Column(db.Integer, db.ForeignKey('scan.id'), nullable=False)
     card_id = db.Column(db.Integer, db.ForeignKey('card.id'), nullable=False)
-    site = db.Column(db.String(100), nullable=False)
+    site_id = db.Column(db.Integer, db.ForeignKey('site.id'), nullable=False)
     price = db.Column(db.Float, nullable=False)
 
-    card = db.relationship('Card', backref='scan_results')
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'card_name': self.card.name,
-            'quantity': self.card.quantity,
-            'site': self.site,
-            'price': self.price
-        }
+    def __repr__(self):
+        return f'<ScanResult {self.id}>'
 
 class OptimizationResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)

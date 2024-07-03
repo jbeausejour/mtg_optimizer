@@ -1,6 +1,6 @@
 #from optimization import run_optimization
 from app.models.scan import Scan, ScanResult
-from backend.app import create_app, db
+from app import create_app, db
 
 #@celery.shared_task(bind=True)
 def optimize_cards(card_list, sites):

@@ -85,6 +85,10 @@ const Optimize = () => {
   const [taskId, setTaskId] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
   const { theme } = useContext(ThemeContext);
+  const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
+  const [minStore, setMinStore] = useState(2);
+  const [findMinStore, setFindMinStore] = useState(false);
+  
 
   useEffect(() => {
     fetchCards();
@@ -128,7 +132,12 @@ const Optimize = () => {
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/optimize`, { sites: sitesToOptimize });
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/optimize`, {
+        sites: sitesToOptimize,
+        strategy: 'milp', // or 'nsga_ii' or 'hybrid'
+        min_store: 2, // Add a state variable for this
+        find_min_store: false // Add a state variable for this
+      });
       setTaskId(response.data.task_id);
       message.success('Optimization task started!');
     } catch (error) {
@@ -209,6 +218,7 @@ const Optimize = () => {
     }));
   };
 
+
 return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -285,6 +295,27 @@ return (
           </div>
         )}
       </Modal>
+      // In the return statement, add:
+      <Select
+        value={optimizationStrategy}
+        onChange={setOptimizationStrategy}
+        style={{ width: 120 }}
+      >
+        <Option value="milp">MILP</Option>
+        <Option value="nsga_ii">NSGA-II</Option>
+        <Option value="hybrid">Hybrid</Option>
+      </Select>
+      <InputNumber
+        min={1}
+        value={minStore}
+        onChange={setMinStore}
+        style={{ marginLeft: 16 }}
+      />
+      <Switch
+        checked={findMinStore}
+        onChange={setFindMinStore}
+        style={{ marginLeft: 16 }}
+      />
     </div>
   );
 };
