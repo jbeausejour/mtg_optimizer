@@ -301,17 +301,9 @@ const Optimize = () => {
           </div>
         ) : cardData ? (
           <div>
-            <ScryfallCard data={cardData.scryfall} />
-            {cardData.cardconduit && (
-              <Card title="CardConduit Data" className={`ant-card ${theme}`}>
-                <pre>{JSON.stringify(cardData.cardconduit, null, 2)}</pre>
-              </Card>
-            )}
-            {cardData.purchase_data && (
-              <Card title="Purchase Data" className={`ant-card ${theme}`}>
-                <pre>{JSON.stringify(cardData.purchase_data, null, 2)}</pre>
-              </Card>
-            )}
+            {cardData.scryfall && <ScryfallCard data={cardData.scryfall} />}
+            {cardData.cardconduit && <CardConduitData data={cardData.cardconduit.data} />}
+            {cardData.purchase_data && <PurchaseData data={cardData.purchase_data} />}
           </div>
         ) : null}
       </Modal>

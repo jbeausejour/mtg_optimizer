@@ -192,10 +192,10 @@ class CardService:
                 price_element = WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".inventory__price-with-shipping"))
                 )
-            elif "cardmarket.com" in url:
-                price_element = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".col-6 .font-weight-bold"))
-                )
+            ##elif "cardmarket.com" in url:
+            ##    price_element = WebDriverWait(driver, 10).until(
+            ##        EC.presence_of_element_located((By.CSS_SELECTOR, ".col-6 .font-weight-bold"))
+            ##    )
             elif "cardkingdom.com" in url:
                 price_element = WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".stylePrice"))
