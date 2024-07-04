@@ -60,7 +60,8 @@ class CardService:
 
     @staticmethod
     def get_card_versions(card_name):
-        response = requests.get(SCRYFALL_SEARCH_API_URL, params={'q': f'!"{card_name}"'})
+        driver = SeleniumDriver.get_driver()
+        response = driver.get(SCRYFALL_SEARCH_API_URL, params={'q': f'!"{card_name}"'})
         response.raise_for_status()
         
         data = response.json()
