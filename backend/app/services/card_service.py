@@ -1,4 +1,5 @@
 import requests
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
@@ -16,6 +17,9 @@ from datetime import datetime, timedelta, timezone
 import time
 import random
 import json
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 SCRYFALL_API_URL = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH_API_URL = "https://api.scryfall.com/cards/search"
@@ -172,12 +176,13 @@ class CardService:
     def fetch_purchase_data(purchase_uris):
         purchase_data = {}
         for site, url in purchase_uris.items():
-            purchase_data[site] = CardService.scrape_price(url)
+            if site != 'cardmarket':  # Temporarily disable CardMarket
+                purchase_data[site] = CardService.scrape_price(url)
         return purchase_data
-
+    
     @staticmethod
-    def scrape_price(url):
-        driver = SeleniumDriver.get_driver()
+    def scrape_price(url, max_retries=3, use_headless=True):  # Reduced retries and added headless option
+        driver = SeleniumDriver.get_driver(use_headless)
         
         try:
             driver.get(url)
@@ -187,13 +192,13 @@ class CardService:
                 price_element = WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".inventory__price-with-shipping"))
                 )
-            elif "cardmarket.com" in url:
-                price_element = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".col-6 .font-weight-bold"))
-                )
             elif "cardkingdom.com" in url:
                 price_element = WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".stylePrice"))
+                )
+            elif "cardhoarder.com" in url:  # Added support for CardHoarder
+                price_element = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".price"))
                 )
             else:
                 raise ValueError(f"Unsupported site: {url}")
@@ -202,10 +207,19 @@ class CardService:
         
         except Exception as e:
             print(f"An error occurred while scraping price from {url}: {e}")
+            if max_retries > 0:
+                time.sleep(random.uniform(1, 3))
+                return CardService.scrape_price(url, max_retries - 1, use_headless)
             return None
         
         finally:
             driver.quit()
+
+    @staticmethod
+    def rotate_proxy():
+        # Placeholder for proxy rotation implementation
+        # This method should return a new proxy configuration
+        pass
 
     @staticmethod
     def store_card_data(data):

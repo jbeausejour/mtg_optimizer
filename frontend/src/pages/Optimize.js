@@ -6,6 +6,9 @@ import CardListInput from '../components/CardListInput';
 import '../global.css';
 import { Select, InputNumber } from 'antd';
 
+const { Title, Text } = Typography;
+const { Option } = Select;
+
 const ScryfallCard = ({ data }) => (
   <Card title="Scryfall Data" className="ant-card">
     <Descriptions column={2}>
@@ -16,63 +19,81 @@ const ScryfallCard = ({ data }) => (
       <Descriptions.Item label="Rarity">{data.rarity}</Descriptions.Item>
       <Descriptions.Item label="Artist">{data.artist}</Descriptions.Item>
     </Descriptions>
-    <Title level={4}>Oracle Text</Title>
-    <Text>{data.oracle_text}</Text>
+    {data.oracle_text && (
+      <>
+        <Title level={4}>Oracle Text</Title>
+        <Text>{data.oracle_text}</Text>
+      </>
+    )}
     {data.power && data.toughness && (
       <Title level={4}>Power/Toughness: {data.power}/{data.toughness}</Title>
     )}
-    <Title level={4}>Legalities</Title>
-    <div>
-      {Object.entries(data.legalities).map(([format, legality]) => (
-        <Tag color={legality === 'legal' ? 'green' : 'red'} key={format}>
-          {format}: {legality}
-        </Tag>
-      ))}
-    </div>
-    <Title level={4}>Prices</Title>
-    <Descriptions column={2}>
-      {Object.entries(data.prices).map(([currency, price]) => (
-        price && <Descriptions.Item label={currency.toUpperCase()} key={currency}>{price}</Descriptions.Item>
-      ))}
-    </Descriptions>
-    {data.image_uris && (
+    {data.legalities && (
+      <>
+        <Title level={4}>Legalities</Title>
+        <div>
+          {Object.entries(data.legalities).map(([format, legality]) => (
+            <Tag color={legality === 'legal' ? 'green' : 'red'} key={format}>
+              {format}: {legality}
+            </Tag>
+          ))}
+        </div>
+      </>
+    )}
+    {data.prices && (
+      <>
+        <Title level={4}>Prices</Title>
+        <Descriptions column={2}>
+          {Object.entries(data.prices).map(([currency, price]) => (
+            price && <Descriptions.Item label={currency.toUpperCase()} key={currency}>{price}</Descriptions.Item>
+          ))}
+        </Descriptions>
+      </>
+    )}
+    {data.image_uris && data.image_uris.normal && (
       <Image src={data.image_uris.normal} alt={data.name} width={200} />
     )}
   </Card>
 );
 
-const MTGStocksCard = ({ data }) => {
-  const columns = [
-    {
-      title: 'Type',
-      dataIndex: 'type',
-      key: 'type',
-    },
-    {
-      title: 'Price',
-      dataIndex: 'price',
-      key: 'price',
-    },
-  ];
+const CardConduitData = ({ data }) => (
+  <Card title="CardConduit Data" className="ant-card">
+    {data.map((item, index) => (
+      <Card key={index} type="inner" title={`${item.card.name} - ${item.card.set.name}`} style={{ marginBottom: '10px' }}>
+        <Descriptions column={2}>
+          <Descriptions.Item label="Condition">{item.condition}</Descriptions.Item>
+          <Descriptions.Item label="Foil">{item.is_foil ? 'Yes' : 'No'}</Descriptions.Item>
+          <Descriptions.Item label="Amount">${item.amount}</Descriptions.Item>
+          <Descriptions.Item label="TCG Low">${item.amount_tcg_low}</Descriptions.Item>
+        </Descriptions>
+        <Title level={5}>Services</Title>
+        <Table 
+          dataSource={Object.entries(item.services).map(([key, value]) => ({ key, ...value }))}
+          columns={[
+            { title: 'Service', dataIndex: 'key', key: 'service' },
+            { title: 'Fee', dataIndex: 'fee', key: 'fee', render: (fee) => `$${fee}` },
+            { title: 'Net', dataIndex: 'net', key: 'net', render: (net) => `$${net}` },
+            { title: 'Eligible', dataIndex: 'is_eligible', key: 'eligible', render: (eligible) => eligible ? 'Yes' : 'No' },
+          ]}
+          pagination={false}
+        />
+      </Card>
+    ))}
+  </Card>
+);
 
-  const priceData = Object.entries(data.prices).map(([type, price]) => ({
-    key: type,
-    type,
-    price: `$${price}`,
-  }));
-
-  return (
-    <Card title="MTGStocks Data" className="ant-card">
-      <Descriptions column={1}>
-        <Descriptions.Item label="Name">{data.name}</Descriptions.Item>
-        <Descriptions.Item label="Set">{data.set}</Descriptions.Item>
-      </Descriptions>
-      <Title level={4}>Prices</Title>
-      <Table columns={columns} dataSource={priceData} pagination={false} />
-      <a href={data.link} target="_blank" rel="noopener noreferrer">View on MTGStocks</a>
-    </Card>
-  );
-};
+const PurchaseData = ({ data }) => (
+  <Card title="Purchase Data" className="ant-card">
+    <Table 
+      dataSource={Object.entries(data).map(([site, price]) => ({ site, price }))}
+      columns={[
+        { title: 'Site', dataIndex: 'site', key: 'site' },
+        { title: 'Price', dataIndex: 'price', key: 'price', render: (price) => `$${price}` },
+      ]}
+      pagination={false}
+    />
+  </Card>
+);
 
 const Optimize = () => {
   const [cards, setCards] = useState([]);
@@ -89,7 +110,6 @@ const Optimize = () => {
   const [findMinStore, setFindMinStore] = useState(false);
   const { Option } = Select;
   const [isLoading, setIsLoading] = useState(false);
-  const { Title, Text } = Typography;
   
 
   useEffect(() => {
@@ -187,6 +207,7 @@ const Optimize = () => {
         throw new Error(response.data.error);
       }
       
+      console.log('Card data:', response.data);  // For debugging
       setCardData(response.data);
       setIsModalVisible(true);
     } catch (error) {
@@ -209,7 +230,7 @@ const Optimize = () => {
   };
 
 
-return (
+  return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
       <CardListInput onSubmit={handleCardListSubmit} />
@@ -280,18 +301,9 @@ return (
           </div>
         ) : cardData ? (
           <div>
-            <ScryfallCard data={cardData.scryfall} />
-            <MTGStocksCard data={cardData.mtgstocks} />
-            {cardData.cardconduit && (
-              <Card title="CardConduit Data" className={`ant-card ${theme}`}>
-                <pre>{JSON.stringify(cardData.cardconduit, null, 2)}</pre>
-              </Card>
-            )}
-            {cardData.purchase_data && (
-              <Card title="Purchase Data" className={`ant-card ${theme}`}>
-                <pre>{JSON.stringify(cardData.purchase_data, null, 2)}</pre>
-              </Card>
-            )}
+            {cardData.scryfall && <ScryfallCard data={cardData.scryfall} />}
+            {cardData.cardconduit && <CardConduitData data={cardData.cardconduit.data} />}
+            {cardData.purchase_data && <PurchaseData data={cardData.purchase_data} />}
           </div>
         ) : null}
       </Modal>
