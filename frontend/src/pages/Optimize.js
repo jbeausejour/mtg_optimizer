@@ -22,7 +22,7 @@ const ManaSymbol = ({ symbol }) => {
 };
 
 const SetSymbol = ({ setCode, rarity }) => {
-  const symbolUrl = `https://svgs.scryfall.io/sets/${setCode.toLowerCase()}.svg`;
+  const symbolUrl = `https://svgs.scryfall.io/sets/${setCode}.svg`;
   const rarityColor = {
     common: 'black',
     uncommon: 'silver',
@@ -39,7 +39,7 @@ const SetSymbol = ({ setCode, rarity }) => {
         height: '16px', 
         marginRight: '4px', 
         verticalAlign: 'text-bottom',
-        filter: `brightness(0) saturate(100%) ${rarityColor[rarity.toLowerCase()]}`
+        filter: `brightness(0) saturate(100%) ${rarityColor[rarity]}`
       }} 
     />
   );
@@ -59,7 +59,7 @@ const LegalityTag = ({ format, legality }) => {
   );
 };
 
-const ScryfallCard = ({ data, onVersionChange }) => {
+const ScryfallCard = ({ data }) => {
   if (!data) return <div>No card data available</div>;
 
   const formatOracleText = (text) => {
@@ -87,7 +87,7 @@ const ScryfallCard = ({ data, onVersionChange }) => {
             <Text><strong>Types:</strong> {data.type_line}</Text>
             <Text><strong>Rarity:</strong> {data.rarity}</Text>
             <Text>
-              <strong>Expansion:</strong> <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name}
+              <strong>Expansion:</strong> <SetSymbol setCode={data.set.toLowerCase()} rarity={data.rarity.toLowerCase()} /> {data.set_name}
             </Text>
             <Text><strong>Card Number:</strong> {data.collector_number}</Text>
             <Text><strong>Artist:</strong> {data.artist}</Text>
@@ -102,7 +102,7 @@ const ScryfallCard = ({ data, onVersionChange }) => {
                   <SetSymbol setCode={item.set} rarity={item.rarity} />
                   {item.set_name} ({item.set}) - ${item.prices?.usd || 'N/A'}
                 </a>
-                <Switch onChange={() => onVersionChange(item)} />
+                {/* <Switch onChange={() => onVersionChange(item)} /> */}
               </List.Item>
             )}
           />
@@ -113,7 +113,7 @@ const ScryfallCard = ({ data, onVersionChange }) => {
             </a>
             <a href={`https://edhrec.com/cards/${data.name.toLowerCase().replace(/\s+/g, '-')}`} target="_blank" rel="noopener noreferrer">
               <LinkOutlined /> Card analysis on EDHREC
-            </a>
+            </a> 
           </Space>
         </Col>
         <Col span={16}>
