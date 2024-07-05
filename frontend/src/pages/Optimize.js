@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
-import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Descriptions, Image, Tag, Typography, Table, Spin, Divider, Space  } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Descriptions, Image, Tag, Typography, Table, Spin, Divider, Space } from 'antd';
 import ThemeContext from '../utils/ThemeContext';
 import CardListInput from '../components/CardListInput';
 import { LinkOutlined } from '@ant-design/icons';
@@ -16,6 +16,14 @@ const formatCardName = (name) => {
   return formatted;
 };
 
+const formatSetCode = (setCode) => {
+  let formattedSetCode = setCode;
+  if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
+    formattedSetCode = formattedSetCode.slice(1);
+  }
+  return formattedSetCode.toLowerCase();
+};
+
 const formatOracleText = (text) => {
   if (!text) return null; // Return null or an appropriate fallback if text is undefined or empty
   return text.split('\n').map((paragraph, index) => (
@@ -26,7 +34,6 @@ const formatOracleText = (text) => {
     </Paragraph>
   ));
 };
-
 
 const ManaSymbol = ({ symbol }) => {
   const cleanSymbol = symbol.replace(/[{/}]/g, '');
@@ -42,13 +49,7 @@ const ManaSymbol = ({ symbol }) => {
 };
 
 const SetSymbol = ({ setCode, rarity }) => {
-  let formattedSetCode = setCode;
-
-  // Remove the first letter if it is 'p' or 't' and the set code is longer than 3 characters
-  if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
-    formattedSetCode = formattedSetCode.slice(1);
-  }
-
+  const formattedSetCode = formatSetCode(setCode);
   const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
   const rarityColor = {
     common: 'black',
@@ -163,7 +164,6 @@ const ScryfallCard = ({ data }) => {
   );
 };
 
-
 const Optimize = () => {
   const [cards, setCards] = useState([]);
   const [sites, setSites] = useState([]);
@@ -179,7 +179,6 @@ const Optimize = () => {
   const [findMinStore, setFindMinStore] = useState(false);
   const { Option } = Select;
   const [isLoading, setIsLoading] = useState(false);
-  
 
   useEffect(() => {
     fetchCards();
@@ -265,7 +264,6 @@ const Optimize = () => {
     }
   };
 
-
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     setIsLoading(true);
@@ -298,7 +296,6 @@ const Optimize = () => {
     }));
   };
 
-
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -328,8 +325,8 @@ const Optimize = () => {
           <Switch
             checked={findMinStore}
             onChange={setFindMinStore}
-            checkeditems="Find Min Store"
-            unCheckeditems="Don't Find Min Store"
+            checkedChildren="Find Min Store"
+            unCheckedChildren="Don't Find Min Store"
           />
         </Col>
       </Row>
@@ -400,7 +397,7 @@ const Optimize = () => {
           </div>
         ) : cardData ? (
           <div>
-            <ScryfallCard data={cardData.scryfall}/>
+            <ScryfallCard data={cardData.scryfall} />
           </div>
         ) : null}
       </Modal>
