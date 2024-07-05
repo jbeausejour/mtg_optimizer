@@ -47,6 +47,11 @@ def create_app():
             #logger.debug("Sending from template_folder")
             print("Sending from template_folder", flush=True)
             return render_template('index.html')
+        
+        # Route for serving favicon
+        @app.route('/favicon.ico')
+        def favicon():
+            return send_from_directory(app.static_folder, 'favicon.jpg')
 
         @app.route('/static/<path:path>')
         def send_static(path):

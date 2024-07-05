@@ -8,6 +8,26 @@ import '../global.css';
 
 const { Title, Text, Paragraph } = Typography;
 
+const formatCardName = (name) => {
+  if (!name) return '';
+  const part = name.split(' // ')[0]; // Take the first part if split by ' // '
+  const noApostrophes = part.replace(/'/g, ''); // Remove apostrophes
+  const formatted = noApostrophes.replace(/\s+/g, '-').toLowerCase(); // Replace spaces with hyphens and convert to lowercase
+  return formatted;
+};
+
+const formatOracleText = (text) => {
+  if (!text) return null; // Return null or an appropriate fallback if text is undefined or empty
+  return text.split('\n').map((paragraph, index) => (
+    <Paragraph key={index}>
+      {paragraph.split(/(\{[^}]+\})/).map((part, i) => (
+        part.startsWith('{') ? <ManaSymbol key={i} symbol={part} /> : part
+      ))}
+    </Paragraph>
+  ));
+};
+
+
 const ManaSymbol = ({ symbol }) => {
   const cleanSymbol = symbol.replace(/[{/}]/g, '');
   const symbolUrl = `https://svgs.scryfall.io/card-symbols/${cleanSymbol}.svg`;
@@ -62,16 +82,6 @@ const LegalityTag = ({ format, legality }) => {
 const ScryfallCard = ({ data }) => {
   if (!data) return <div>No card data available</div>;
 
-  const formatOracleText = (text) => {
-    return text.split('\n').map((paragraph, index) => (
-      <Paragraph key={index}>
-        {paragraph.split(/(\{[^}]+\})/).map((part, i) => (
-          part.startsWith('{') ? <ManaSymbol key={i} symbol={part} /> : part
-        ))}
-      </Paragraph>
-    ));
-  };
-
   return (
     <Card className="scryfall-card">
       <Row gutter={16}>
@@ -111,7 +121,7 @@ const ScryfallCard = ({ data }) => {
             <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
               <LinkOutlined /> View on Gatherer
             </a>
-            <a href={`https://edhrec.com/cards/${data.name.toLowerCase().replace(/\s+/g, '-')}`} target="_blank" rel="noopener noreferrer">
+            <a href={`https://edhrec.com/cards/${formatCardName(data.name)}`} target="_blank" rel="noopener noreferrer">
               <LinkOutlined /> Card analysis on EDHREC
             </a> 
           </Space>
@@ -349,8 +359,8 @@ const Optimize = () => {
           <Switch
             checked={findMinStore}
             onChange={setFindMinStore}
-            checkedChildren="Find Min Store"
-            unCheckedChildren="Don't Find Min Store"
+            checkeditems="Find Min Store"
+            unCheckeditems="Don't Find Min Store"
           />
         </Col>
       </Row>

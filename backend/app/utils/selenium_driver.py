@@ -1,10 +1,16 @@
+import os
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium_stealth import stealth
 
-CHROME_DRIVER_PATH = r"C:/Users/jules/Downloads/chromedriver-win64/chromedriver.exe"
-#CHROME_DRIVER_PATH = r"C:/Users/beauju/Downloads/chromedriver-win64/chromedriver.exe"
+homedir = os.path.expanduser("~")
+CHROME_DRIVER_PATH = f"{homedir}/Downloads/chromedriver-win64/chromedriver.exe"
+
+logging.getLogger('selenium').setLevel(logging.WARNING)
+
+
 
 class SeleniumDriver:
     @staticmethod
@@ -15,6 +21,7 @@ class SeleniumDriver:
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument('--log-level=3') #SUPPRESS some error coming from chrome
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
 
