@@ -85,3 +85,9 @@ def update_card_data():
             "status": "error",
             "message": f"An error occurred: {str(e)}"
         }), 500
+
+
+@views.route('/sets', methods=['GET'])
+def get_sets():
+    sets_data = CardService.get_all_sets()
+    return jsonify(sets_data)

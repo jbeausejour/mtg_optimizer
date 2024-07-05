@@ -6,6 +6,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from app.utils.selenium_driver import SeleniumDriver
 from app.models.card_data import CardData
 from app.models.card import Card, Card_list
+from app.models.sets import Sets
 from app import db
 from app.utils.data_fetcher import DataFetcher
 from app.utils.optimization import OptimizationEngine
@@ -132,6 +133,51 @@ class CardService:
         ]
         return data
     
+    @staticmethod
+    def get_all_sets():
+        try:
+            # Check if we need to update the sets
+            oldest_allowed_update = datetime.now() - timedelta(days=7)  # Update weekly
+            outdated_sets = Sets.query.filter(Sets.last_updated < oldest_allowed_update).first()
+            
+            if outdated_sets or Sets.query.count() == 0:
+                # Fetch and update sets from Scryfall
+                CardService.fetch_sets_from_scryfall()     
+                
+            # Fetch sets from the database
+            sets = Sets.query.order_by(Sets.released_at.desc()).all()
+            return sets
+
+        except Exception as e:
+            logger.error(f"Error fetching sets: {str(e)}")
+            return None
+
+    @staticmethod
+    def fetch_sets_from_scryfall():
+
+        response = requests.get('https://api.scryfall.com/sets')
+        response.raise_for_status()
+        sets_data = response.json()['data']
+        for set_info in sets_data:
+            if set_info['set_type'] in ['core', 'expansion', 'masters', 'draft_innovation', 'commander']:
+                magic_set = Sets.query.filter_by(set_code=set_info['code']).first()
+                if not magic_set:
+                    magic_set = Sets(
+                        set_code=set_info['code'],
+                        set_name=set_info['name'],
+                        set_type=set_info['set_type'],
+                        released_at=datetime.strptime(set_info['released_at'], '%Y-%m-%d').date() if set_info['released_at'] else None
+                    )
+                    db.session.add(magic_set)
+                else:
+                    magic_set.set_name = set_info['name']
+                    magic_set.set_type = set_info['set_type']
+                    magic_set.released_at = datetime.strptime(set_info['released_at'], '%Y-%m-%d').date() if set_info['released_at'] else None
+                magic_set.last_updated = datetime.utcnow()
+        db.session.commit()
+        return sets_data
+        
+
     @staticmethod
     def fetch_all_printings(prints_search_uri):
         response = requests.get(prints_search_uri)
