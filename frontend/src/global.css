@@ -118,6 +118,21 @@ body {
   color: var(--color-text) !important;
   cursor: pointer;
 }
+/* Ensure headings have the correct theme color */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-text);
+}
+.ant-list-item-meta-content {
+  color: var(--color-text);
+}
+
+.ant-list-item-meta-title {
+  color: var(--color-text) !important;
+}
+
+.ant-list-item-meta-description {
+  color: var(--color-text-alt) !important;
+}
 
 /* Card Styles */
 .ant-card {
@@ -133,7 +148,7 @@ body {
 /* Input Styles */
 .ant-input {
   background-color: var(--color-bg);
-  color: var(--color-text);
+  color: var (--color-text);
   border-color: var(--color-border);
 }
 
@@ -202,6 +217,6 @@ pre {
 /* Section Styles */
 .section {
   padding: 20px;
-  background-color: var(--color-bg);
-  color: var(--color-text);
+  background-color: var (--color-bg);
+  color: var (--color-text);
 }

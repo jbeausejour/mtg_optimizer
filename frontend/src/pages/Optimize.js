@@ -42,17 +42,25 @@ const ManaSymbol = ({ symbol }) => {
 };
 
 const SetSymbol = ({ setCode, rarity }) => {
-  const symbolUrl = `https://svgs.scryfall.io/sets/${setCode}.svg`;
+  let formattedSetCode = setCode;
+
+  // Remove the first letter if it is 'p' or 't' and the set code is longer than 3 characters
+  if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
+    formattedSetCode = formattedSetCode.slice(1);
+  }
+
+  const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
   const rarityColor = {
     common: 'black',
     uncommon: 'silver',
     rare: 'gold',
     mythic: '#D37E2A'
   };
+
   return (
     <img 
       src={symbolUrl} 
-      alt={setCode} 
+      alt={formattedSetCode} 
       className="set-symbol" 
       style={{
         width: '16px', 
@@ -97,7 +105,7 @@ const ScryfallCard = ({ data }) => {
             <Text><strong>Types:</strong> {data.type_line}</Text>
             <Text><strong>Rarity:</strong> {data.rarity}</Text>
             <Text>
-              <strong>Expansion:</strong> <SetSymbol setCode={data.set.toLowerCase()} rarity={data.rarity.toLowerCase()} /> {data.set_name}
+              <strong>Expansion:</strong> <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name}
             </Text>
             <Text><strong>Card Number:</strong> {data.collector_number}</Text>
             <Text><strong>Artist:</strong> {data.artist}</Text>
@@ -110,7 +118,7 @@ const ScryfallCard = ({ data }) => {
               <List.Item>
                 <a href={item.scryfall_uri} target="_blank" rel="noopener noreferrer">
                   <SetSymbol setCode={item.set} rarity={item.rarity} />
-                  {item.set_name} ({item.set}) - ${item.prices?.usd || 'N/A'}
+                  {item.set_name} ({formatSetCode(item.set)}) - ${item.prices?.usd || 'N/A'}
                 </a>
                 {/* <Switch onChange={() => onVersionChange(item)} /> */}
               </List.Item>
@@ -155,45 +163,6 @@ const ScryfallCard = ({ data }) => {
   );
 };
 
-
-// const CardConduitData = ({ data }) => (
-//   <Card title="CardConduit Data" className="ant-card">
-//     {data.map((item, index) => (
-//       <Card key={index} type="inner" title={`${item.card.name} - ${item.card.set.name}`} style={{ marginBottom: '10px' }}>
-//         <Descriptions column={2}>
-//           <Descriptions.Item label="Condition">{item.condition}</Descriptions.Item>
-//           <Descriptions.Item label="Foil">{item.is_foil ? 'Yes' : 'No'}</Descriptions.Item>
-//           <Descriptions.Item label="Amount">${item.amount}</Descriptions.Item>
-//           <Descriptions.Item label="TCG Low">${item.amount_tcg_low}</Descriptions.Item>
-//         </Descriptions>
-//         <Title level={5}>Services</Title>
-//         <Table 
-//           dataSource={Object.entries(item.services).map(([key, value]) => ({ key, ...value }))}
-//           columns={[
-//             { title: 'Service', dataIndex: 'key', key: 'service' },
-//             { title: 'Fee', dataIndex: 'fee', key: 'fee', render: (fee) => `$${fee}` },
-//             { title: 'Net', dataIndex: 'net', key: 'net', render: (net) => `$${net}` },
-//             { title: 'Eligible', dataIndex: 'is_eligible', key: 'eligible', render: (eligible) => eligible ? 'Yes' : 'No' },
-//           ]}
-//           pagination={false}
-//         />
-//       </Card>
-//     ))}
-//   </Card>
-// );
-
-// const PurchaseData = ({ data }) => (
-//   <Card title="Purchase Data" className="ant-card">
-//     <Table 
-//       dataSource={Object.entries(data).map(([site, price]) => ({ site, price }))}
-//       columns={[
-//         { title: 'Site', dataIndex: 'site', key: 'site' },
-//         { title: 'Price', dataIndex: 'price', key: 'price' },
-//       ]}
-//       pagination={false}
-//     />
-//   </Card>
-// );
 
 const Optimize = () => {
   const [cards, setCards] = useState([]);

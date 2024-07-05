@@ -51,7 +51,7 @@ def create_app():
         # Route for serving favicon
         @app.route('/favicon.ico')
         def favicon():
-            return send_from_directory(app.static_folder, 'favicon.jpg')
+            return send_from_directory(app.static_folder, 'favicon.ico')
 
         @app.route('/static/<path:path>')
         def send_static(path):
