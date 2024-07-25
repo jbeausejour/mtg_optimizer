@@ -5,16 +5,26 @@ class Sets(db.Model):
     __tablename__ = 'sets'
 
     id = db.Column(db.Integer, primary_key=True)
-    set_code = db.Column(db.String(10), unique=True, nullable=False)
     set_name = db.Column(db.String(255), nullable=False)
+    set_code = db.Column(db.String(10), unique=True, nullable=False)
+    set_symbol = db.Column(db.String(50))
     set_type = db.Column(db.String(50), nullable=False)
-    released_at = db.Column(db.Date)
-    last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc()))
+    release_date = db.Column(db.Date)
+    card_count = db.Column(db.Integer)
+    is_digital = db.Column(db.Boolean, default=False)
+    last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    cards = db.relationship('Card', back_populates='sets')
+    
 
-    def to_dict(self):
+def to_dict(self):
         return {
-            'set_code': self.set_code,
+            'id': self.id,
             'set_name': self.set_name,
+            'set_code': self.set_code,
+            'set_symbol': self.set_symbol,
             'set_type': self.set_type,
-            'released_at': self.released_at.isoformat() if self.released_at else None
+            'release_date': self.release_date.isoformat() if self.release_date else None,
+            'card_count': self.card_count,
+            'is_digital': self.is_digital,
+            'last_updated': self.last_updated.isoformat()
         }

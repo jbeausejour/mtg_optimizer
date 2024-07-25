@@ -15,14 +15,16 @@ class Scan(db.Model):
  
 class ScanResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    scan_id = db.Column(db.Integer, db.ForeignKey('scan.id'), nullable=False)
-    card_id = db.Column(db.Integer, db.ForeignKey('card.id'), nullable=False)
-    site_id = db.Column(db.Integer, db.ForeignKey('site.id'), nullable=False)
+    scan_id = db.Column(db.Integer, db.ForeignKey('scan.id', name='fk_ScanResult_scan_id'), nullable=False)
+    card_id = db.Column(db.Integer, db.ForeignKey('card.id', name='fk_ScanResult_card_id'), nullable=False)
+    site_id = db.Column(db.Integer, db.ForeignKey('site.id', name='fk_ScanResult_site_id'), nullable=False)
     price = db.Column(db.Float, nullable=False)
+
+    site = db.relationship('Site', back_populates='scan_results')
 
     def __repr__(self):
         return f'<ScanResult {self.id}>'
-
+    
 class OptimizationResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     card_names = db.Column(db.JSON)

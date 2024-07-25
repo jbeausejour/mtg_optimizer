@@ -6,6 +6,13 @@ from flask_migrate import Migrate
 from dotenv import load_dotenv,find_dotenv
 import logging
 import os
+import sys
+
+
+# Set the project root directory
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+sys.path.append(project_root)
+
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -25,8 +32,8 @@ def create_app():
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
-    #app.config['CELERY_BROKER_URL'] = os.getenv('CELERY_BROKER_URL')
-    #app.config['CELERY_RESULT_BACKEND'] = os.getenv('CELERY_RESULT_BACKEND')
+    app.config['broker_url'] = os.getenv('CELERY_BROKER_URL')
+    app.config['result_backend'] = os.getenv('CELERY_RESULT_BACKEND')
 
     app.logger.setLevel(logging.DEBUG)
     # Initialize the database with the app
@@ -65,5 +72,8 @@ def create_app():
             else:
                 app.logger.debug(f"File does not exist: {full_path}")
             return send_from_directory(app.static_folder, path)
-
+        
+    # Print out the configuration for debugging
+    print("Celery Result Backend:", app.config.get('result_backend'))
+    print("Celery Broker URL:", app.config.get('broker_url'))
     return app

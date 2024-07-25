@@ -1,5 +1,6 @@
 # backend/app/utils/optimization.py
-
+from app.models.card import Card, Card_list
+from app import db
 import pulp
 import random
 import pandas as pd
@@ -14,15 +15,55 @@ creator.create("FitnessMulti", base.Fitness, weights=(-1.0, 1.0, 1.0, -1.0))
 creator.create("Individual", list, fitness=creator.FitnessMulti)
 
 class OptimizationEngine:
-    def __init__(self, card_details_df, buylist_df):
+    def __init__(self, card_details_df, buylist_df, config):
         self.card_details_df = card_details_df
         self.buylist_df = buylist_df
+        self.config = config
 
-    def run_milp_optimization(self, min_store, find_min_store):
-        return self._run_pulp(self.card_details_df, self.buylist_df, min_store, find_min_store)
+    def run_milp_optimization(self):
+        return self._run_pulp(self.card_details_df, self.buylist_df, 
+                              self.config['min_store'], self.config['find_min_store'])
 
     def run_nsga_ii_optimization(self, milp_solution=None):
         return self._run_nsga_ii(self.card_details_df, self.buylist_df, milp_solution)
+
+    def run_optimization(card_names, config):
+        # Fetch card details and buylist from the database
+        card_details_df = pd.read_sql(Card.query.statement, db.session.bind)
+        buylist_df = pd.read_sql(Card_list.query.statement, db.session.bind)
+
+        # Filter card_details_df to only include cards in the buylist
+        card_details_df = card_details_df[card_details_df['Name'].isin(card_names)]
+
+        optimization_engine = OptimizationEngine(card_details_df, buylist_df)
+
+        if config['milp_strat']:
+            results, iterations = optimization_engine.run_milp_optimization(
+                min_store=config['min_store'],
+                find_min_store=config['find_min_store']
+            )
+        elif config['nsga_algo_strat']:
+            results = optimization_engine.run_nsga_ii_optimization()
+        elif config['hybrid_strat']:
+            milp_solution, _ = optimization_engine.run_milp_optimization(
+                min_store=config['min_store'],
+                find_min_store=config['find_min_store']
+            )
+            results = optimization_engine.run_nsga_ii_optimization(milp_solution)
+        else:
+            raise ValueError("No valid optimization strategy specified in config")
+
+        # Process results
+        if isinstance(results, pd.DataFrame):
+            sites_results = results.to_dict('records')
+        else:
+            # Assuming results is a list of solutions for NSGA-II
+            sites_results = [optimization_engine.get_purchasing_plan(solution) for solution in results]
+
+        return {
+            'sites_results': sites_results,
+            'iterations': iterations if 'iterations' in locals() else None
+        }
 
     def get_purchasing_plan(self, solution):
         return self._extract_purchasing_plan(solution, self.card_details_df, self.buylist_df)

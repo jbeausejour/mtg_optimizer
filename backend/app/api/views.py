@@ -4,6 +4,7 @@ from app.services.card_service import CardService
 from app.services.site_service import SiteService
 from app.services.scan_service import ScanService
 from app.utils.data_fetcher import DataFetcher
+from app.utils.load_initial_data import load_all_data, truncate_tables
 import logging
 import asyncio
 
@@ -51,13 +52,41 @@ def fetch_card():
 @views.route('/optimize', methods=['POST'])
 def optimize():
     sites = request.json.get('sites', [])
-    card_list = CardService.get_all_cards()  # Assuming this function exists in your services
+    card_list = CardService.get_all_cards()
 
-    # Run the optimization synchronously
-    result = optimize_cards(card_list, sites)
+    try:
+        # Run the optimization as a Celery task
+        task = optimize_cards.delay(card_list, sites)
 
-    # Return the result immediately
-    return jsonify(result), 200
+        return jsonify({
+            'status': 'Optimization task started',
+            'task_id': task.id
+        }), 202  # 202 Accepted
+    except Exception as e:
+        logger.error(f"Error starting optimization task: {str(e)}")
+        return jsonify({'error': 'Failed to start optimization task'}), 500
+
+@views.route('/optimization_status/<task_id>', methods=['GET'])
+def optimization_status(task_id):
+    task = optimize_cards.AsyncResult(task_id)
+    if task.state == 'PENDING':
+        response = {
+            'state': task.state,
+            'status': 'Optimization task is pending...'
+        }
+    elif task.state != 'FAILURE':
+        response = {
+            'state': task.state,
+            'status': task.info.get('status', '')
+        }
+        if 'result' in task.info:
+            response['result'] = task.info['result']
+    else:
+        response = {
+            'state': task.state,
+            'status': str(task.info)
+        }
+    return jsonify(response)
 
 @views.route('/results/<int:scan_id>', methods=['GET'])
 def get_results(scan_id):
@@ -91,3 +120,19 @@ def update_card_data():
 def get_sets():
     sets_data = CardService.get_all_sets()
     return jsonify(sets_data)
+
+@views.route('/load-data', methods=['POST'])
+def load_data():
+    try:
+        logger.info("Starting data truncation")
+        truncate_tables()
+        logger.info("Data truncation completed")
+        
+        logger.info("Starting data loading")
+        load_all_data()
+        logger.info("Data loading completed successfully")
+        
+        return jsonify({"message": "Data loaded successfully"}), 200
+    except Exception as e:
+        logger.error(f"Error during data loading: {str(e)}")
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500

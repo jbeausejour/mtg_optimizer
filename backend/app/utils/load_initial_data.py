@@ -1,12 +1,33 @@
 import os
 import csv
 from app import create_app, db
+from sqlalchemy import text, inspect
 from app.models.site import Site
 from app.models.card import Card_list
+from app.models.sets import Sets
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+DATA_DIR = os.path.join(BASE_DIR, '..', '..', 'data')
+
 SITE_LIST_FILE = os.path.join(DATA_DIR, 'site_list.txt')
 CARD_LIST_FILE = os.path.join(DATA_DIR, 'card_list.txt')
+SQL_FILE = os.path.join(DATA_DIR, 'sql', 'magic_sets.sql')
+
+
+def truncate_tables():
+    # Delete all rows from each table
+    db.session.query(Site).delete()
+    db.session.query(Card_list).delete()
+    db.session.query(Sets).delete()
+    
+    # Check if sqlite_sequence table exists
+    inspector = inspect(db.engine)
+    if 'sqlite_sequence' in inspector.get_table_names():
+        # Reset the autoincrement counters
+        db.session.execute(text("DELETE FROM sqlite_sequence WHERE name IN ('site', 'card_list', 'sets')"))
+    
+    # Commit the changes
+    db.session.commit()
 
 def load_site_list():
     with open(SITE_LIST_FILE, 'r') as file:
@@ -14,7 +35,6 @@ def load_site_list():
         headers = next(csv_reader)
         print(f"Headers: {headers}")  # Debug print
         
-        # Create a dictionary to map column names to indices
         column_indices = {column.strip().lower(): index for index, column in enumerate(headers)}
         
         for row in csv_reader:
@@ -27,7 +47,7 @@ def load_site_list():
                 country=row[column_indices['country']].strip(),
                 type=row[column_indices['type']].strip()
             )
-            db.session.add(site)
+            db.session.merge(site)  # Use merge to add or update
     db.session.commit()
 
 def load_card_list():
@@ -49,19 +69,45 @@ def load_card_list():
             quality='NM',  # Default value, adjust as needed
             language='English'  # Default value
         )
-        db.session.add(card)
+        db.session.merge(card)  # Use merge to add or update
     
     db.session.commit()
+
+def load_sql_file():
+    with open(SQL_FILE, 'r') as file:
+        sql_commands = file.read()
+    
+    # Split the SQL commands
+    commands = sql_commands.split(';')
+    
+    with db.engine.connect() as connection:
+        for command in commands:
+            command = command.strip()
+            if command:
+                # Modify the CREATE TABLE command for SQLite
+                if command.upper().startswith('CREATE TABLE'):
+                    command = command.replace('INT AUTO_INCREMENT', 'INTEGER AUTOINCREMENT')
+                    command = command.replace('BOOLEAN', 'INTEGER')  # SQLite uses INTEGER for boolean
+                
+                try:
+                    connection.execute(text(command))
+                    connection.commit()
+                except Exception as e:
+                    print(f"Error executing command: {command}\n{e}")
+
+
+def load_all_data():
+    load_site_list()
+    load_card_list()
+    load_sql_file()
 
 if __name__ == '__main__':
     app = create_app()
     with app.app_context():
-        # Drop all existing tables and recreate them
-        db.drop_all()
-        db.create_all()
+        # Truncate specified tables
+        truncate_tables()
         
         # Load data
-        load_site_list()
-        load_card_list()
+        load_all_data()
         
         print("Data loaded successfully.")

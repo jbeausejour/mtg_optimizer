@@ -167,6 +167,7 @@ const ScryfallCard = ({ data }) => {
 const Optimize = () => {
   const [cards, setCards] = useState([]);
   const [sites, setSites] = useState([]);
+  const [cardList, setCardList] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [cardData, setCardData] = useState(null);
@@ -253,10 +254,11 @@ const Optimize = () => {
     }
   };
 
-  const handleCardListSubmit = async (cardList) => {
+  const handleCardListSubmit = async (newCardList) => {
     try {
-      await axios.post(`${process.env.REACT_APP_API_URL}/card_list`, { cardList });
+      await axios.post(`${process.env.REACT_APP_API_URL}/card_list`, { cardList: newCardList });
       message.success('Card list submitted successfully');
+      setCardList(newCardList);
       fetchCards();
     } catch (error) {
       message.error('Failed to submit card list');
@@ -299,7 +301,7 @@ const Optimize = () => {
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
-      <CardListInput onSubmit={handleCardListSubmit} />
+      <CardListInput onSubmit={handleCardListSubmit} cardList={cardList} />
       <Row gutter={16} style={{ marginBottom: '20px' }}>
         <Col span={8}>
           <Select

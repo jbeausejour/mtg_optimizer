@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react
 import { Layout, Menu } from 'antd';
 import { BulbOutlined } from '@ant-design/icons';
 import ThemeContext from './utils/ThemeContext';
+import ErrorBoundary from './utils/ErrorBoundary';
 import Dashboard from './pages/Dashboard';
 import SiteManagement from './pages/SiteManagement';
 import Optimize from './pages/Optimize';
@@ -19,7 +20,9 @@ function App() {
     <div data-theme={theme} className={`App ${theme}`}>
       <Router>
         <Layout className={`layout ${theme}`}>
-          <AppContent theme={theme} toggleTheme={toggleTheme} selectedKey={selectedKey} setSelectedKey={setSelectedKey} />
+          <ErrorBoundary>
+            <AppContent theme={theme} toggleTheme={toggleTheme} selectedKey={selectedKey} setSelectedKey={setSelectedKey} />
+          </ErrorBoundary>
         </Layout>
       </Router>
     </div>
@@ -51,13 +54,13 @@ function AppContent({ theme, toggleTheme, selectedKey, setSelectedKey }) {
         </Menu>
       </Header>
       <Content style={{ padding: '0 50px' }}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/site-management" element={<SiteManagement />} />
-          <Route path="/optimize" element={<Optimize />} />
-          <Route path="/results" element={<Results />} />
-          <Route path="/results/:scanId" element={<Results />} />
+      <Routes>
+          <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+          <Route path="/dashboard" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+          <Route path="/site-management" element={<ErrorBoundary><SiteManagement /></ErrorBoundary>} />
+          <Route path="/optimize" element={<ErrorBoundary><Optimize /></ErrorBoundary>} />
+          <Route path="/results" element={<ErrorBoundary><Results /></ErrorBoundary>} />
+          <Route path="/results/:scanId" element={<ErrorBoundary><Results /></ErrorBoundary>} />
         </Routes>
       </Content>
       <Footer className={`ant-layout-footer ${theme}`} style={{ textAlign: 'center' }}>MTG Scraper ©2024</Footer>

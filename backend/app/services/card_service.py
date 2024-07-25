@@ -145,7 +145,7 @@ class CardService:
                 CardService.fetch_sets_from_scryfall()     
                 
             # Fetch sets from the database
-            sets = Sets.query.order_by(Sets.released_at.desc()).all()
+            sets = Sets.query.order_by(Sets.release_date.desc()).all()
             return sets
 
         except Exception as e:
@@ -166,13 +166,13 @@ class CardService:
                         set_code=set_info['code'],
                         set_name=set_info['name'],
                         set_type=set_info['set_type'],
-                        released_at=datetime.strptime(set_info['released_at'], '%Y-%m-%d').date() if set_info['released_at'] else None
+                        release_date=datetime.strptime(set_info['release_date'], '%Y-%m-%d').date() if set_info['release_date'] else None
                     )
                     db.session.add(magic_set)
                 else:
                     magic_set.set_name = set_info['name']
                     magic_set.set_type = set_info['set_type']
-                    magic_set.released_at = datetime.strptime(set_info['released_at'], '%Y-%m-%d').date() if set_info['released_at'] else None
+                    magic_set.release_date = datetime.strptime(set_info['release_date'], '%Y-%m-%d').date() if set_info['release_date'] else None
                 magic_set.last_updated = datetime.utcnow()
         db.session.commit()
         return sets_data

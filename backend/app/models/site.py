@@ -9,6 +9,8 @@ class Site(db.Model):
     country = db.Column(db.String(50), nullable=False)
     type = db.Column(db.String(50), nullable=False)
 
+    scan_results = db.relationship('ScanResult', back_populates='site')
+
     def to_dict(self):
         return {
             'id': self.id,

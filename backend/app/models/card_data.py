@@ -1,3 +1,4 @@
+# Python Model
 from app import db
 from datetime import datetime, timezone
 
@@ -13,9 +14,9 @@ class CardData(db.Model):
     collector_number = db.Column(db.String(20))
     variation = db.Column(db.Boolean)
     promo = db.Column(db.Boolean)
-    prices = db.Column(db.JSON)  # Store Scryfall prices as JSON
-    purchase_uris = db.Column(db.JSON)  # Store purchase URIs as JSON
-    cardconduit_data = db.Column(db.JSON)  # Store CardConduit data as JSON
+    prices = db.Column(db.JSON)
+    purchase_uris = db.Column(db.JSON)
+    cardconduit_data = db.Column(db.JSON)
     scan_timestamp = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     purchase_data = db.Column(db.JSON)
 
