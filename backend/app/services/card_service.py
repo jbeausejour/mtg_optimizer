@@ -1,20 +1,22 @@
 import requests
 import logging
+import time
+import random
+import json
+import pandas as pd
+from datetime import datetime, timedelta, timezone
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+from app import db
 from app.utils.selenium_driver import SeleniumDriver
 from app.models.card_data import CardData
 from app.models.card import Card, Card_list
 from app.models.sets import Sets
-from app import db
 from app.utils.data_fetcher import DataFetcher
 from app.utils.optimization import OptimizationEngine
-import pandas as pd
-from datetime import datetime, timedelta, timezone
-import time
-import random
-import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,6 +80,27 @@ class CardService:
             'languages': list(languages),
             'versions': list(versions)
         }
+    
+    @staticmethod
+    def get_all_sets():
+        print('Getting all sets!')
+        try:
+            # Check if we need to update the sets
+            oldest_allowed_update = datetime.now() - timedelta(days=7)  # Update weekly
+            outdated_sets = Sets.query.filter(Sets.last_updated < oldest_allowed_update).first()
+            
+            if outdated_sets or Sets.query.count() == 0:
+                # Fetch and update sets from Scryfall
+                CardService.fetch_sets_from_scryfall()     
+                
+            # Fetch sets from the database
+            sets = Sets.query.order_by(Sets.release_date.desc()).all()
+            print('sets are:', sets)
+            return sets
+
+        except Exception as e:
+            logger.error(f"Error fetching sets: {str(e)}")
+            return None
 
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
@@ -132,29 +155,9 @@ class CardService:
             'prices', 'purchase_uris'
         ]
         return data
-    
-    @staticmethod
-    def get_all_sets():
-        try:
-            # Check if we need to update the sets
-            oldest_allowed_update = datetime.now() - timedelta(days=7)  # Update weekly
-            outdated_sets = Sets.query.filter(Sets.last_updated < oldest_allowed_update).first()
-            
-            if outdated_sets or Sets.query.count() == 0:
-                # Fetch and update sets from Scryfall
-                CardService.fetch_sets_from_scryfall()     
-                
-            # Fetch sets from the database
-            sets = Sets.query.order_by(Sets.release_date.desc()).all()
-            return sets
-
-        except Exception as e:
-            logger.error(f"Error fetching sets: {str(e)}")
-            return None
 
     @staticmethod
     def fetch_sets_from_scryfall():
-
         response = requests.get('https://api.scryfall.com/sets')
         response.raise_for_status()
         sets_data = response.json()['data']
@@ -173,11 +176,10 @@ class CardService:
                     magic_set.set_name = set_info['name']
                     magic_set.set_type = set_info['set_type']
                     magic_set.release_date = datetime.strptime(set_info['release_date'], '%Y-%m-%d').date() if set_info['release_date'] else None
-                magic_set.last_updated = datetime.utcnow()
+                magic_set.last_updated = datetime.now(timezone.utc)
         db.session.commit()
         return sets_data
         
-
     @staticmethod
     def fetch_all_printings(prints_search_uri):
         response = requests.get(prints_search_uri)
@@ -196,7 +198,6 @@ class CardService:
         return all_parts
     
     @staticmethod
-    #@shared_task
     def fetch_additional_data(card_name, set_code):
         cardconduit_data = CardService.fetch_cardconduit_data(card_name, set_code)
         purchase_data = CardService.fetch_purchase_data(cardconduit_data.get('purchase_uris', {}))
@@ -395,7 +396,7 @@ class CardService:
 
     @staticmethod
     def get_recent_card_data(card_name):
-        one_day_ago = datetime.utcnow() - timedelta(days=1)
+        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
         recent_data = CardData.query.filter_by(card_name=card_name).filter(CardData.scan_timestamp > one_day_ago).first()
         
         if recent_data:
@@ -417,7 +418,6 @@ class CardService:
                 'cardconduit': json.loads(recent_data.cardconduit_data),
                 'scan_timestamp': recent_data.scan_timestamp.isoformat()
             }
-        
         return None
 
     @staticmethod

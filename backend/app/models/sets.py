@@ -16,7 +16,7 @@ class Sets(db.Model):
     cards = db.relationship('Card', back_populates='sets')
     
 
-def to_dict(self):
+    def to_dict(self):
         return {
             'id': self.id,
             'set_name': self.set_name,

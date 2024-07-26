@@ -2,78 +2,74 @@ from flask import Flask, send_from_directory, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from flask_jwt_extended import JWTManager
+from logging.handlers import RotatingFileHandler
+from celery import Celery
+from config import get_config
 
-from dotenv import load_dotenv,find_dotenv
 import logging
 import os
-import sys
 
-
-# Set the project root directory
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-sys.path.append(project_root)
-
-
-logging.basicConfig(level=logging.DEBUG)
-
-load_dotenv(find_dotenv())
-
-# Initialize the database
+# Initialize extensions
 db = SQLAlchemy()
+migrate = Migrate()
+jwt = JWTManager()
+celery = Celery(__name__)
 
-def create_app():
-    
+def create_app(config_class=get_config()):
     app = Flask(__name__, static_folder='static', template_folder='templates', instance_relative_config=True)
-    CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
+    app.config.from_object(config_class)
 
-    app.config['ENV'] = 'development'
-    app.config['DEBUG'] = True
-    app.config['UPLOAD_FOLDER'] = 'uploads'
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
-    app.config['broker_url'] = os.getenv('CELERY_BROKER_URL')
-    app.config['result_backend'] = os.getenv('CELERY_RESULT_BACKEND')
-
-    app.logger.setLevel(logging.DEBUG)
-    # Initialize the database with the app
+    # Initialize extensions
     db.init_app(app)
+    migrate.init_app(app, db)
+    jwt.init_app(app)
+    CORS(app)
 
-    with app.app_context():
-        db.create_all()
+    # Initialize Celery
+    celery.conf.update(app.config)
 
-    migrate = Migrate(app, db)  # Initialize Flask-Migrate
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+    celery.Task = ContextTask
 
-    # Register blueprints using the function from routes.py
+    # Register blueprints
     from app.api.routes import register_blueprints
     register_blueprints(app)
 
-    with app.app_context():
-        @app.route('/')
-        def index():
-            #logger.debug("Sending from template_folder")
-            print("Sending from template_folder", flush=True)
-            return render_template('index.html')
-        
-        # Route for serving favicon
-        @app.route('/favicon.ico')
-        def favicon():
-            return send_from_directory(app.static_folder, 'favicon.ico')
+    # Register routes
+    @app.route('/')
+    def index():
+        return render_template('index.html')
+    
+    @app.route('/favicon.ico')
+    def favicon():
+        return send_from_directory(app.static_folder, 'favicon.ico')
 
-        @app.route('/static/<path:path>')
-        def send_static(path):
-            print(f"after static", flush=True)
-            full_path = os.path.join(app.static_folder, path)
-            app.logger.debug(f"Requested static file: {full_path}")
-            app.logger.debug(f"Static folder: {app.static_folder}")
-            app.logger.debug(f"Directory contents: {os.listdir(app.static_folder)}")
-            if os.path.exists(full_path):
-                app.logger.debug(f"File exists: {full_path}")
-            else:
-                app.logger.debug(f"File does not exist: {full_path}")
-            return send_from_directory(app.static_folder, path)
-        
-    # Print out the configuration for debugging
-    print("Celery Result Backend:", app.config.get('result_backend'))
-    print("Celery Broker URL:", app.config.get('broker_url'))
+    @app.route('/static/<path:path>')
+    def send_static(path):
+        return send_from_directory(app.static_folder, path)
+
+    # Setup logging
+    if not app.debug and not app.testing:
+        if app.config.get('LOG_TO_STDOUT'):
+            app.logger.addHandler(logging.StreamHandler())
+        else:
+            if not os.path.exists('logs'):
+                os.mkdir('logs')
+            file_handler = RotatingFileHandler('logs/mtg_optimizer.log', maxBytes=10240, backupCount=10)
+            file_handler.setFormatter(logging.Formatter(
+                '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+            app.logger.addHandler(file_handler)
+
+        app.logger.setLevel(logging.INFO)
+        app.logger.info('MTG Optimizer startup')
+    app.logger.info(f"Celery Result Backend: {app.config.get('result_backend')}")
+    app.logger.info(f"Celery Broker URL: {app.config.get('broker_url')}")
     return app
+
+# Import models and tasks
+from app import models
+from app.tasks import optimization_tasks

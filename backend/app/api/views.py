@@ -23,6 +23,16 @@ def get_site_list():
     sites = SiteService.get_all_sites()
     return jsonify([site.to_dict() for site in sites])
 
+@views.route('/sets', methods=['GET'])
+def get_sets():
+    sets_data = CardService.get_all_sets()
+    return jsonify([set_data.to_dict() for set_data in sets_data])
+
+@views.route('/scans', methods=['GET']) 
+def get_scans():
+    scans = ScanService.get_all_scan_results()
+    return jsonify([scan.to_dict() for scan in scans])
+
 @views.route('/card_versions', methods=['GET'])
 def get_card_versions_route():
     card_name = request.args.get('name')
@@ -55,8 +65,11 @@ def optimize():
     card_list = CardService.get_all_cards()
 
     try:
+        # Convert Card_list objects to dictionaries
+        card_list_dicts = [card.to_dict() for card in card_list]
+        
         # Run the optimization as a Celery task
-        task = optimize_cards.delay(card_list, sites)
+        task = optimize_cards.delay(card_list_dicts, sites)
 
         return jsonify({
             'status': 'Optimization task started',
@@ -93,11 +106,6 @@ def get_results(scan_id):
     scan = ScanService.get_scan_results(scan_id)
     return jsonify(scan.to_dict())
 
-@views.route('/scans', methods=['GET']) 
-def get_scans():
-    scans = ScanService.get_all_scan_results()
-    return jsonify([scan.to_dict() for scan in scans])
-
 @views.route('/update_card_data', methods=['POST'])
 def update_card_data():
     try:
@@ -114,12 +122,6 @@ def update_card_data():
             "status": "error",
             "message": f"An error occurred: {str(e)}"
         }), 500
-
-
-@views.route('/sets', methods=['GET'])
-def get_sets():
-    sets_data = CardService.get_all_sets()
-    return jsonify(sets_data)
 
 @views.route('/load-data', methods=['POST'])
 def load_data():
