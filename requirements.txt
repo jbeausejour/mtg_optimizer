@@ -1,7 +1,9 @@
--*-/*+Flask==3.0.3
+flask==3.0.3
 flask-cors==4.0.1
 flask-sqlalchemy==3.1.1
 flask-migrate==4.0.7
+flask-jwt-extended==4.6.0
+flask-cors==4.0.1
 htmldom==2.0
 fuzzywuzzy==0.18.0
 deap==1.4.1
@@ -16,3 +18,4 @@ cloudscraper==1.2.71
 selenium==4.22.0
 selenium-stealth==1.0.6
 undetected-chromedriver==3.5.5
+celery[sqlalchemy]==5.4.0

@@ -66,8 +66,6 @@ def create_app(config_class=get_config()):
 
         app.logger.setLevel(logging.INFO)
         app.logger.info('MTG Optimizer startup')
-    app.logger.info(f"Celery Result Backend: {app.config.get('result_backend')}")
-    app.logger.info(f"Celery Broker URL: {app.config.get('broker_url')}")
     return app
 
 # Import models and tasks

@@ -9,7 +9,8 @@ npm install
 
 
 # Backend Terminal Run command
-Flask run
+set FLASK_APP=app.py && set FLASK_ENV=development
+flask run
 
 # Frontend Terminal Build&Run command
 $env:NODE_OPTIONS="--openssl-legacy-provider"
