@@ -24,18 +24,25 @@ celery = make_celery(app)
 print("Testing SQLite connections...")
 
 try:
+    from sqlalchemy.dialects import sqlite
     broker_engine = create_engine(celery.conf.broker_url)
     broker_engine.connect()
     print(f"Successfully connected to broker SQLite database: {celery.conf.broker_url}")
+except ImportError:
+    print("SQLite dialect not found. Make sure SQLAlchemy is installed correctly.")
 except Exception as e:
     print(f"Failed to connect to broker SQLite: {str(e)}")
 
 try:
+    from sqlalchemy.dialects import sqlite
     result_engine = create_engine(celery.conf.result_backend)
-    SessionManager(result_engine).session
+    session = SessionManager(result_engine).create_session()
     print(f"Successfully connected to result SQLite database: {celery.conf.result_backend}")
+except ImportError:
+    print("SQLite dialect not found. Make sure SQLAlchemy is installed correctly.")
 except Exception as e:
     print(f"Failed to connect to result SQLite: {str(e)}")
+
 
 if __name__ == '__main__':
     print("Starting Celery worker...")
