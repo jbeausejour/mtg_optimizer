@@ -12,9 +12,14 @@ class CeleryConfig:
     broker_connection_retry_on_startup = True
 
     # Celery Configuration using SQLite
-    broker_url = f"sqla+sqlite:///{os.path.join(INSTANCE_PATH, 'celery-broker.sqlite')}"
-    result_backend = f"db+sqlite:///{os.path.join(INSTANCE_PATH, 'celery-results.sqlite')}"
+    broker_url = f"sqlite:///{os.path.join(INSTANCE_PATH, 'celery-broker.sqlite').replace('\\', '/')}"
+    result_backend = f"sqlite:///{os.path.join(INSTANCE_PATH, 'celery-results.sqlite').replace('\\', '/')}"
     imports = ['app.tasks.optimization_tasks']
+
+    print(f"Celery Broker URL: {broker_url}")
+    print(f"Celery Result Backend: {result_backend}")
+    print(f"Instance Path: {INSTANCE_PATH}")
+
 
     @classmethod
     def init_app(cls, app):

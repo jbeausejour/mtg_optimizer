@@ -23,8 +23,8 @@ class Sets(db.Model):
             'set_code': self.set_code,
             'set_symbol': self.set_symbol,
             'set_type': self.set_type,
-            'release_date': self.release_date.isoformat() if self.release_date else None,
+            'release_date': self.release_date,
             'card_count': self.card_count,
             'is_digital': self.is_digital,
-            'last_updated': self.last_updated.isoformat()
+            'last_updated': self.last_updated.isoformat() if self.release_date else None
         }

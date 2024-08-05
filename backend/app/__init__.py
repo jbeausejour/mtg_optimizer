@@ -26,6 +26,9 @@ def create_app(config_class=get_config()):
     jwt.init_app(app)
     CORS(app)
 
+    app.config['CELERY_BROKER_URL'] = f"sqlite:///{os.path.join(app.instance_path, 'celery-broker.sqlite').replace('\\', '/')}"
+    app.config['CELERY_RESULT_BACKEND'] = f"sqlite:///{os.path.join(app.instance_path, 'celery-results.sqlite').replace('\\', '/')}"
+
     # Initialize Celery
     celery.conf.update(app.config)
 
