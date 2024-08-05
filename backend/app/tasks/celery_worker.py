@@ -1,5 +1,10 @@
 import os
 import sys
+from app import create_app
+import app.tasks.optimization_tasks
+from app.tasks.celery_app import make_celery
+from sqlalchemy import create_engine
+from celery.backends.database import SessionManager
 
 # Get the absolute path of the current file
 current_path = os.path.abspath(os.path.dirname(__file__))
@@ -8,19 +13,29 @@ current_path = os.path.abspath(os.path.dirname(__file__))
 project_root = os.path.abspath(os.path.join(current_path, '..', '..'))
 sys.path.insert(0, project_root)
 
-from app import create_app
-from app.tasks.celery_app import make_celery
-
 app = create_app()
 celery = make_celery(app)
 
 # Debug prints
-print(f"Project root: {project_root}")
-print(f"Python path: {sys.path}")
-print(f"Current working directory: {os.getcwd()}")
+# print(f"Project root: {project_root}")
+# print(f"Python path: {sys.path}")
+# print(f"Current working directory: {os.getcwd()}")
 
-# Ensure all tasks are imported
-import app.tasks.optimization_tasks
+print("Testing SQLite connections...")
+
+try:
+    broker_engine = create_engine(celery.conf.broker_url)
+    broker_engine.connect()
+    print(f"Successfully connected to broker SQLite database: {celery.conf.broker_url}")
+except Exception as e:
+    print(f"Failed to connect to broker SQLite: {str(e)}")
+
+try:
+    result_engine = create_engine(celery.conf.result_backend)
+    SessionManager(result_engine).session
+    print(f"Successfully connected to result SQLite database: {celery.conf.result_backend}")
+except Exception as e:
+    print(f"Failed to connect to result SQLite: {str(e)}")
 
 if __name__ == '__main__':
     print("Starting Celery worker...")

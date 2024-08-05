@@ -4,7 +4,6 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import JWTManager
 from logging.handlers import RotatingFileHandler
-from celery import Celery
 from config import get_config
 
 import logging
@@ -14,7 +13,6 @@ import os
 db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
-celery = Celery(__name__)
 
 def create_app(config_class=get_config()):
     app = Flask(__name__, static_folder='static', template_folder='templates', instance_relative_config=True)
@@ -25,15 +23,11 @@ def create_app(config_class=get_config()):
     migrate.init_app(app, db)
     jwt.init_app(app)
     CORS(app)
-
+            
     # Initialize Celery
-    celery.conf.update(app.config)
-
-    class ContextTask(celery.Task):
-        def __call__(self, *args, **kwargs):
-            with app.app_context():
-                return self.run(*args, **kwargs)
-    celery.Task = ContextTask
+    from app.tasks.celery_app import make_celery
+    celery = make_celery(app)
+    app.extensions['celery'] = celery
 
     # Register blueprints
     from app.api.routes import register_blueprints
@@ -68,6 +62,3 @@ def create_app(config_class=get_config()):
         app.logger.info('MTG Optimizer startup')
     return app
 
-# Import models and tasks
-from app import models
-from app.tasks import optimization_tasks

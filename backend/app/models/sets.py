@@ -9,7 +9,7 @@ class Sets(db.Model):
     set_code = db.Column(db.String(10), unique=True, nullable=False)
     set_symbol = db.Column(db.String(50))
     set_type = db.Column(db.String(50), nullable=False)
-    release_date = db.Column(db.Date)
+    release_date = db.Column(db.Date) 
     card_count = db.Column(db.Integer)
     is_digital = db.Column(db.Boolean, default=False)
     last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc))
@@ -23,8 +23,8 @@ class Sets(db.Model):
             'set_code': self.set_code,
             'set_symbol': self.set_symbol,
             'set_type': self.set_type,
-            'release_date': self.release_date.isoformat() if self.release_date else None,
+            'release_date': self.release_date,
             'card_count': self.card_count,
             'is_digital': self.is_digital,
-            'last_updated': self.last_updated.isoformat()
+            'last_updated': self.last_updated.isoformat() if self.last_updated else datetime.now(timezone.utc).isoformat()
         }
