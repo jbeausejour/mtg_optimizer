@@ -83,10 +83,10 @@ class CardService:
     
     @staticmethod
     def get_all_sets():
-        print('Getting all sets!')
+        logger.info('Getting all sets!')
         try:
             # Check if we need to update the sets
-            oldest_allowed_update = datetime.now() - timedelta(days=7)  # Update weekly
+            oldest_allowed_update = datetime.now(timezone.utc) - timedelta(days=7)  # Update weekly
             outdated_sets = Sets.query.filter(Sets.last_updated < oldest_allowed_update).first()
             
             if outdated_sets or Sets.query.count() == 0:
@@ -94,13 +94,13 @@ class CardService:
                 CardService.fetch_sets_from_scryfall()     
                 
             # Fetch sets from the database
-            sets = Sets.query.order_by(Sets.release_date.desc()).all()
-            print('sets are:', sets)
+            sets = Sets.query.order_by(Sets.released_at.desc()).all()
+            logger.info(f'Retrieved {len(sets)} sets from the database')
             return sets
 
         except Exception as e:
             logger.error(f"Error fetching sets: {str(e)}")
-            return None
+            return []
 
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
@@ -158,26 +158,54 @@ class CardService:
 
     @staticmethod
     def fetch_sets_from_scryfall():
-        response = requests.get('https://api.scryfall.com/sets')
-        response.raise_for_status()
-        sets_data = response.json()['data']
+        logger.info("Fetching sets from Scryfall")
+        try:
+            response = requests.get('https://api.scryfall.com/sets')
+            response.raise_for_status()
+            sets_data = response.json()['data']
+        except requests.RequestException as e:
+            logger.error(f"Error fetching sets from Scryfall: {str(e)}")
+            return []
+
+        updated_count = 0
+        added_count = 0
+
         for set_info in sets_data:
-            if set_info['set_type'] in ['core', 'expansion', 'masters', 'draft_innovation', 'commander']:
-                magic_set = Sets.query.filter_by(set_code=set_info['code']).first()
-                if not magic_set:
-                    magic_set = Sets(
-                        set_code=set_info['code'],
-                        set_name=set_info['name'],
-                        set_type=set_info['set_type'],
-                        release_date=datetime.strptime(set_info['release_date'], '%Y-%m-%d').date() if set_info['release_date'] else None
-                    )
-                    db.session.add(magic_set)
-                else:
-                    magic_set.set_name = set_info['name']
-                    magic_set.set_type = set_info['set_type']
-                    magic_set.release_date = datetime.strptime(set_info['release_date'], '%Y-%m-%d').date() if set_info['release_date'] else None
-                magic_set.last_updated = datetime.now(timezone.utc)
-        db.session.commit()
+            magic_set = Sets.query.get(set_info['id'])
+            
+            if not magic_set:
+                magic_set = Sets(id=set_info['id'])
+                db.session.add(magic_set)
+                added_count += 1
+                logger.info(f"Adding new set: {set_info['code']}")
+            else:
+                updated_count += 1
+                logger.info(f"Updating existing set: {set_info['code']}")
+
+            # Update all fields
+            magic_set.code = set_info['code']
+            magic_set.tcgplayer_id = set_info.get('tcgplayer_id')
+            magic_set.name = set_info['name']
+            magic_set.uri = set_info['uri']
+            magic_set.scryfall_uri = set_info['scryfall_uri']
+            magic_set.search_uri = set_info['search_uri']
+            magic_set.released_at = datetime.strptime(set_info['released_at'], '%Y-%m-%d').date() if set_info['released_at'] else None
+            magic_set.set_type = set_info['set_type']
+            magic_set.card_count = set_info['card_count']
+            magic_set.printed_size = set_info.get('printed_size')
+            magic_set.digital = set_info['digital']
+            magic_set.nonfoil_only = set_info['nonfoil_only']
+            magic_set.foil_only = set_info['foil_only']
+            magic_set.icon_svg_uri = set_info['icon_svg_uri']
+            magic_set.last_updated = datetime.now(timezone.utc)
+
+        try:
+            db.session.commit()
+            logger.info(f"Sets data updated successfully. Updated: {updated_count}, Added: {added_count}")
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error committing sets data to database: {str(e)}")
+
         return sets_data
         
     @staticmethod
