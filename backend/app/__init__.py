@@ -1,21 +1,16 @@
-from flask import Flask, send_from_directory, render_template
+from flask import Flask
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from flask_jwt_extended import JWTManager
 from logging.handlers import RotatingFileHandler
 from config import get_config
+from .extensions import db, migrate, jwt
+from .tasks.celery_app import make_celery
+from .tasks import CeleryConfig
 
 import logging
 import os
 
-# Initialize extensions
-db = SQLAlchemy()
-migrate = Migrate()
-jwt = JWTManager()
-
 def create_app(config_class=get_config()):
-    app = Flask(__name__, static_folder='static', template_folder='templates', instance_relative_config=True)
+    app = Flask(__name__, template_folder='templates', instance_relative_config=True)
     app.config.from_object(config_class)
 
     # Initialize extensions
@@ -24,30 +19,15 @@ def create_app(config_class=get_config()):
     jwt.init_app(app)
     CORS(app)
 
-    app.config['CELERY_BROKER_URL'] = f"sqlite:///{os.path.join(app.instance_path, 'celery-broker.sqlite').replace('\\', '/')}"
-    app.config['CELERY_RESULT_BACKEND'] = f"sqlite:///{os.path.join(app.instance_path, 'celery-results.sqlite').replace('\\', '/')}"
-
+    CeleryConfig.init_app(app)
+    
     # Initialize Celery
-    from app.tasks.celery_app import make_celery
     celery = make_celery(app)
     app.extensions['celery'] = celery
 
     # Register blueprints
-    from app.api.routes import register_blueprints
+    from .api.routes import register_blueprints
     register_blueprints(app)
-
-    # Register routes
-    @app.route('/')
-    def index():
-        return render_template('index.html')
-    
-    @app.route('/favicon.ico')
-    def favicon():
-        return send_from_directory(app.static_folder, 'favicon.ico')
-
-    @app.route('/static/<path:path>')
-    def send_static(path):
-        return send_from_directory(app.static_folder, path)
 
     # Setup logging
     if not app.debug and not app.testing:
@@ -65,3 +45,5 @@ def create_app(config_class=get_config()):
         app.logger.info('MTG Optimizer startup')
     return app
 
+# Import models after create_app to avoid circular imports
+from . import models

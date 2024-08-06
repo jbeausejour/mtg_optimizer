@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_from_directory, render_template
 from app.tasks.optimization_tasks import optimize_cards
 from app.services.card_service import CardService
 from app.services.site_service import SiteService
@@ -10,7 +10,20 @@ import asyncio
 
 
 logger = logging.getLogger(__name__)
-views = Blueprint('views', __name__)
+views = Blueprint('views', __name__, template_folder='templates')
+
+# Register routes
+@views.route('/')
+def index():
+    return render_template('index.html')
+
+@views.route('/favicon.ico')
+def favicon():
+    return send_from_directory('static/', 'favicon.ico')
+
+@views.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory('static/', path)
 
 @views.route('/cards', methods=['GET'])
 def get_cards():

@@ -8,5 +8,5 @@ class ScanService:
 
     @staticmethod
     def get_all_scan_results():
-        scans = Scan.query.order_by(Scan.date.desc()).limit(5).all()
+        scans = Scan.query.order_by(Scan.created_at.desc()).limit(5).all()
         return scans

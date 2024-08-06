@@ -1,15 +1,15 @@
-from app import db
+from app.extensions import db
 from datetime import datetime, timezone
 
 class Scan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     results = db.relationship('ScanResult', backref='scan', lazy=True)
 
     def to_dict(self):
         return {
             'id': self.id,
-            'date': self.date.isoformat(),
+            'date': self.created_at.isoformat(),
             'results': [result.to_dict() for result in self.results]
         }
  

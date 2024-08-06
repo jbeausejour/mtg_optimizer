@@ -1,6 +1,6 @@
 # backend/app/utils/optimization.py
 from app.models.card import Card, Card_list
-from app import db
+from app.extensions import db
 import pulp
 import random
 import pandas as pd

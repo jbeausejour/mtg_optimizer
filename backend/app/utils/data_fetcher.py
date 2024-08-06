@@ -10,7 +10,7 @@ from app.models.site import Site
 from app.models.card import Card, Card_list
 from app.models.scan import Scan, ScanResult
 from app.utils.helpers import clean_card_name, parse_card_string, extract_numbers
-from app import db
+from app.extensions import db
 
 logger = logging.getLogger(__name__)
 

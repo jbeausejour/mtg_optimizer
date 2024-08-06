@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from app import db
+from app.extensions import db
 from app.utils.selenium_driver import SeleniumDriver
 from app.models.card_data import CardData
 from app.models.card import Card, Card_list

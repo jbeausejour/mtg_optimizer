@@ -1,10 +1,10 @@
 from celery import shared_task
 from pytz import timezone
-from app import db, create_app
+from app.extensions import db
 from app.models.scan import Scan, ScanResult
 from app.models.card import Card
 from app.models.site import Site
-from app.utils.optimization import OptimizationEngine  # Assuming you have this utility function
+from app.utils.optimization import OptimizationEngine
 from datetime import datetime, timedelta, timezone
 import logging
 
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 @shared_task(bind=True)
 def optimize_cards(self, card_list_dicts, site_ids):
+    from app import create_app
     app = create_app()
     with app.app_context():
         try:
@@ -67,18 +68,30 @@ def optimize_cards(self, card_list_dicts, site_ids):
             self.update_state(state='FAILURE', meta={'status': f'Error: {str(e)}'})
             return {'status': 'Failed', 'error': str(e)}
 
-@shared_task
+
+@shared_task(name='app.tasks.optimization_tasks.cleanup_old_scans')
 def cleanup_old_scans():
+    print("Starting cleanup_old_scans task P")
+    logger.info("Starting cleanup_old_scans task")
+    from app import create_app
     app = create_app()
     with app.app_context():
         try:
+            logger.info(f"Trying to clean up scans")
             # Logic to remove old scans and their results
-            # This is just an example, adjust based on your requirements
             old_scans = Scan.query.filter(Scan.created_at < (datetime.now(timezone.utc) - timedelta(days=30))).all()
+            logger.info(f"Scans received")
             for scan in old_scans:
+                logger.info(f"Trying to delete scans {scan}")
                 db.session.delete(scan)
             db.session.commit()
+            logger.info(f"Cleanup completed")
             return {'status': 'Cleanup completed'}
         except Exception as e:
             logger.error(f"Error during cleanup: {str(e)}")
             return {'status': 'Failed', 'error': str(e)}
+        
+@shared_task
+def test_task():
+    logger.info("Test task is running")
+    return {"status": "Test task completed"}

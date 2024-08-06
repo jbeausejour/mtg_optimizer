@@ -1,6 +1,6 @@
 import os
 import csv
-from app import create_app, db
+from app.extensions import db
 from sqlalchemy import text, inspect
 from app.models.site import Site
 from app.models.card import Card_list
@@ -102,6 +102,8 @@ def load_all_data():
     load_sql_file()
 
 if __name__ == '__main__':
+    
+    from app import create_app
     app = create_app()
     with app.app_context():
         # Truncate specified tables

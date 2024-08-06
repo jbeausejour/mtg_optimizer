@@ -1,5 +1,7 @@
-# (beauju㉿LAP-BUR02184)-[~/Desktop/Jules/GitHub/mtg_optimizer/backend]-[main]                                                                                                     0ms  
-celery -A app.tasks.celery_worker.celery worker --loglevel=info
+# ~/Desktop/Jules/GitHub/mtg_optimizer/backend
+python app/tasks/celery_worker.py
+python -m tests.test_tasks
+
 
 # Backend Terminal Installation
 pip install -r requirements.txt
