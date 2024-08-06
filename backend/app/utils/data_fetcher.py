@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.site import Site
-from app.models.card import Card, Card_list
+from app.models.card import MarketplaceCard, UserWishlistCard
 from app.models.scan import Scan, ScanResult
 from app.utils.helpers import clean_card_name, parse_card_string, extract_numbers
 from app.extensions import db
@@ -18,7 +18,7 @@ STRATEGY_ADD_TO_CART = 1
 STRATEGY_SCRAPPER = 2
 STRATEGY_HAWK = 3
 
-class DataFetcher:
+class ExternalDataSynchronizer:
     def __init__(self):
         self.session = None
         self.headers = {
@@ -86,7 +86,7 @@ class DataFetcher:
         db.session.commit()
 
         for _, card_data in cards_df.iterrows():
-            card = Card(
+            card = MarketplaceCard(
                 site=site.name,
                 name=card_data['Name'],
                 edition=card_data['Edition'],
@@ -112,7 +112,7 @@ class DataFetcher:
 
     @classmethod
     async def update_all_cards(cls):
-        card_names = Card_list.query.with_entities(Card_list.name).distinct().all()
+        card_names = UserWishlistCard.query.with_entities(UserWishlistCard.name).distinct().all()
         card_names = [card.name for card in card_names]
         sites = Site.query.filter_by(active=True).all()
 
@@ -138,7 +138,7 @@ class DataFetcher:
         }
 
         if strategy == STRATEGY_HAWK:
-            return pd.DataFrame([card.to_dict() for card in DataFetcher.strategy_hawk(soup)])
+            return pd.DataFrame([card.to_dict() for card in ExternalDataSynchronizer.strategy_hawk(soup)])
 
         content = soup.find('div', {'class': ['content', 'content clearfix', 'content inner clearfix']})
         if content is None:
@@ -152,15 +152,15 @@ class DataFetcher:
 
         for container in products_containers:
             for item in container.find_all('li', {'class': 'product'}):
-                card = DataFetcher.process_product_item(item, site, card_names, excluded_categories)
+                card = ExternalDataSynchronizer.process_product_item(item, site, card_names, excluded_categories)
                 if card:
-                    DataFetcher.process_variants(item, card, cards, seen_variants, strategy)
+                    ExternalDataSynchronizer.process_variants(item, card, cards, seen_variants, strategy)
 
         return pd.DataFrame([card.to_dict() for card in cards])
 
     @staticmethod
     def process_product_item(item, site, card_names, excluded_categories):
-        if DataFetcher.is_yugioh_card(item):
+        if ExternalDataSynchronizer.is_yugioh_card(item):
             return None
 
         meta = item.find('div', {'class': 'meta'})
@@ -184,7 +184,7 @@ class DataFetcher:
     def process_variants(item, card, cards, seen_variants, strategy):
         variants = item.find('div', {'class': 'variants'})
         for variant in variants.find_all('div', {'class': 'variant-row'}):
-            card_variant = DataFetcher.strategy_add_to_cart(card, variant) if strategy == STRATEGY_ADD_TO_CART else DataFetcher.strategy_scrapper(card, variant)
+            card_variant = ExternalDataSynchronizer.strategy_add_to_cart(card, variant) if strategy == STRATEGY_ADD_TO_CART else ExternalDataSynchronizer.strategy_scrapper(card, variant)
             if card_variant is not None and card_variant not in seen_variants:
                 cards.append(card_variant)
                 seen_variants.add(card_variant)
@@ -208,14 +208,14 @@ class DataFetcher:
         if 'data-name' not in attributes:
             return None
 
-        unclean_name, product_version, product_foil = DataFetcher.find_name_version_foil(attributes['data-name'])
+        unclean_name, product_version, product_foil = ExternalDataSynchronizer.find_name_version_foil(attributes['data-name'])
 
         if not card.Foil:
             card.Foil = product_foil
         if not card.Edition:
             card.Edition = product_version
 
-        quality_language = DataFetcher.normalize_variant_description(attributes['data-variant'])
+        quality_language = ExternalDataSynchronizer.normalize_variant_description(attributes['data-variant'])
         quality, language = quality_language[:2]
 
         select_tag = variant.find('select', {'class': 'qty'}) or variant.find('input', {'class': 'qty'})
@@ -225,7 +225,7 @@ class DataFetcher:
         card.Language = language
         card.Quantity = int(qty_available)
         card.Edition = attributes['data-category']
-        card.Price = DataFetcher.normalize_price(attributes['data-price'])
+        card.Price = ExternalDataSynchronizer.normalize_price(attributes['data-price'])
 
         return card
 
@@ -235,15 +235,15 @@ class DataFetcher:
             return None
 
         try:
-            quality, language = DataFetcher.extract_quality_language(card, variant)
+            quality, language = ExternalDataSynchronizer.extract_quality_language(card, variant)
             if quality is None or language is None:
                 return None
 
-            quantity = DataFetcher.extract_quantity(card, variant)
+            quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
             if quantity is None:
                 return None
 
-            price = DataFetcher.extract_price(card, variant)
+            price = ExternalDataSynchronizer.extract_price(card, variant)
 
             card.Quality = quality
             card.Language = language
@@ -318,7 +318,7 @@ class DataFetcher:
         variant_description = variant.find('span', {'class': 'variant-short-info variant-description'}) or \
                               variant.find('span', {'class': 'variant-short-info'})
         if variant_description:
-            quality_language = DataFetcher.normalize_variant_description(variant_description.text)
+            quality_language = ExternalDataSynchronizer.normalize_variant_description(variant_description.text)
             return quality_language[:2]
         else:
             logger.error(f"Error in extract_quality_language for {card.Name}: variant-description not found")
@@ -340,7 +340,7 @@ class DataFetcher:
         price_elem = variant.find('span', {'class': 'regular price'})
         if price_elem is not None:
             price_text = price_elem.text
-            return DataFetcher.normalize_price(price_text)
+            return ExternalDataSynchronizer.normalize_price(price_text)
         else:
             logger.error(f"Error in extract_price for {card.Name}: Price element not found")
             return 0.0

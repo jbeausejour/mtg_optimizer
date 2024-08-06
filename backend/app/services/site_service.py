@@ -1,6 +1,6 @@
 from app.models.site import Site
 
-class SiteService:
+class MarketplaceManager:
     @staticmethod
     def get_all_sites():
         return Site.query.all()

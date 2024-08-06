@@ -12,11 +12,10 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from app.extensions import db
 from app.utils.selenium_driver import SeleniumDriver
-from app.models.card_data import CardData
-from app.models.card import Card, Card_list
+from app.models.card import MarketplaceCard, UserWishlistCard, ScryfallCardData
 from app.models.sets import Sets
-from app.utils.data_fetcher import DataFetcher
-from app.utils.optimization import OptimizationEngine
+from app.utils.data_fetcher import ExternalDataSynchronizer
+from app.utils.optimization import PurchaseOptimizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,38 +24,11 @@ SCRYFALL_API_URL = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH_API_URL = "https://api.scryfall.com/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
-class CardService:
+class CardDataManager:
     @staticmethod
     def get_all_cards():
         print('Getting cards!')
-        return Card_list.query.all()
-
-    @staticmethod
-    def get_recent_card_data(card_name):
-        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-        recent_data = CardData.query.filter_by(card_name=card_name).filter(CardData.scan_timestamp > one_hour_ago).first()
-        
-        if recent_data:
-            return {
-                'scryfall': {
-                    'name': recent_data.card_name,
-                    'oracle_id': recent_data.oracle_id,
-                    'multiverse_ids': list(map(int, recent_data.multiverse_ids.split(','))),
-                    'reserved': recent_data.reserved,
-                    'lang': recent_data.lang,
-                    'set': recent_data.set_code,
-                    'set_name': recent_data.set_name,
-                    'collector_number': recent_data.collector_number,
-                    'variation': recent_data.variation,
-                    'promo': recent_data.promo,
-                    'prices': json.loads(recent_data.prices),
-                    'purchase_uris': json.loads(recent_data.purchase_uris)
-                },
-                'cardconduit': json.loads(recent_data.cardconduit_data),
-                'purchase_data': json.loads(recent_data.purchase_data),
-                'scan_timestamp': recent_data.scan_timestamp.isoformat()
-            }
-        return None
+        return UserWishlistCard.query.all()
 
     @staticmethod
     def get_card_versions(card_name):
@@ -91,7 +63,7 @@ class CardService:
             
             if outdated_sets or Sets.query.count() == 0:
                 # Fetch and update sets from Scryfall
-                CardService.fetch_sets_from_scryfall()     
+                CardDataManager.fetch_sets_from_scryfall()     
                 
             # Fetch sets from the database
             sets = Sets.query.order_by(Sets.released_at.desc()).all()
@@ -105,23 +77,23 @@ class CardService:
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
         # Check for recent data first
-        #recent_data = CardService.get_recent_card_data(card_name)
-        #if recent_data:
-        #    return recent_data
+        recent_data = CardDataManager.get_recent_card_data(card_name)
+        if recent_data:
+            return recent_data
 
-        scryfall_data = CardService.fetch_scryfall_data(card_name, set_code, language)
+        scryfall_data = CardDataManager.fetch_scryfall_data(card_name, set_code, language)
         
         # Fetch all printings
-        all_parts = CardService.fetch_all_printings(scryfall_data.get('prints_search_uri'))
+        all_parts = CardDataManager.fetch_all_printings(scryfall_data.get('prints_search_uri'))
         scryfall_data['all_parts'] = all_parts
 
-        #cardconduit_data = CardService.fetch_cardconduit_data(card_name, set_code)
+        #cardconduit_data = CardDataManager.fetch_cardconduit_data(card_name, set_code)
         
         # Add version information to Scryfall data
         #scryfall_data['version'] = version
 
         # Fetch prices from purchase URIs
-        #purchase_data = CardService.fetch_purchase_data(scryfall_data.get('purchase_uris', {}))
+        #purchase_data = CardDataManager.fetch_purchase_data(scryfall_data.get('purchase_uris', {}))
 
         # Combine all data
         combined_data = {
@@ -227,20 +199,21 @@ class CardService:
     
     @staticmethod
     def fetch_additional_data(card_name, set_code):
-        cardconduit_data = CardService.fetch_cardconduit_data(card_name, set_code)
-        purchase_data = CardService.fetch_purchase_data(cardconduit_data.get('purchase_uris', {}))
+        cardconduit_data = CardDataManager.fetch_cardconduit_data(card_name, set_code)
+        purchase_data = CardDataManager.fetch_purchase_data(cardconduit_data.get('purchase_uris', {}))
         
         # Update the stored data
-        card_data = CardData.query.filter_by(card_name=card_name).first()
+        card_data = ScryfallCardData.query.filter_by(card_name=card_name).first()
         if card_data:
             card_data.cardconduit_data = json.dumps(cardconduit_data)
             card_data.purchase_data = json.dumps(purchase_data)
             card_data.last_additional_data_fetch = datetime.now(timezone.utc)
             db.session.commit()
-
+    
+    @staticmethod
     def fetch_cardconduit_data(cardname, set_code):
         # Check if we have recent data (less than a day old)
-        recent_data = CardService.get_recent_card_data(cardname)
+        recent_data = CardDataManager.get_recent_card_data(cardname)
         if recent_data:
             return recent_data['cardconduit']
 
@@ -315,11 +288,11 @@ class CardService:
         purchase_data = {}
         for site, url in purchase_uris.items():
             if (site != 'cardmarket' and site != 'cardhoarder'):  # Temporarily disable CardMarket & cardhoarder
-                purchase_data[site] = CardService.scrape_price(url)
+                purchase_data[site] = CardDataManager.fetch_marketplace_price(url)
         return purchase_data
     
     @staticmethod
-    def scrape_price(url, max_retries=3, use_headless=True):  # Reduced retries and added headless option
+    def fetch_marketplace_price(url, max_retries=3, use_headless=True):  # Reduced retries and added headless option
         driver = SeleniumDriver.get_driver(use_headless)
         
         try:
@@ -387,21 +360,15 @@ class CardService:
             print(f"An error occurred while scraping price from {url}: {e}")
             if max_retries > 0:
                 time.sleep(random.uniform(1, 3))
-                return CardService.scrape_price(url, max_retries - 1, use_headless)
+                return CardDataManager.fetch_marketplace_price(url, max_retries - 1, use_headless)
             return None
         
         finally:
             driver.quit()
 
     @staticmethod
-    def rotate_proxy():
-        # Placeholder for proxy rotation implementation
-        # This method should return a new proxy configuration
-        pass
-
-    @staticmethod
     def store_card_data(data):
-        card_data = CardData(
+        card_data = ScryfallCardData(
             card_name=data['scryfall']['name'],
             oracle_id=data['scryfall']['oracle_id'],
             multiverse_ids=','.join(map(str, data['scryfall'].get('multiverse_ids', []))),
@@ -425,7 +392,7 @@ class CardService:
     @staticmethod
     def get_recent_card_data(card_name):
         one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
-        recent_data = CardData.query.filter_by(card_name=card_name).filter(CardData.scan_timestamp > one_day_ago).first()
+        recent_data = ScryfallCardData.query.filter_by(card_name=card_name).filter(ScryfallCardData.scan_timestamp > one_day_ago).first()
         
         if recent_data:
             return {
@@ -443,21 +410,21 @@ class CardService:
                     'prices': json.loads(recent_data.prices),
                     'purchase_uris': json.loads(recent_data.purchase_uris)
                 },
-                'cardconduit': json.loads(recent_data.cardconduit_data),
+                # 'cardconduit': json.loads(recent_data.cardconduit_data),
                 'scan_timestamp': recent_data.scan_timestamp.isoformat()
             }
         return None
 
     @staticmethod
     async def update_card_data():
-        await DataFetcher.update_all_cards()
+        await ExternalDataSynchronizer.update_all_cards()
 
     @staticmethod
     def optimize_card_purchases(strategy='milp', min_store=None, find_min_store=False):
-        card_details_df = pd.read_sql(Card.query.statement, Card.query.session.bind)
-        buylist_df = pd.read_sql(Card_list.query.statement, Card_list.query.session.bind)
+        card_details_df = pd.read_sql(MarketplaceCard.query.statement, MarketplaceCard.query.session.bind)
+        buylist_df = pd.read_sql(UserWishlistCard.query.statement, UserWishlistCard.query.session.bind)
 
-        optimization_engine = OptimizationEngine(card_details_df, buylist_df)
+        optimization_engine = PurchaseOptimizer(card_details_df, buylist_df)
 
         if strategy == 'milp':
             return optimization_engine.run_milp_optimization(min_store, find_min_store)
@@ -471,7 +438,7 @@ class CardService:
 
     @staticmethod
     def get_purchasing_plan(solution):
-        card_details_df = pd.read_sql(Card.query.statement, Card.query.session.bind)
-        buylist_df = pd.read_sql(Card_list.query.statement, Card_list.query.session.bind)
-        optimization_engine = OptimizationEngine(card_details_df, buylist_df)
+        card_details_df = pd.read_sql(MarketplaceCard.query.statement, MarketplaceCard.query.session.bind)
+        buylist_df = pd.read_sql(UserWishlistCard.query.statement, UserWishlistCard.query.session.bind)
+        optimization_engine = PurchaseOptimizer(card_details_df, buylist_df)
         return optimization_engine.get_purchasing_plan(solution)

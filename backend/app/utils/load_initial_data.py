@@ -3,7 +3,7 @@ import csv
 from app.extensions import db
 from sqlalchemy import text, inspect
 from app.models.site import Site
-from app.models.card import Card_list
+from app.models.card import UserWishlistCard
 from app.models.sets import Sets
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -17,7 +17,7 @@ SQL_FILE = os.path.join(DATA_DIR, 'sql', 'magic_sets.sql')
 def truncate_tables():
     # Delete all rows from each table
     db.session.query(Site).delete()
-    db.session.query(Card_list).delete()
+    db.session.query(UserWishlistCard).delete()
     db.session.query(Sets).delete()
     
     # Check if sqlite_sequence table exists
@@ -63,7 +63,7 @@ def load_card_list():
         quantity = int(quantity.strip())
         card_name = card_name.strip()
 
-        card = Card_list(
+        card = UserWishlistCard(
             name=card_name,
             quantity=quantity,
             quality='NM',  # Default value, adjust as needed

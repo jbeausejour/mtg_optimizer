@@ -1,3 +1,3 @@
-from .card_service import CardService
-from .scan_service import ScanService
-from .site_service import SiteService
+from .card_service import CardDataManager
+from .scan_service import PriceScanManager
+from .site_service import MarketplaceManager

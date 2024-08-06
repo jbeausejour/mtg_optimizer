@@ -26,7 +26,7 @@ class SeleniumDriver:
         options.add_experimental_option('useAutomationExtension', False)
 
         # Uncomment the following line when ready to use proxy rotation
-        # proxy = CardService.rotate_proxy()
+        # proxy = CardDataManager.rotate_proxy()
         # if proxy:
         #     options.add_argument(f'--proxy-server={proxy}')
 

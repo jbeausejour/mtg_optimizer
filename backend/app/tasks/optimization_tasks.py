@@ -2,9 +2,9 @@ from celery import shared_task
 from pytz import timezone
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
-from app.models.card import Card
+from app.models.card import MarketplaceCard
 from app.models.site import Site
-from app.utils.optimization import OptimizationEngine
+from app.utils.optimization import PurchaseOptimizer
 from datetime import datetime, timedelta, timezone
 import logging
 
@@ -22,7 +22,7 @@ def optimize_cards(self, card_list_dicts, site_ids):
             db.session.commit()
 
             # Fetch full card objects and sites
-            cards = Card.query.filter(Card.id.in_([card['id'] for card in card_list_dicts])).all()
+            cards = MarketplaceCard.query.filter(MarketplaceCard.id.in_([card['id'] for card in card_list_dicts])).all()
             sites = Site.query.filter(Site.id.in_(site_ids)).all()
 
             # Update task state
@@ -43,7 +43,7 @@ def optimize_cards(self, card_list_dicts, site_ids):
 
             # Run optimization
             self.update_state(state='PROGRESS', meta={'status': 'Running optimization'})
-            results = OptimizationEngine.run_optimization(cards, sites, config)
+            results = PurchaseOptimizer.run_optimization(cards, sites, config)
 
             # Save results
             self.update_state(state='PROGRESS', meta={'status': 'Saving results'})

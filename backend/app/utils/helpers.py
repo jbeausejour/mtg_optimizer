@@ -1,8 +1,8 @@
 import re
-from app.models.card import Card
+from app.models.card import MarketplaceCard
 
 def parse_card_string(card_string):
-    card = Card()
+    card = MarketplaceCard()
     parts = [part.strip() for part in card_string.split(' - ')]
 
     # Initialize variables for different parts

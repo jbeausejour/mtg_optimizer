@@ -1,6 +1,6 @@
 from app.models.scan import Scan, ScanResult
 
-class ScanService:
+class PriceScanManager:
     @staticmethod
     def get_scan_results(scan_id):
         scan = Scan.query.get_or_404(scan_id)
