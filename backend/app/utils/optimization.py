@@ -1,5 +1,5 @@
 # backend/app/utils/optimization.py
-from app.models.card import MarketplaceCard, UserWishlistCard
+from app.models.card import MarketplaceCard, UserBuylistCard
 from app.extensions import db
 import pulp
 import random
@@ -20,6 +20,9 @@ class PurchaseOptimizer:
         self.buylist_df = buylist_df
         self.config = config
 
+    def convert_to_dataframe(items):
+        return pd.DataFrame([item.to_dict() for item in items])
+    
     def run_milp_optimization(self):
         return self._run_pulp()
 
@@ -59,7 +62,7 @@ class PurchaseOptimizer:
     def _run_pulp(self):
         unique_cards = self.buylist_df['Name'].unique()
         unique_stores = self.card_details_df['Site'].unique()
-        total_qty = len(self.buylist_df)
+        total_qty = self.buylist_df['Quantity'].sum()
 
         high_cost = 10000  # High cost for unavailable card-store combinations
 
@@ -70,23 +73,42 @@ class PurchaseOptimizer:
                 price = self.card_details_df[(self.card_details_df['Name'] == card) & (self.card_details_df['Site'] == store)]['Weighted_Price'].min()
                 costs[card][store] = high_cost if pd.isna(price) else price
 
-        # Debug print statements
-        print(f"Number of unique cards: {len(unique_cards)}")
-        print(f"Number of unique stores: {len(unique_stores)}")
-        print(f"Costs: {costs}")
-        
-        prob, buy_vars = self._setup_prob(costs, unique_cards, unique_stores)
-        
-        # Debug print statements
-        print(f"Problem status: {pulp.LpStatus[prob.status]}")
-        print(f"Problem objective value: {pulp.value(prob.objective)}")
-        
-        if pulp.LpStatus[prob.status] != 'Optimal':
-            logger.warning("Solver did not find an optimal solution.")
-            return None, None
-        
-        results = self._process_result(buy_vars, costs, False, total_qty)
-        return results["sorted_results_df"], None
+        if self.config['find_min_store']:
+            min_stores = 1
+            max_stores = len(unique_stores)
+            best_result = None
+            all_iterations = []
+
+            while min_stores <= max_stores:
+                self.config['min_store'] = min_stores
+                prob, buy_vars, store_vars = self._setup_prob(costs, unique_cards, unique_stores)
+
+                if pulp.LpStatus[prob.status] == 'Optimal':
+                    result = self._process_result(buy_vars, store_vars, costs, total_qty)
+                    all_iterations.append(result)
+
+                    if result['total_cards'] == total_qty:
+                        best_result = result
+                        break
+
+                min_stores += 1
+
+            if best_result is None:
+                logger.warning("No optimal solution found for any number of stores.")
+                return None, all_iterations
+
+            return best_result['sorted_results_df'], all_iterations
+
+        else:
+            prob, buy_vars, store_vars = self._setup_prob(costs, unique_cards, unique_stores)
+
+            if pulp.LpStatus[prob.status] != 'Optimal':
+                logger.warning("Solver did not find an optimal solution.")
+                return None, None
+
+            result = self._process_result(buy_vars, store_vars, costs, total_qty)
+            return result['sorted_results_df'], None
+
 
     def _run_nsga_ii(self, milp_solution=None):
         toolbox = self._initialize_toolbox()
@@ -138,24 +160,33 @@ class PurchaseOptimizer:
         buy_vars = pulp.LpVariable.dicts("Buy", (unique_cards, unique_stores), 0, 1, pulp.LpBinary)
         store_vars = pulp.LpVariable.dicts("Store", unique_stores, 0, 1, pulp.LpBinary)
 
+        # Objective: Minimize cost
         prob += pulp.lpSum([buy_vars[card][store] * costs[card][store] for card in unique_cards for store in unique_stores])
 
+        # Constraints
         for card in unique_cards:
             required_quantity = self.buylist_df[self.buylist_df['Name'] == card]['Quantity'].iloc[0]
             prob += pulp.lpSum([buy_vars[card][store] for store in unique_stores]) == required_quantity
 
+        # Store usage constraint
         for store in unique_stores:
-            prob += store_vars[store] >= pulp.lpSum(buy_vars[card][store] for card in unique_cards) / len(unique_cards)
+            prob += store_vars[store] >= pulp.lpSum([buy_vars[card][store] for card in unique_cards]) / len(unique_cards)
 
-        prob += pulp.lpSum(store_vars[store] for store in unique_stores) <= self.config['min_store']
+        # Minimum number of stores constraint
+        prob += pulp.lpSum([store_vars[store] for store in unique_stores]) >= self.config['min_store']
+
+        # Maximum number of stores constraint (optional)
+        if 'max_store' in self.config:
+            prob += pulp.lpSum([store_vars[store] for store in unique_stores]) <= self.config['max_store']
+
         prob.solve(pulp.PULP_CBC_CMD(msg=False))
+        return prob, buy_vars, store_vars
 
-        return prob, buy_vars
-
-    def _process_result(self, buy_vars, costs, limited_output, total_qty):
-        Total_price = 0.0
+    def _process_result(self, buy_vars, store_vars, costs, total_qty):
+        total_price = 0.0
         results = []
         total_card_nbr = 0
+        stores_used = set()
 
         for card, store_dict in buy_vars.items():
             for store, var in store_dict.items():
@@ -164,46 +195,48 @@ class PurchaseOptimizer:
                     price_per_unit = costs[card][store]
                     card_store_total_price = quantity * price_per_unit
 
-                    if price_per_unit != 10000:
-                        Total_price += card_store_total_price
+                    if price_per_unit != 10000:  # Not a high-cost penalty
+                        total_price += card_store_total_price
                         total_card_nbr += quantity
-                        original_index = self.card_details_df[(self.card_details_df['Name'] == card) & (self.card_details_df['Site'] == store)].index[0]
-                        original_card = self.card_details_df.loc[original_index]
+                        stores_used.add(store)
+
+                        card_data = self.card_details_df[
+                            (self.card_details_df['Name'] == card) & 
+                            (self.card_details_df['Site'] == store)
+                        ].iloc[0]
 
                         results.append({
-                            "Original_Index": original_index,
-                            "Original_Card": original_card,
-                            "Card": card, 
-                            "Store": store, 
-                            "Quantity": quantity, 
+                            "Card": card,
+                            "Store": store,
+                            "Quantity": quantity,
                             "Price": price_per_unit,
-                            "Total Price": card_store_total_price
+                            "Total Price": card_store_total_price,
+                            "Quality": card_data['Quality'],
+                            "Language": card_data['Language']
                         })
-
-                    if not limited_output:
-                        logger.info(f"{'Cannot Buy' if price_per_unit == 10000 else 'Buy'} {quantity} x {card} from {store if price_per_unit != 10000 else 'any stores'} at a price of ${price_per_unit} each, totalizing ${card_store_total_price}")
 
         results_df = pd.DataFrame(results)
         sorted_results_df = results_df.sort_values(by=['Store', 'Card'])
         sorted_results_df.reset_index(drop=True, inplace=True)
 
-        num_stores_used = results_df['Store'].nunique()
-        store_usage_counts = sorted_results_df[sorted_results_df['Price'] != 10000]['Store'].value_counts()
+        num_stores_used = len(stores_used)
+        store_usage_counts = sorted_results_df['Store'].value_counts()
         store_usage_str = ', '.join([f"{store}: {count}" for store, count in store_usage_counts.items()])
 
-        if not limited_output:
-            logger.info(f"Minimum number of different sites to order from: {num_stores_used}")
-            logger.info(f"Sites to order from: {store_usage_str}")
-            logger.info(f"Total price of all purchases ${Total_price:.2f}")
-            logger.info(f"Total number of cards purchased: {total_card_nbr}/{total_qty}")
+        logger.info(f"Optimization Results:")
+        logger.info(f"Total price of all purchases: ${total_price:.2f}")
+        logger.info(f"Total number of cards purchased: {total_card_nbr}/{total_qty}")
+        logger.info(f"Number of stores used: {num_stores_used}")
+        logger.info(f"Stores used: {store_usage_str}")
 
         return {
-            "nbr_card_in_solution": total_card_nbr,
-            "Total_price": Total_price,
-            "Number_store": num_stores_used,
-            "List_stores": store_usage_str,
-            "sorted_results_df": sorted_results_df
+            "sorted_results_df": sorted_results_df,
+            "total_price": total_price,
+            "total_cards": total_card_nbr,
+            "num_stores": num_stores_used,
+            "stores_used": store_usage_str
         }
+
 
     def _initialize_toolbox(self):
         toolbox = base.Toolbox()

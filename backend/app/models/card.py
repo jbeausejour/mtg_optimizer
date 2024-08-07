@@ -32,7 +32,7 @@ class MarketplaceCard(db.Model):
             'set_id': self.set_id
         }
     
-class UserWishlistCard(db.Model):
+class UserBuylistCard(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(255), nullable=False)
     edition = db.Column(db.String(255))

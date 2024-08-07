@@ -7,18 +7,20 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.site import Site
-from app.models.card import MarketplaceCard, UserWishlistCard
+from app.models.card import MarketplaceCard, UserBuylistCard
 from app.models.scan import Scan, ScanResult
-from app.utils.helpers import clean_card_name, parse_card_string, extract_numbers
+from app.utils.helpers import clean_card_name, parse_card_string, extract_numbers, normalize_price
 from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
-STRATEGY_ADD_TO_CART = 1
-STRATEGY_SCRAPPER = 2
-STRATEGY_HAWK = 3
 
 class ExternalDataSynchronizer:
+    
+    STRATEGY_ADD_TO_CART = 1
+    STRATEGY_SCRAPPER = 2
+    STRATEGY_HAWK = 3
+    
     def __init__(self):
         self.session = None
         self.headers = {
@@ -88,14 +90,14 @@ class ExternalDataSynchronizer:
         for _, card_data in cards_df.iterrows():
             card = MarketplaceCard(
                 site=site.name,
-                name=card_data['Name'],
-                edition=card_data['Edition'],
-                version=card_data.get('Version'),
-                foil=card_data.get('Foil', False),
-                quality=card_data['Quality'],
-                language=card_data['Language'],
-                quantity=card_data['Quantity'],
-                price=card_data['Price']
+                name=card_data['name'],
+                edition=card_data['edition'],
+                version=card_data.get('version'),
+                foil=card_data.get('foil', False),
+                quality=card_data['quality'],
+                language=card_data['language'],
+                quantity=card_data['quantity'],
+                price=card_data['price']
             )
             db.session.add(card)
             db.session.flush()
@@ -104,7 +106,7 @@ class ExternalDataSynchronizer:
                 scan_id=scan.id,
                 card_id=card.id,
                 site=site.name,
-                price=card_data['Price']
+                price=card_data['price']
             )
             db.session.add(scan_result)
 
@@ -112,8 +114,8 @@ class ExternalDataSynchronizer:
 
     @classmethod
     async def update_all_cards(cls):
-        card_names = UserWishlistCard.query.with_entities(UserWishlistCard.name).distinct().all()
-        card_names = [card.name for card in card_names]
+        card_query = UserBuylistCard.query.with_entities(UserBuylistCard.name).distinct().all()
+        card_names = [card.name for card in card_query]
         sites = Site.query.filter_by(active=True).all()
 
         async with cls() as fetcher:
@@ -137,8 +139,8 @@ class ExternalDataSynchronizer:
             'intro packs and planeswalker decks', 'wall scrolls'
         }
 
-        if strategy == STRATEGY_HAWK:
-            return pd.DataFrame([card.to_dict() for card in ExternalDataSynchronizer.strategy_hawk(soup)])
+        if strategy == ExternalDataSynchronizer.STRATEGY_HAWK:
+            return pd.DataFrame(ExternalDataSynchronizer.strategy_hawk(soup))
 
         content = soup.find('div', {'class': ['content', 'content clearfix', 'content inner clearfix']})
         if content is None:
@@ -152,11 +154,11 @@ class ExternalDataSynchronizer:
 
         for container in products_containers:
             for item in container.find_all('li', {'class': 'product'}):
-                card = ExternalDataSynchronizer.process_product_item(item, site, card_names, excluded_categories)
-                if card:
-                    ExternalDataSynchronizer.process_variants(item, card, cards, seen_variants, strategy)
+                card_attrs = ExternalDataSynchronizer.process_product_item(item, site, card_names, excluded_categories)
+                if card_attrs:
+                    ExternalDataSynchronizer.process_variants(item, card_attrs, cards, seen_variants, strategy)
 
-        return pd.DataFrame([card.to_dict() for card in cards])
+        return pd.DataFrame(cards)
 
     @staticmethod
     def process_product_item(item, site, card_names, excluded_categories):
@@ -170,24 +172,24 @@ class ExternalDataSynchronizer:
         if any(cat in test_category.lower() for cat in excluded_categories):
             return None
 
-        card = parse_card_string(test_title)
-        card.Site = site
-        card.Name = clean_card_name(card.Name, card_names)
-        card.Edition = test_category
+        card_attrs = parse_card_string(test_title)
+        card_attrs['name'] = clean_card_name(card_attrs['name'], card_names)
+        card_attrs['edition'] = test_category
+        card_attrs['site'] = site.name
 
-        if not card.Name or card.Name not in card_names and card.Name.split(' // ')[0].strip() not in card_names:
+        if not card_attrs['name'] or (card_attrs['name'] not in card_names and card_attrs['name'].split(' // ')[0].strip() not in card_names):
             return None
 
-        return card
+        return card_attrs
 
     @staticmethod
-    def process_variants(item, card, cards, seen_variants, strategy):
+    def process_variants(item, card_attrs, cards, seen_variants, strategy):
         variants = item.find('div', {'class': 'variants'})
         for variant in variants.find_all('div', {'class': 'variant-row'}):
-            card_variant = ExternalDataSynchronizer.strategy_add_to_cart(card, variant) if strategy == STRATEGY_ADD_TO_CART else ExternalDataSynchronizer.strategy_scrapper(card, variant)
-            if card_variant is not None and card_variant not in seen_variants:
+            card_variant = ExternalDataSynchronizer.strategy_add_to_cart(card_attrs.copy(), variant) if strategy == ExternalDataSynchronizer.STRATEGY_ADD_TO_CART else ExternalDataSynchronizer.strategy_scrapper(card_attrs.copy(), variant)
+            if card_variant is not None and tuple(card_variant.items()) not in seen_variants:
                 cards.append(card_variant)
-                seen_variants.add(card_variant)
+                seen_variants.add(tuple(card_variant.items()))
 
     @staticmethod
     def is_yugioh_card(item):
@@ -196,7 +198,7 @@ class ExternalDataSynchronizer:
         return a_tag and 'yugioh' in a_tag['href']
 
     @staticmethod
-    def strategy_add_to_cart(card, variant):
+    def strategy_add_to_cart(card_attrs, variant):
         if 'no-stock' in variant.get('class', []) or '0 In Stock' in variant:
             return None
         
@@ -210,10 +212,10 @@ class ExternalDataSynchronizer:
 
         unclean_name, product_version, product_foil = ExternalDataSynchronizer.find_name_version_foil(attributes['data-name'])
 
-        if not card.Foil:
-            card.Foil = product_foil
-        if not card.Edition:
-            card.Edition = product_version
+        if not card_attrs.get('foil'):
+            card_attrs['foil'] = product_foil
+        if not card_attrs.get('edition'):
+            card_attrs['edition'] = product_version
 
         quality_language = ExternalDataSynchronizer.normalize_variant_description(attributes['data-variant'])
         quality, language = quality_language[:2]
@@ -221,38 +223,38 @@ class ExternalDataSynchronizer:
         select_tag = variant.find('select', {'class': 'qty'}) or variant.find('input', {'class': 'qty'})
         qty_available = select_tag['max'] if select_tag and 'max' in select_tag.attrs else "0"
 
-        card.Quality = quality
-        card.Language = language
-        card.Quantity = int(qty_available)
-        card.Edition = attributes['data-category']
-        card.Price = ExternalDataSynchronizer.normalize_price(attributes['data-price'])
+        card_attrs['quality'] = quality
+        card_attrs['language'] = language
+        card_attrs['quantity'] = int(qty_available)
+        card_attrs['edition'] = attributes['data-category']
+        card_attrs['price'] = normalize_price(attributes['data-price'])
 
-        return card
+        return card_attrs
 
     @staticmethod
-    def strategy_scrapper(card, variant):
+    def strategy_scrapper(card_attrs, variant):
         if 'no-stock' in variant.get('class', []) or '0 In Stock' in variant:
             return None
 
         try:
-            quality, language = ExternalDataSynchronizer.extract_quality_language(card, variant)
+            quality, language = ExternalDataSynchronizer.extract_quality_language(card_attrs, variant)
             if quality is None or language is None:
                 return None
 
-            quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
+            quantity = ExternalDataSynchronizer.extract_quantity(card_attrs, variant)
             if quantity is None:
                 return None
 
-            price = ExternalDataSynchronizer.extract_price(card, variant)
+            price = ExternalDataSynchronizer.extract_price(card_attrs, variant)
 
-            card.Quality = quality
-            card.Language = language
-            card.Quantity = quantity
-            card.Price = price
+            card_attrs['quality'] = quality
+            card_attrs['language'] = language
+            card_attrs['quantity'] = quantity
+            card_attrs['price'] = price
 
-            return card
+            return card_attrs
         except Exception as e:
-            logger.exception(f"Error in strategy_scrapper for {card.Name}: {str(e)}")
+            logger.exception(f"Error in strategy_scrapper for {card_attrs['name']}: {str(e)}")
             return None
 
     @staticmethod
@@ -314,33 +316,33 @@ class ExternalDataSynchronizer:
         return [part.strip() for part in variant_parts]
 
     @staticmethod
-    def extract_quality_language(card, variant):
+    def extract_quality_language(card_attrs, variant):
         variant_description = variant.find('span', {'class': 'variant-short-info variant-description'}) or \
                               variant.find('span', {'class': 'variant-short-info'})
         if variant_description:
             quality_language = ExternalDataSynchronizer.normalize_variant_description(variant_description.text)
             return quality_language[:2]
         else:
-            logger.error(f"Error in extract_quality_language for {card.Name}: variant-description not found")
+            logger.error(f"Error in extract_quality_language for {card_attrs['name']}: variant-description not found")
             return None, None
 
     @staticmethod
-    def extract_quantity(card, variant):
+    def extract_quantity(card_attrs, variant):
         variant_qty = variant.find('span', {'class': 'variant-short-info variant-qty'}) or \
                       variant.find('span', {'class': 'variant-short-info'})
         if variant_qty:
             variant_qty = variant_qty.text.strip()
             return extract_numbers(variant_qty)
         else:
-            logger.error(f"Error in extract_quantity for {card.Name}: variant-qty not found")
+            logger.error(f"Error in extract_quantity for {card_attrs['name']}: variant-qty not found")
             return None
 
     @staticmethod
-    def extract_price(card, variant):
+    def extract_price(card_attrs, variant):
         price_elem = variant.find('span', {'class': 'regular price'})
         if price_elem is not None:
             price_text = price_elem.text
-            return ExternalDataSynchronizer.normalize_price(price_text)
+            return normalize_price(price_text)
         else:
-            logger.error(f"Error in extract_price for {card.Name}: Price element not found")
+            logger.error(f"Error in extract_price for {card_attrs['name']}: Price element not found")
             return 0.0

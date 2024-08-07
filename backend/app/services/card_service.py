@@ -12,7 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from app.extensions import db
 from app.utils.selenium_driver import SeleniumDriver
-from app.models.card import MarketplaceCard, UserWishlistCard, ScryfallCardData
+from app.models.card import MarketplaceCard, UserBuylistCard, ScryfallCardData
 from app.models.sets import Sets
 from app.utils.data_fetcher import ExternalDataSynchronizer
 from app.utils.optimization import PurchaseOptimizer
@@ -26,12 +26,12 @@ CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 class CardDataManager:
     @staticmethod
-    def get_all_cards():
-        print('Getting cards!')
-        return UserWishlistCard.query.all()
+    def get_all_user_buylist_cards():
+        print('Getting stored buylist cards!')
+        return UserBuylistCard.query.all()
 
     @staticmethod
-    def get_card_versions(card_name):
+    def get_scryfall_card_versions(card_name):
         response = requests.get(SCRYFALL_SEARCH_API_URL, params={'q': f'!"{card_name}"'})
         response.raise_for_status()
         
@@ -54,7 +54,7 @@ class CardDataManager:
         }
     
     @staticmethod
-    def get_all_sets():
+    def get_all_sets_from_scryfall():
         logger.info('Getting all sets!')
         try:
             # Check if we need to update the sets
@@ -416,13 +416,13 @@ class CardDataManager:
         return None
 
     @staticmethod
-    async def update_card_data():
+    async def update_cards_data():
         await ExternalDataSynchronizer.update_all_cards()
 
     @staticmethod
     def optimize_card_purchases(strategy='milp', min_store=None, find_min_store=False):
         card_details_df = pd.read_sql(MarketplaceCard.query.statement, MarketplaceCard.query.session.bind)
-        buylist_df = pd.read_sql(UserWishlistCard.query.statement, UserWishlistCard.query.session.bind)
+        buylist_df = pd.read_sql(UserBuylistCard.query.statement, UserBuylistCard.query.session.bind)
 
         optimization_engine = PurchaseOptimizer(card_details_df, buylist_df)
 
@@ -439,6 +439,6 @@ class CardDataManager:
     @staticmethod
     def get_purchasing_plan(solution):
         card_details_df = pd.read_sql(MarketplaceCard.query.statement, MarketplaceCard.query.session.bind)
-        buylist_df = pd.read_sql(UserWishlistCard.query.statement, UserWishlistCard.query.session.bind)
+        buylist_df = pd.read_sql(UserBuylistCard.query.statement, UserBuylistCard.query.session.bind)
         optimization_engine = PurchaseOptimizer(card_details_df, buylist_df)
         return optimization_engine.get_purchasing_plan(solution)

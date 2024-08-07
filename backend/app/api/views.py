@@ -25,9 +25,10 @@ def favicon():
 def send_static(path):
     return send_from_directory('static/', path)
 
+# Retrieve the cards the user wants to buy
 @views.route('/cards', methods=['GET'])
 def get_cards():
-    cards = CardDataManager.get_all_cards()
+    cards = CardDataManager.get_all_user_buylist_cards()
     #print(cards)
     return jsonify([card.to_dict() for card in cards])
 
@@ -38,7 +39,7 @@ def get_site_list():
 
 @views.route('/sets', methods=['GET'])
 def get_sets():
-    sets_data = CardDataManager.get_all_sets()
+    sets_data = CardDataManager.get_all_sets_from_scryfall()
     return jsonify([set_data.to_dict() for set_data in sets_data])
 
 @views.route('/scans', methods=['GET']) 
@@ -46,13 +47,14 @@ def get_scans():
     scans = PriceScanManager.get_all_scan_results()
     return jsonify([scan.to_dict() for scan in scans])
 
+# get specific and ponctual information on a card 
 @views.route('/card_versions', methods=['GET'])
 def get_card_versions_route():
     card_name = request.args.get('name')
     if not card_name:
         return jsonify({'error': 'Card name is required'}), 400
     
-    versions = CardDataManager.get_card_versions(card_name)
+    versions = CardDataManager.get_scryfall_card_versions(card_name)
     return jsonify(versions)
 
 @views.route('/fetch_card', methods=['GET'])
@@ -75,7 +77,7 @@ def fetch_card():
 @views.route('/optimize', methods=['POST'])
 def optimize():
     sites = request.json.get('sites', [])
-    card_list = CardDataManager.get_all_cards()
+    card_list = CardDataManager.get_all_user_buylist_cards()
 
     try:
         # Convert Card_list objects to dictionaries
@@ -120,7 +122,7 @@ def get_results(scan_id):
     return jsonify(scan.to_dict())
 
 @views.route('/update_card_data', methods=['POST'])
-def update_card_data():
+def update_cards_data():
     try:
         # Run the asynchronous update_all_cards method
         asyncio.run(ExternalDataSynchronizer.update_all_cards())
