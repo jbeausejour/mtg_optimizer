@@ -415,6 +415,7 @@ class CardDataManager:
             }
         return None
 
+    #a revoir
     @staticmethod
     async def update_cards_data():
         await ExternalDataSynchronizer.update_all_cards()

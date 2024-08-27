@@ -18,3 +18,4 @@ logs/
 package-lock.json
 backend/__pycache__/
 backend/__pycache__/*
+backend/migrations/__pycache__/env.cpython-312.pyc

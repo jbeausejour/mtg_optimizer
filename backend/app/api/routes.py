@@ -1,4 +1,5 @@
-from app.api.views import views
+from flask import Blueprint
+from .views import views
 import logging
 
 logger = logging.getLogger(__name__)

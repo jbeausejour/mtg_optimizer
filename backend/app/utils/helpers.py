@@ -2,7 +2,7 @@ import re
 from app.models.card import MarketplaceCard
 
 def parse_card_string(card_string):
-    card = {}
+    card = MarketplaceCard()
     parts = [part.strip() for part in card_string.split(' - ')]
 
     # Initialize variables for different parts
@@ -17,11 +17,12 @@ def parse_card_string(card_string):
                 special = part
             else:
                 version = part
-    card['name'] = name
-    card['version'] = version
-    card['foil'] = foil
+    card.Name = name
+    card.Version = version
+    card.Foil = foil
 
     return card
+
 
 def clean_card_name(name, original_names):
     # Remove any numeric suffixes in parentheses

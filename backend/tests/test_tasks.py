@@ -2,7 +2,7 @@ import time
 from app import create_app
 from app.tasks.optimization_tasks import cleanup_old_scans, test_task
 
-app = create_app()
+app, celery = create_app()
 
 def test_simple_task():
     result = test_task.delay()
@@ -29,6 +29,9 @@ def test_cleanup_old_scans():
 if __name__ == "__main__":
     print("Testing simple task:")
     test_simple_task()
+
+    print("\nTesting cleanup_old_scans task:")
+    test_cleanup_old_scans()
 
     print("\nTesting cleanup_old_scans task:")
     test_cleanup_old_scans()

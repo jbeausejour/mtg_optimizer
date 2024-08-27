@@ -1,35 +1,25 @@
 from flask import Flask
-from flask_cors import CORS
-from logging.handlers import RotatingFileHandler
 from config import get_config
-from .extensions import db, migrate, jwt
-from .tasks.celery_app import make_celery
-from .tasks import CeleryConfig
-
+from .extensions import init_extensions
+from logging.handlers import RotatingFileHandler
 import logging
 import os
 
 def create_app(config_class=get_config()):
-    app = Flask(__name__, template_folder='templates', instance_relative_config=True)
+    app = Flask(__name__, static_folder='static', template_folder='templates', instance_relative_config=True)
     app.config.from_object(config_class)
 
-    # Initialize extensions
-    db.init_app(app)
-    migrate.init_app(app, db)
-    jwt.init_app(app)
-    CORS(app)
+    init_extensions(app)
 
-    CeleryConfig.init_app(app)
-    
-    # Initialize Celery
-    celery = make_celery(app)
-    app.extensions['celery'] = celery
+    with app.app_context():
+        from .api.routes import register_blueprints
+        register_blueprints(app)
 
-    # Register blueprints
-    from .api.routes import register_blueprints
-    register_blueprints(app)
+    setup_logging(app)
 
-    # Setup logging
+    return app
+
+def setup_logging(app):
     if not app.debug and not app.testing:
         if app.config.get('LOG_TO_STDOUT'):
             app.logger.addHandler(logging.StreamHandler())
@@ -43,7 +33,3 @@ def create_app(config_class=get_config()):
 
         app.logger.setLevel(logging.INFO)
         app.logger.info('MTG Optimizer startup')
-    return app
-
-# Import models after create_app to avoid circular imports
-from . import models

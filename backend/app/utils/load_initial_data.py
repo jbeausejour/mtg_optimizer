@@ -1,5 +1,6 @@
 import os
 import csv
+from app import create_app
 from app.extensions import db
 from sqlalchemy import text, inspect
 from app.models.site import Site
@@ -16,9 +17,9 @@ SQL_FILE = os.path.join(DATA_DIR, 'sql', 'magic_sets.sql')
 
 def truncate_tables():
     # Delete all rows from each table
-    db.session.query(Site).delete()
+    # db.session.query(Site).delete()
     db.session.query(UserBuylistCard).delete()
-    db.session.query(Sets).delete()
+    # db.session.query(Sets).delete()
     
     # Check if sqlite_sequence table exists
     inspector = inspect(db.engine)
@@ -97,13 +98,11 @@ def load_sql_file():
 
 
 def load_all_data():
-    load_site_list()
+    # load_site_list()
     load_card_list()
-    load_sql_file()
+    # load_sql_file()
 
 if __name__ == '__main__':
-    
-    from app import create_app
     app = create_app()
     with app.app_context():
         # Truncate specified tables

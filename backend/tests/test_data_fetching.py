@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from bs4 import BeautifulSoup
 import pandas as pd
 from app.utils.data_fetcher import ExternalDataSynchronizer
+import sys
 
 class TestExternalDataSynchronizer(unittest.TestCase):
 
@@ -66,13 +67,12 @@ class TestExternalDataSynchronizer(unittest.TestCase):
             'quantity': 5,
             'price': 10.0
         }])
-        card_names = ['Test Card']
 
-        ExternalDataSynchronizer.save_cards_to_db(site, cards_df, card_names)
+        ExternalDataSynchronizer.save_cards_to_db(site, cards_df)
 
-        mock_scan.assert_called_once_with(card_names=card_names)
+        mock_scan.assert_called_once_with()
         mock_marketplace_card.assert_called_once_with(
-            site='Test Site',
+            site=site.name,  # Change this line
             name='Test Card',
             edition='Test Edition',
             version='Regular',
@@ -96,9 +96,10 @@ class TestExternalDataSynchronizer(unittest.TestCase):
         }
         mock_clean_card_name.return_value = 'Non-existent Card'
         
-        card_names = ['Non-existent Card']
+        card_names = ['Some Other Card']  # This should not match the card in the HTML
         result = ExternalDataSynchronizer.extract_info(self.soup, self.site, card_names, strategy=ExternalDataSynchronizer.STRATEGY_SCRAPPER)
-        self.assertTrue(result.empty)
+        
+        self.assertTrue(result.empty, f"Expected empty DataFrame, but got: {result}")
 
     def test_extract_info_empty_soup(self):
         empty_soup = BeautifulSoup('', 'html.parser')
@@ -112,7 +113,7 @@ class TestExternalDataSynchronizer(unittest.TestCase):
         empty_df = pd.DataFrame()
         card_names = []
 
-        ExternalDataSynchronizer.save_cards_to_db(site, empty_df, card_names)
+        ExternalDataSynchronizer.save_cards_to_db(site, empty_df)
 
         mock_scan.assert_called_once_with(card_names=card_names)
         self.assertEqual(mock_session.add.call_count, 1)
@@ -138,7 +139,7 @@ class TestExternalDataSynchronizer(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertEqual(result['name'], 'Sample Card')
         self.assertEqual(result['edition'], 'Sample Edition')
-        self.assertEqual(result['site'], 'Test Site')
+        self.assertEqual(result['site'], site.name)  # Change this line
 
     def test_strategy_add_to_cart(self):
         card_attrs = {
@@ -146,19 +147,34 @@ class TestExternalDataSynchronizer(unittest.TestCase):
             'edition': 'Sample Edition',
             'foil': False
         }
-        variant = self.soup.find('div', {'class': 'variant-row'})
+        variant_html = '''
+        <div class="variant-row">
+            <form class="add-to-cart-form" data-name="Sample Card - Regular" data-variant="Near Mint, English" data-price="$10.00" data-category="Sample Edition">
+                <select class="qty" max="5"></select>
+            </form>
+        </div>
+        '''
+        variant = BeautifulSoup(variant_html, 'html.parser').find('div', {'class': 'variant-row'})
         
         with patch('app.utils.data_fetcher.ExternalDataSynchronizer.find_name_version_foil', return_value=('Sample Card', 'Regular', 'Non-Foil')):
             with patch('app.utils.data_fetcher.ExternalDataSynchronizer.normalize_variant_description', return_value=['Near Mint', 'English']):
                 with patch('app.utils.data_fetcher.normalize_price', return_value=10.0):
                     result = ExternalDataSynchronizer.strategy_add_to_cart(card_attrs, variant)
 
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result['name'], 'Sample Card')
-        self.assertEqual(result['quality'], 'Near Mint')
-        self.assertEqual(result['language'], 'English')
-        self.assertEqual(result['quantity'], 5)
-        self.assertEqual(result['price'], 10.0)
+        self.assertIsNotNone(result, "strategy_add_to_cart returned None")
+        if result is not None:
+            self.assertIsInstance(result, dict)
+            self.assertEqual(result['name'], 'Sample Card')
+            self.assertEqual(result['quality'], 'Near Mint')
+            self.assertEqual(result['language'], 'English')
+            self.assertEqual(result['quantity'], 5)
+            self.assertEqual(result['price'], 10.0)
+
+
+
+def run_tests_with_output():
+    suite = unittest.TestLoader().loadTestsFromTestCase(TestExternalDataSynchronizer)
+    unittest.TextTestRunner(verbosity=2, stream=sys.stdout).run(suite)
 
 if __name__ == '__main__':
-    unittest.main()
+    run_tests_with_output()

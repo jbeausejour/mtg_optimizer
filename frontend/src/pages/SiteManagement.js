@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Table, Input, Button, Form, message, Switch } from 'antd';
+import { Table, Input, Button, Form, message, Switch, Modal } from 'antd';
 import axios from 'axios';
-import { SaveOutlined, EditOutlined } from '@ant-design/icons';
+import { SaveOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import ThemeContext from '../utils/ThemeContext';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
-  const [modifiedSites, setModifiedSites] = useState({});
+  const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
-
+  const [addForm] = Form.useForm();
   const { isDarkMode } = useContext(ThemeContext);
 
   useEffect(() => {
@@ -33,6 +33,18 @@ const SiteManagement = () => {
     } catch (error) {
       console.error('Error updating site:', error);
       message.error('Error updating site');
+    }
+  };
+
+  const handleAdd = async (data) => {
+    try {
+      const response = await axios.post('/api/v1/sites', data);
+      setSites([...sites, { ...response.data, key: response.data.id }]);
+      message.success('Site added successfully');
+      setIsModalVisible(false);
+    } catch (error) {
+      console.error('Error adding site:', error);
+      message.error('Error adding site');
     }
   };
 
@@ -66,6 +78,40 @@ const SiteManagement = () => {
     }));
   };
 
+  const handleSwitchChange = (key, checked) => {
+    handleChange(key, 'active', checked);
+  };
+
+  const handleEditMode = () => {
+    if (isEditing) {
+      saveAll();
+    } else {
+      const initialValues = sites.reduce((acc, site) => {
+        acc[site.key] = site;
+        return acc;
+      }, {});
+      form.setFieldsValue(initialValues);
+      setIsEditing(true);
+    }
+  };
+
+  const columns = [
+    { title: 'Name', dataIndex: 'name', key: 'name', editable: true },
+    { title: 'URL', dataIndex: 'url', key: 'url', editable: true },
+    { title: 'Method', dataIndex: 'method', key: 'method', editable: true },
+    { 
+      title: 'Active', 
+      dataIndex: 'active', 
+      key: 'active', 
+      editable: true,
+      render: (_, record) => (
+        <Switch checked={record.active} onChange={(checked) => handleSwitchChange(record.key, checked)} />
+      )
+    },
+    { title: 'Country', dataIndex: 'country', key: 'country', editable: true },
+    { title: 'Type', dataIndex: 'type', key: 'type', editable: true },
+  ];
+
   const EditableCell = ({
     editing,
     dataIndex,
@@ -91,27 +137,6 @@ const SiteManagement = () => {
     );
   };
 
-  const columns = [
-    { title: 'Name', dataIndex: 'name', key: 'name', editable: true },
-    { title: 'URL', dataIndex: 'url', key: 'url', editable: true },
-    { title: 'Method', dataIndex: 'method', key: 'method', editable: true },
-    { 
-      title: 'Active', 
-      dataIndex: 'active', 
-      key: 'active', 
-      editable: true,
-      render: (_, record) => (
-        <Switch checked={record.active} onChange={(checked) => handleSwitchChange(record.key, checked)} />
-      )
-    },
-    { title: 'Country', dataIndex: 'country', key: 'country', editable: true },
-    { title: 'Type', dataIndex: 'type', key: 'type', editable: true },
-  ];
-  
-  const handleSwitchChange = (key, checked) => {
-    handleChange(key, 'active', checked);
-  };
-
   const mergedColumns = columns.map((col) => {
     if (!col.editable) {
       return col;
@@ -127,18 +152,13 @@ const SiteManagement = () => {
     };
   });
 
-  const handleEditMode = () => {
-    if (isEditing) {
-      saveAll();
-    } else {
-      // Set initial form values
-      const initialValues = sites.reduce((acc, site) => {
-        acc[site.key] = site;
-        return acc;
-      }, {});
-      form.setFieldsValue(initialValues);
-      setIsEditing(true);
-    }
+  const handleAddSite = () => {
+    addForm.validateFields().then(values => {
+      handleAdd(values);
+      addForm.resetFields();
+    }).catch(info => {
+      console.log('Validate Failed:', info);
+    });
   };
 
   return (
@@ -150,6 +170,13 @@ const SiteManagement = () => {
         onClick={handleEditMode}
       >
         {isEditing ? 'Save All' : 'Edit Mode'}
+      </Button>
+      <Button
+        type="primary"
+        icon={<PlusOutlined />}
+        onClick={() => setIsModalVisible(true)}
+      >
+        Add Site
       </Button>
       <Form form={form} component={false}>
         <Table
@@ -165,6 +192,33 @@ const SiteManagement = () => {
           pagination={false}
         />
       </Form>
+      <Modal
+        title="Add New Site"
+        visible={isModalVisible}
+        onOk={handleAddSite}
+        onCancel={() => setIsModalVisible(false)}
+      >
+        <Form form={addForm} layout="vertical">
+          <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Please input the site name!' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="url" label="URL" rules={[{ required: true, message: 'Please input the site URL!' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="method" label="Method" rules={[{ required: true, message: 'Please input the site method!' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="active" label="Active" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="country" label="Country" rules={[{ required: true, message: 'Please input the country!' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="type" label="Type" rules={[{ required: true, message: 'Please input the site type!' }]}>
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

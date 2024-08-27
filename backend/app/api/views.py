@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request, send_from_directory, render_template
-from app.tasks.optimization_tasks import optimize_cards
+from app.tasks.optimization_tasks import optimize_cards, test_task
 from app.services.card_service import CardDataManager
 from app.services.site_service import MarketplaceManager
 from app.services.scan_service import PriceScanManager
@@ -7,7 +7,6 @@ from app.utils.data_fetcher import ExternalDataSynchronizer
 from app.utils.load_initial_data import load_all_data, truncate_tables
 import logging
 import asyncio
-
 
 logger = logging.getLogger(__name__)
 views = Blueprint('views', __name__, template_folder='templates')
@@ -36,6 +35,26 @@ def get_cards():
 def get_site_list():
     sites = MarketplaceManager.get_all_sites()
     return jsonify([site.to_dict() for site in sites])
+
+@views.route('/sites', methods=['POST'])
+def add_site():
+    try:
+        data = request.json
+        new_site = MarketplaceManager.add_site(data)
+        return jsonify(new_site.to_dict()), 201
+    except Exception as e:
+        logger.error(f"Error adding site: {str(e)}")
+        return jsonify({'error': 'Failed to add site'}), 500
+
+@views.route('/sites/<int:site_id>', methods=['PUT'])
+def update_site(site_id):
+    try:
+        data = request.json
+        updated_site = MarketplaceManager.update_site(site_id, data)
+        return jsonify(updated_site.to_dict()), 200
+    except Exception as e:
+        logger.error(f"Error updating site: {str(e)}")
+        return jsonify({'error': 'Failed to update site'}), 500
 
 @views.route('/sets', methods=['GET'])
 def get_sets():
@@ -76,23 +95,41 @@ def fetch_card():
 
 @views.route('/optimize', methods=['POST'])
 def optimize():
-    sites = request.json.get('sites', [])
-    card_list = CardDataManager.get_all_user_buylist_cards()
-
+    logger.info("Optimize route called")
     try:
-        # Convert Card_list objects to dictionaries
-        card_list_dicts = [card.to_dict() for card in card_list]
-        
-        # Run the optimization as a Celery task
-        task = optimize_cards.delay(card_list_dicts, sites)
+        #logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
+        logger.info("Attempting to start test task")
+        task = test_task.delay()
+        logger.info(f"Test task started with id: {task.id}")
 
         return jsonify({
-            'status': 'Optimization task started',
+            'status': 'Test task started',
             'task_id': task.id
         }), 202  # 202 Accepted
     except Exception as e:
-        logger.error(f"Error starting optimization task: {str(e)}")
-        return jsonify({'error': 'Failed to start optimization task'}), 500
+        logger.error(f"Error starting test task: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to start test task'}), 500
+
+# @views.route('/optimize', methods=['POST'])
+# def optimize():
+#     sites = request.json.get('sites', [])
+#     card_list = CardDataManager.get_all_user_buylist_cards()
+
+#     try:
+#         # Convert Card_list objects to dictionaries
+#         card_list_dicts = [card.to_dict() for card in card_list]
+        
+#         # Run the optimization as a Celery task
+#         task = test_task.delay()
+#         task = optimize_cards.delay(card_list_dicts, sites)
+
+#         return jsonify({
+#             'status': 'Optimization task started',
+#             'task_id': task.id
+#         }), 202  # 202 Accepted
+#     except Exception as e:
+#         logger.error(f"Error starting optimization task: {str(e)}")
+#         return jsonify({'error': 'Failed to start optimization task'}), 500
 
 @views.route('/optimization_status/<task_id>', methods=['GET'])
 def optimization_status(task_id):
@@ -122,7 +159,7 @@ def get_results(scan_id):
     return jsonify(scan.to_dict())
 
 @views.route('/update_card_data', methods=['POST'])
-def update_cards_data():
+def update_card_data():
     try:
         # Run the asynchronous update_all_cards method
         asyncio.run(ExternalDataSynchronizer.update_all_cards())

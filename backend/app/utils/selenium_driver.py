@@ -10,8 +10,6 @@ CHROME_DRIVER_PATH = f"{homedir}/Downloads/chromedriver-win64/chromedriver.exe"
 
 logging.getLogger('selenium').setLevel(logging.WARNING)
 
-
-
 class SeleniumDriver:
     @staticmethod
     def get_driver(use_headless=True):

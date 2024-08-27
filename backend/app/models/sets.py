@@ -3,8 +3,7 @@ from datetime import datetime, timezone
 
 class Sets(db.Model):
     __tablename__ = 'sets'
-
-    id = db.Column(db.String(36), primary_key=True)  # Using Scryfall's UUID
+    id = db.Column(db.String(36), primary_key=True)   # Using Scryfall's UUID
     code = db.Column(db.String(10), unique=True, nullable=False)
     tcgplayer_id = db.Column(db.Integer)
     name = db.Column(db.String(255), nullable=False)
@@ -20,7 +19,7 @@ class Sets(db.Model):
     foil_only = db.Column(db.Boolean, default=False)
     icon_svg_uri = db.Column(db.String(255))
     last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc))
-    cards = db.relationship('Card', back_populates='sets')
+    marketplace_cards = db.relationship('MarketplaceCard', back_populates='set')
 
     def to_dict(self):
         return {

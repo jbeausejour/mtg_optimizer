@@ -38,7 +38,18 @@ class Config:
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
     ADMINS = ['your-email@example.com']  # Replace with your admin email(s)
 
-    # Any other configuration settings you need
+    # Optimization task config
+    LOG_LEVEL_FILE = 'INFO'
+    LOG_LEVEL_CONSOLE = 'INFO'
+    SPECIAL_SITE_FLAG = True
+    MILP_STRAT = True
+    HYBRID_STRAT = False
+    NSGA_ALGO_STRAT = False
+    MIN_STORE = 1
+    FIND_MIN_STORE = False
+    
+    # Scan retention config
+    SCAN_RETENTION_DAYS = 30
 
 class DevelopmentConfig(Config):
     DEBUG = True
