@@ -7,6 +7,7 @@ import ThemeContext from '../utils/ThemeContext';
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
   const [isEditing, setIsEditing] = useState(false);
+  const [isModifiedSites, setModifiedSites] = useState({});
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [addForm] = Form.useForm();
@@ -57,8 +58,8 @@ const SiteManagement = () => {
       });
       setSites(updatedSites);
       for (const site of updatedSites) {
-        if (modifiedSites[site.key]) {
-          await handleSave(site.id, modifiedSites[site.key]);
+        if (isModifiedSites[site.key]) {
+          await handleSave(site.id, isModifiedSites[site.key]);
         }
       }
       setIsEditing(false);
