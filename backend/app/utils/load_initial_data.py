@@ -1,11 +1,11 @@
 import os
 import csv
-from app import create_app
+from flask import current_app
 from app.extensions import db
-from sqlalchemy import text, inspect
 from app.models.site import Site
 from app.models.card import UserBuylistCard
 from app.models.sets import Sets
+from sqlalchemy import text, inspect
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, '..', '..', 'data')
@@ -96,15 +96,13 @@ def load_sql_file():
                 except Exception as e:
                     print(f"Error executing command: {command}\n{e}")
 
-
 def load_all_data():
     # load_site_list()
     load_card_list()
     # load_sql_file()
 
 if __name__ == '__main__':
-    app = create_app()
-    with app.app_context():
+    with current_app.app_context():
         # Truncate specified tables
         truncate_tables()
         

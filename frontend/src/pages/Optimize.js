@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useContext } from 'react';
 import axios from 'axios';
 import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Descriptions, Image, Tag, Typography, Table, Spin, Divider, Space } from 'antd';
-import ThemeContext from '../utils/ThemeContext';
-import CardListInput from '../components/CardListInput';
+import { useTheme } from '../utils/ThemeContext';
+import CardListInput from '../components/CardManagement/CardListInput';
 import { LinkOutlined } from '@ant-design/icons';
-import '../global.css';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -174,7 +173,7 @@ const Optimize = () => {
   const [selectedSites, setSelectedSites] = useState({});
   const [taskId, setTaskId] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
-  const { theme } = useContext(ThemeContext);
+  const { theme } = useTheme();
   const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
   const [minStore, setMinStore] = useState(2);
   const [findMinStore, setFindMinStore] = useState(false);

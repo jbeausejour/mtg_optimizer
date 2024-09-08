@@ -1,6 +1,7 @@
 from flask import Flask
 from config import get_config
 from .extensions import init_extensions
+from .tasks.celery_app import celery_app
 from logging.handlers import RotatingFileHandler
 import logging
 import os
@@ -10,6 +11,8 @@ def create_app(config_class=get_config()):
     app.config.from_object(config_class)
 
     init_extensions(app)
+    
+    celery_app.conf.update(app.config)
 
     with app.app_context():
         from .api.routes import register_blueprints

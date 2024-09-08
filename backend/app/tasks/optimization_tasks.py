@@ -1,4 +1,5 @@
-from celery import shared_task
+from .celery_app import celery_app
+import time
 from flask import current_app
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
@@ -10,7 +11,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@shared_task(bind=True)
+@celery_app.task(bind=True)
 def optimize_cards(self, card_list_dicts, site_ids):
     try:
         # Create a new scan
@@ -63,7 +64,7 @@ def optimize_cards(self, card_list_dicts, site_ids):
         db.session.rollback()
         return {'status': 'Failed', 'error': str(e)}
 
-@shared_task
+@celery_app.task
 def cleanup_old_scans():
     try:
         days_to_keep = current_app.config.get('SCAN_RETENTION_DAYS', 30)
@@ -81,7 +82,12 @@ def cleanup_old_scans():
         db.session.rollback()
         return {'status': 'Failed', 'error': str(e)}
 
-@shared_task
-def test_task():
+@celery_app.task(bind=True)
+def test_task(self):
     logger.info("Test task is running")
-    return {"status": "Test task completed"}
+    total = 10
+    for i in range(total):
+        time.sleep(1)  # Simulate a time-consuming task
+        self.update_state(state='PROGRESS', meta={'status': f'Processing {i+1}/{total}'})
+    return {'status': 'Task completed!', 'result': 42}
+    # return "Hello, Celery!"

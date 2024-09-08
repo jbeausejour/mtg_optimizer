@@ -1,29 +1,35 @@
 from celery import Celery
 from .celery_config import CeleryConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 def make_celery(app=None):
     celery = Celery(
-        'mtg_optimizer',
+        app.import_name if app else 'mtg_optimizer',
         broker=CeleryConfig.broker_url,
         backend=CeleryConfig.result_backend,
         include=['app.tasks.optimization_tasks']
     )
-    celery.conf.update(CeleryConfig.as_dict())
+    logger.info(f"Celery app created with broker: {celery.conf.broker_url}")
+    return celery
 
-    class ContextTask(celery.Task):
+celery_app = make_celery()
+
+def init_celery(app):
+    celery_app.conf.update(app.config)
+    logger.info("Celery initialized with Flask app config")
+
+
+    class ContextTask(celery_app.Task):
         def __call__(self, *args, **kwargs):
             if app is not None:
                 with app.app_context():
                     return self.run(*args, **kwargs)
             return self.run(*args, **kwargs)
 
-    celery.Task = ContextTask
-    return celery
+    celery_app.Task = ContextTask
+    app.extensions['celery'] = celery_app
 
-# This instance is used by Celery worker to start
-celery_app = make_celery()
-
-def init_celery(app):
-    celery = make_celery(app)
-    celery.conf.update(app.config)
-    return celery
+    logger.info("ContextTask set for Celery")
+    return celery_app

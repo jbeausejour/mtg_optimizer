@@ -1,6 +1,5 @@
 from flask import Blueprint, jsonify, request, send_from_directory, render_template
 from sqlalchemy.exc import IntegrityError
-from app.tasks.optimization_tasks import optimize_cards, test_task
 from app.services.card_service import CardDataManager
 from app.services.site_service import MarketplaceManager
 from app.services.scan_service import PriceScanManager
@@ -119,22 +118,65 @@ def fetch_card():
         logger.error(f"Error fetching card data: {str(e)}")
         return jsonify({'error': 'Failed to fetch card data'}), 500
 
-@views.route('/optimize', methods=['POST'])
-def optimize():
-    logger.info("Optimize route called")
-    try:
-        #logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
-        logger.info("Attempting to start test task")
-        task = test_task.delay()
-        logger.info(f"Test task started with id: {task.id}")
+# @views.route('/optimize', methods=['POST'])
+# def optimize():
+#     data = request.json
+#     card_list = data.get('cards', [])
+#     site_ids = data.get('sites', [])
 
-        return jsonify({
-            'status': 'Test task started',
-            'task_id': task.id
-        }), 202  # 202 Accepted
-    except Exception as e:
-        logger.error(f"Error starting test task: {str(e)}", exc_info=True)
-        return jsonify({'error': 'Failed to start test task'}), 500
+#     message = optimize_cards.send(card_list, site_ids)
+
+#     return jsonify({
+#         'status': 'Optimization task started',
+#         'message_id': message.message_id
+#     }), 202
+
+# @views.route('/optimization_status/<message_id>', methods=['GET'])
+# def optimization_status(message_id):
+#     # Note: Dramatiq doesn't provide built-in status checking.
+#     # You would need to implement your own status tracking mechanism,
+#     # possibly using Redis to store task statuses.
+#     return jsonify({'status': 'Status checking not implemented'}), 501
+
+# @views.route('/test_task', methods=['GET'])
+# def run_test_task():
+#     message = test_task.send()
+#     return jsonify({'message_id': message.message_id}), 202
+
+@views.route('/optimize', methods=['POST'])
+def start_task():
+    logger.info("start-task called")
+    from app.tasks.optimization_tasks import test_task
+    task = test_task.apply_async()
+    return jsonify({"message": "Task started!", "task_id": task.id})
+
+@views.route('/task_status/<task_id>', methods=['GET'])
+def task_status(task_id):
+    from app.tasks.optimization_tasks import test_task
+    task = test_task.AsyncResult(task_id)
+    response = {
+        'state': task.state,
+        'status': task.info if task.info else ''
+    }
+    return jsonify(response)
+
+# @views.route('/optimize', methods=['POST'])
+# def optimize():
+#     logger.info("Optimize route called")
+#     try:
+#         from app.tasks.optimization_tasks import test_task
+#         #logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
+#         logger.info("Attempting to start test task")
+#         task = test_task.apply_async()
+#         logger.info(f"Test task started with id: {task.id}")
+
+#         return jsonify({
+#             'status': 'Test task started',
+#             'task_id': task.id
+#         }), 202  # 202 Accepted
+#     except Exception as e:
+#         logger.error(f"Error starting test task: {str(e)}", exc_info=True)
+#         return jsonify({'error': 'Failed to start test task'}), 500
 
 # @views.route('/optimize', methods=['POST'])
 # def optimize():
@@ -157,27 +199,19 @@ def optimize():
 #         logger.error(f"Error starting optimization task: {str(e)}")
 #         return jsonify({'error': 'Failed to start optimization task'}), 500
 
-@views.route('/optimization_status/<task_id>', methods=['GET'])
-def optimization_status(task_id):
-    task = optimize_cards.AsyncResult(task_id)
-    if task.state == 'PENDING':
-        response = {
-            'state': task.state,
-            'status': 'Optimization task is pending...'
-        }
-    elif task.state != 'FAILURE':
-        response = {
-            'state': task.state,
-            'status': task.info.get('status', '')
-        }
-        if 'result' in task.info:
-            response['result'] = task.info['result']
-    else:
-        response = {
-            'state': task.state,
-            'status': str(task.info)
-        }
-    return jsonify(response)
+# @views.route('/optimization_status/<task_id>', methods=['GET'])
+# def optimization_status(task_id):
+#     job = optimize_cards.send(task_id)
+#     if job is None:
+#         return jsonify({'status': 'unknown'})
+
+#     status = job.get_status()
+#     result = job.result if status == 'finished' else None
+
+#     return jsonify({
+#         'status': status,
+#         'result': result
+#     })
 
 @views.route('/results/<int:scan_id>', methods=['GET'])
 def get_results(scan_id):

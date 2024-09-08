@@ -17,7 +17,10 @@ cloudscraper==1.2.71
 selenium==4.22.0
 selenium-stealth==1.0.6
 undetected-chromedriver==3.5.5
+redis==5.0.1
 celery==5.4.0
 celery[sqlalchemy]==5.4.0
 psycopg2-binary==2.9.9
 pytest==8.3.2
+flask-rq2==18.3
+redis==5.0.1

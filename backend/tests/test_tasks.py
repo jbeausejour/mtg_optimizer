@@ -1,37 +1,41 @@
 import time
-from app import create_app
-from app.tasks.optimization_tasks import cleanup_old_scans, test_task
+import sys
+import os
+import logging
+from flask import current_app
+from celery.exceptions import TimeoutError
 
-app, celery = create_app()
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Add the project root directory to the Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+from app import create_app
+from app.tasks.celery_app import celery_app
+from app.tasks.optimization_tasks import test_task
+
+def setup_app():
+    app = create_app()
+    app.app_context().push()
+    return app
 
 def test_simple_task():
+    logger.info("Sending test task")
     result = test_task.delay()
-    print(f"Test task ID: {result.id}")
-    task_result = result.get(timeout=10)
-    print(f"Test task result: {task_result}")
-
-def test_cleanup_old_scans():
-    result = cleanup_old_scans.delay()
-    print(f"Cleanup task ID: {result.id}")
-    
-    timeout = time.time() + 60  # 60 second timeout
-    while time.time() < timeout:
-        if result.ready():
-            task_result = result.get()
-            print(f"Cleanup task result: {task_result}")
-            return
-        else:
-            print(f"Task status: {result.status}, Info: {result.info}")
-            time.sleep(5)  # Wait for 5 seconds before checking again
-    
-    print("Cleanup task timed out")
+    logger.info(f"Test task ID: {result.id}")
+    try:
+        task_result = result.get(timeout=10)
+        logger.info(f"Test task result: {task_result}")
+    except TimeoutError:
+        logger.error("Test task timed out")
+    except Exception as e:
+        logger.error(f"Error occurred: {str(e)}")
 
 if __name__ == "__main__":
-    print("Testing simple task:")
+    app = setup_app()
+    logger.info("Testing simple task:")
     test_simple_task()
-
-    print("\nTesting cleanup_old_scans task:")
-    test_cleanup_old_scans()
-
-    print("\nTesting cleanup_old_scans task:")
-    test_cleanup_old_scans()
+    

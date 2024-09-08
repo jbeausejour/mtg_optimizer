@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Table, Input, Button, Form, message, Switch, Modal } from 'antd';
 import axios from 'axios';
 import { SaveOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import ThemeContext from '../utils/ThemeContext';
+import { useTheme } from '../utils/ThemeContext';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
@@ -11,7 +11,7 @@ const SiteManagement = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [addForm] = Form.useForm();
-  const { isDarkMode } = useContext(ThemeContext);
+  const { theme } = useTheme();
 
   useEffect(() => {
     fetchSiteList();
@@ -195,7 +195,7 @@ const SiteManagement = () => {
       </Form>
       <Modal
         title="Add New Site"
-        visible={isModalVisible}
+        open={isModalVisible}
         onOk={handleAddSite}
         onCancel={() => setIsModalVisible(false)}
       >

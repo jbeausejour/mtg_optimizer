@@ -3,13 +3,12 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, Table } from 'antd';
 import axios from 'axios';
-import ThemeContext from '../utils/ThemeContext';
-import '../global.css';
+import { useTheme } from '../utils/ThemeContext';
 
 const Results = () => {
   const { scanId } = useParams();
   const [scan, setScan] = useState(null);
-  const { theme } = useContext(ThemeContext);
+  const { theme } = useTheme();
 
   useEffect(() => {
     axios.get(`${process.env.REACT_APP_API_URL}/results/${scanId}`)

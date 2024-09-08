@@ -51,10 +51,11 @@
 }
 
 /* Global Styles */
-body {
+html, body {
   background-color: var(--color-bg);
   color: var(--color-text);
 }
+
 
 /* Layout Components */
 .ant-layout-header, 
@@ -148,7 +149,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Input Styles */
 .ant-input {
   background-color: var(--color-bg);
-  color: var (--color-text);
+  color: var(--color-text);
   border-color: var(--color-border);
 }
 

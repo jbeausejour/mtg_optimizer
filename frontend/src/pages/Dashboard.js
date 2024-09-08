@@ -2,15 +2,14 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button } from 'antd';
 import axios from 'axios';
-import ThemeContext from '../utils/ThemeContext';
-import '../global.css';
+import { useTheme } from '../utils/ThemeContext';
 
 const Dashboard = () => {
   const [totalSites, setTotalSites] = useState(0);
   const [totalCards, setTotalCards] = useState(0);
   const [latestScans, setLatestScans] = useState([]);
   const navigate = useNavigate();
-  const { theme } = useContext(ThemeContext);
+  const { theme } = useTheme();
 
   useEffect(() => {
     axios.get('/api/v1/sites')
