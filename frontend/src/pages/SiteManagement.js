@@ -19,7 +19,7 @@ const SiteManagement = () => {
 
   const fetchSiteList = async () => {
     try {
-      const response = await axios.get('/api/v1/sites');
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/sites`);
       setSites(response.data.map(item => ({ ...item, key: item.id })));
     } catch (error) {
       console.error('Error fetching site list:', error);
@@ -29,7 +29,7 @@ const SiteManagement = () => {
 
   const handleSave = async (id, data) => {
     try {
-      await axios.put(`/api/v1/sites/${id}`, data);
+      await axios.put(`${process.env.REACT_APP_API_URL}/sites/${id}`, data);
       message.success('Site updated successfully');
     } catch (error) {
       console.error('Error updating site:', error);
@@ -39,7 +39,7 @@ const SiteManagement = () => {
 
   const handleAdd = async (data) => {
     try {
-      const response = await axios.post('/api/v1/sites', data);
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/sets`, data);
       setSites([...sites, { ...response.data, key: response.data.id }]);
       message.success('Site added successfully');
       setIsModalVisible(false);

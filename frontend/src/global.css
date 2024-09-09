@@ -56,6 +56,18 @@ html, body {
   color: var(--color-text);
 }
 
+.card-name-autocomplete .ant-select-selector {
+  height: auto !important;
+  padding: 4px 11px !important;
+}
+
+.card-name-autocomplete .ant-select-selection-search {
+  position: static !important;
+}
+
+.card-name-autocomplete .ant-select-selection-search-input {
+  height: auto !important;
+}
 
 /* Layout Components */
 .ant-layout-header, 

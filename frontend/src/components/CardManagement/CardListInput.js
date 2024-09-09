@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Input, Button, List, Select, Space } from 'antd';
+import { Input, Button, List, Select, Space, AutoComplete } from 'antd';
 import axios from 'axios';
+import debounce from 'lodash/debounce';
 
 const { Option } = Select;
 
@@ -10,27 +11,49 @@ const CardListInput = ({ onSubmit }) => {
   const [cardList, setCardList] = useState([]);
   const [sets, setSets] = useState([]);
   const [selectedSet, setSelectedSet] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [cardVersions, setCardVersions] = useState(null);
 
-  useEffect(() => {
-    // Fetch the list of sets when the component mounts
-    fetchSets();
-  }, []);
-
-  const fetchSets = async () => {
-    try {
-      const response = await axios.get('/api/v1/sets');
-      setSets(response.data);
-    } catch (error) {
-      console.error('Error fetching sets:', error);
+  const fetchSuggestions = async (query) => {
+    if (query.length > 2) {
+      try {
+        const response = await axios.get(`${process.env.REACT_APP_API_URL}/card_suggestions?query=${query}`);
+        console.log('Suggestions received:', response.data);
+        setSuggestions(response.data.map(name => ({ value: name })));
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+      }
+    } else {
+      setSuggestions([]);
     }
   };
 
+  const debouncedFetchSuggestions = debounce(fetchSuggestions, 300);
+
+  const fetchCardVersions = async (cardName) => {
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/card_versions?name=${cardName}`);
+      console.log('Card versions received:', response.data);
+      setCardVersions(response.data);
+      setSets(response.data.sets);
+    } catch (error) {
+      console.error('Error fetching card versions:', error);
+    }
+  };
+
+  const handleCardSelect = (value) => {
+    setCardName(value);
+    setSelectedSet('');  // Reset selected set when a new card is chosen
+    fetchCardVersions(value);
+  };
+
   const handleAddCard = () => {
-    if (cardName && selectedSet) {
+    if (cardName && selectedSet && quantity > 0) {
       setCardList([...cardList, { name: cardName, quantity, set: selectedSet }]);
       setCardName('');
       setQuantity(1);
       setSelectedSet('');
+      setCardVersions(null);
     }
   };
 
@@ -46,28 +69,40 @@ const CardListInput = ({ onSubmit }) => {
   return (
     <div>
       <Space direction="vertical" size="middle" style={{ display: 'flex' }}>
-        <Input 
-          value={cardName} 
-          onChange={(e) => setCardName(e.target.value)} 
-          placeholder="Card Name" 
-        />
-        <Input 
-          type="number" 
-          value={quantity} 
-          onChange={(e) => setQuantity(parseInt(e.target.value))} 
-          min={1} 
-        />
-        <Select
+        <AutoComplete
+          value={cardName}
+          options={suggestions}
+          onSearch={(text) => {
+            setCardName(text);
+            debouncedFetchSuggestions(text);
+          }}
+          onSelect={handleCardSelect}
+          placeholder="Card Name"
           style={{ width: '100%' }}
-          placeholder="Select a set"
-          value={selectedSet}
-          onChange={setSelectedSet}
-        >
-          {sets.map(set => (
-            <Option key={set.set_code} value={set.set_code}>{set.set_name}</Option>
-          ))}
-        </Select>
-        <Button onClick={handleAddCard}>Add Card</Button>
+          className="card-name-autocomplete"
+        />
+        {cardVersions && (
+          <>
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Select a set"
+              value={selectedSet}
+              onChange={setSelectedSet}
+            >
+              {sets.map(set => (
+                <Option key={set.code} value={set.code}>{set.name}</Option>
+              ))}
+            </Select>
+            <Input 
+              type="number" 
+              value={quantity} 
+              onChange={(e) => setQuantity(parseInt(e.target.value))} 
+              min={1} 
+              placeholder="Quantity"
+            />
+          </>
+        )}
+        <Button onClick={handleAddCard} disabled={!cardName || !selectedSet || quantity < 1}>Add Card</Button>
         <List
           dataSource={cardList}
           renderItem={item => (

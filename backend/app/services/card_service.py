@@ -3,6 +3,7 @@ import logging
 import time
 import random
 import json
+from fuzzywuzzy import fuzz
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +26,44 @@ SCRYFALL_SEARCH_API_URL = "https://api.scryfall.com/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 class CardDataManager:
+
+    @staticmethod
+    def get_card_suggestions(query, limit=20):
+        scryfall_api_url = "https://api.scryfall.com/catalog/card-names"
+        try:
+            response = requests.get(scryfall_api_url)
+            response.raise_for_status()
+            all_card_names = response.json()['data']
+            
+            # Filter card names based on the query
+            suggestions = [name for name in all_card_names if query.lower() in name.lower()]
+            
+            return suggestions[:limit]  # Return only up to the limit
+        except requests.RequestException as e:
+            logger.error(f"Error fetching card suggestions from Scryfall: {str(e)}")
+            return []
+
+    @staticmethod
+    def get_scryfall_suggestions(query, limit=10):
+        scryfall_api_url = "https://api.scryfall.com/cards/autocomplete"
+        params = {
+            'q': query,
+            'include_extras': 'false',
+            'include_multilingual': 'false'
+        }
+
+        try:
+            response = requests.get(scryfall_api_url, params=params)
+            response.raise_for_status()  # Raise an exception for bad responses
+            data = response.json()
+            return data.get('data', [])[:limit]
+        except requests.RequestException as e:
+            logger.error(f"Error fetching suggestions from Scryfall: {str(e)}")
+            return []
+        finally:
+            # Respect Scryfall's rate limiting
+            time.sleep(0.1)
+
     @staticmethod
     def get_all_user_buylist_cards():
         print('Getting stored buylist cards!')
@@ -75,17 +114,85 @@ class CardDataManager:
             return []
 
     @staticmethod
-    def fetch_card_data(card_name, set_code=None, language=None, version=None):
-        # Check for recent data first
-        recent_data = CardDataManager.get_recent_card_data(card_name)
-        if recent_data:
-            return recent_data
+    def get_all_unique_card_names():
+        unique_names = db.session.query(MarketplaceCard.name).distinct().all()
+        return [name[0] for name in unique_names]
 
-        scryfall_data = CardDataManager.fetch_scryfall_data(card_name, set_code, language)
+    def fetch_card_data(card_name, set_code=None, language=None, version=None):
+        base_url = "https://api.scryfall.com/cards/named"
         
+        # Try exact match first
+        params = {
+            'exact': card_name,
+            'set': set_code,
+            'lang': language
+        }
+        response = requests.get(base_url, params=params)
+        
+        if response.status_code == 200:
+            card_data = response.json()
+        else:
+            # If exact match fails, try fuzzy search
+            params['fuzzy'] = card_name
+            del params['exact']
+            response = requests.get(base_url, params=params)
+            
+            if response.status_code == 200:
+                card_data = response.json()
+            else:
+                # If both searches fail, return None or raise an exception
+                return None  # or raise an exception
+        
+        # If version is specified, find the matching version
+        if version and 'all_parts' in card_data:
+            for part in card_data['all_parts']:
+                if part['component'] == 'combo_piece' and fuzz.ratio(part.get('name', ''), version) > 90:
+                    response = requests.get(part['uri'])
+                    if response.status_code == 200:
+                        card_data = response.json()
+                    break
+
         # Fetch all printings
-        all_parts = CardDataManager.fetch_all_printings(scryfall_data.get('prints_search_uri'))
-        scryfall_data['all_parts'] = all_parts
+        if 'prints_search_uri' in card_data:
+            all_printings = CardDataManager.fetch_all_printings(card_data['prints_search_uri'])
+            card_data['all_printings'] = all_printings
+
+        return {
+            'scryfall': card_data,
+            'scan_timestamp': datetime.now().isoformat()
+        }
+
+    @staticmethod
+    def fetch_all_printings(prints_search_uri):
+        response = requests.get(prints_search_uri)
+        response.raise_for_status()
+        data = response.json()
+        
+        all_printings = []
+        for card in data.get('data', []):
+            all_printings.append({
+                'set': card.get('set'),
+                'set_name': card.get('set_name'),
+                'collector_number': card.get('collector_number'),
+                'prices': card.get('prices'),
+                'scryfall_uri': card.get('scryfall_uri')
+            })
+        
+        return all_printings
+        response = requests.get(prints_search_uri)
+        response.raise_for_status()
+        data = response.json()
+        
+        all_printings = []
+        for card in data.get('data', []):
+            all_printings.append({
+                'set': card.get('set'),
+                'set_name': card.get('set_name'),
+                'collector_number': card.get('collector_number'),
+                'prices': card.get('prices'),
+                'scryfall_uri': card.get('scryfall_uri')
+            })
+        
 
         #cardconduit_data = CardDataManager.fetch_cardconduit_data(card_name, set_code)
         
@@ -106,7 +213,7 @@ class CardDataManager:
         # Store the combined data
         #CardService.store_card_data(combined_data)
 
-        return combined_data
+        return all_printings
 
     @staticmethod
     def fetch_scryfall_data(card_name, set_code=None, language=None):

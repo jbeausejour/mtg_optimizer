@@ -12,15 +12,15 @@ const Dashboard = () => {
   const { theme } = useTheme();
 
   useEffect(() => {
-    axios.get('/api/v1/sites')
+    axios.get(`${process.env.REACT_APP_API_URL}/sites`)
       .then(response => setTotalSites(response.data.length))
       .catch(error => console.error('Error fetching sites:', error));
 
-    axios.get('/api/v1/cards')
+    axios.get(`${process.env.REACT_APP_API_URL}/cards`)
       .then(response => setTotalCards(response.data.length))
       .catch(error => console.error('Error fetching cards:', error));
 
-    axios.get('/api/v1/scans?limit=5')
+    axios.get(`${process.env.REACT_APP_API_URL}/scans?limit=5`)
       .then(response => setLatestScans(response.data))
       .catch(error => console.error('Error fetching scans:', error));
   }, []);
