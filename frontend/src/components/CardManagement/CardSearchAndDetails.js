@@ -27,19 +27,27 @@ const CardForm = () => {
         <Button type="primary" htmlType="submit">Search</Button>
       </form>
       {cardData && (
-        <div>
-          <Card title="Scryfall Data">
-            <pre>{JSON.stringify(cardData.scryfall, null, 2)}</pre>
-          </Card>
-          <Card title="MTGStocks Data">
-            <pre>{JSON.stringify(cardData.mtgstocks, null, 2)}</pre>
-          </Card>
-          {cardData.previous_scan && (
-            <Card title="Previous Scan Data">
-              <pre>{JSON.stringify(cardData.previous_scan, null, 2)}</pre>
-            </Card>
-          )}
-        </div>
+      <div>
+        <h2>{cardData.name}</h2>
+        <h3>Sets:</h3>
+        <ul>
+          {cardData.sets.map((set, index) => (
+            <li key={index}>{set.name} ({set.code})</li>
+          ))}
+        </ul>
+        <h3>Languages:</h3>
+        <ul>
+          {cardData.languages.map((lang, index) => (
+            <li key={index}>{lang}</li>
+          ))}
+        </ul>
+        <h3>Versions:</h3>
+        <ul>
+          {cardData.versions.map((version, index) => (
+            <li key={index}>{version}</li>
+          ))}
+        </ul>
+      </div>
       )}
     </div>
   );

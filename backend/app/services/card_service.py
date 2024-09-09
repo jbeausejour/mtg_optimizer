@@ -21,12 +21,71 @@ from app.utils.optimization import PurchaseOptimizer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+SCRYFALL_API_BASE = "https://api.scryfall.com"
 SCRYFALL_API_URL = "https://api.scryfall.com/cards/named"
 SCRYFALL_SEARCH_API_URL = "https://api.scryfall.com/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 class CardDataManager:
 
+    @staticmethod
+    def get_scryfall_card_versions(card_name):
+        try:
+            # Step 1: Use fuzzy search to get the base card data
+            fuzzy_response = requests.get(f"{SCRYFALL_API_BASE}/cards/named", params={"fuzzy": card_name})
+            fuzzy_response.raise_for_status()
+            base_card_data = fuzzy_response.json()
+
+            # Extract the prints_search_uri
+            prints_search_uri = base_card_data.get('prints_search_uri')
+            # logger.info(f"prints_search_uri is: {prints_search_uri}")
+            if not prints_search_uri:
+                logger.error(f"prints_search_uri not found for card: {card_name}")
+                return None
+
+            # Step 2: Get all printings using the prints_search_uri
+            all_printings = []
+            while prints_search_uri:
+                response = requests.get(prints_search_uri)
+                response.raise_for_status()
+                data = response.json()
+
+                all_printings.extend(data["data"])
+                # logger.info(f"prints_search_uri found sets: {all_printings}")
+                prints_search_uri = data.get("next_page")
+
+            # Process the data
+            sets = set()
+            languages = set()
+            versions = set()
+
+            for card in all_printings:
+                sets.append({
+                    'code': card['set'],
+                    'name': card['set_name'],
+                    'released_at': datetime.strptime(card['released_at'], '%Y-%m-%d').date() if card['released_at'] else None
+                })
+                languages.add(card['lang'])
+                if 'finishes' in card:
+                    versions.update(card['finishes'])
+            
+            # if sort_by == 'release_date':
+            #     sets.sort(key=lambda x: x['released_at'] or datetime.min.date(), reverse=True)
+            # elif sort_by == 'alphabetical':
+            #     sets.sort(key=lambda x: x['name'])
+            sets.sort(key=lambda x: x['released_at'] or datetime.min.date(), reverse=True)
+
+            return {
+                'name': base_card_data['name'],  # Use the official name from Scryfall
+                'sets': [{'code': code, 'name': name} for code, name in sets],
+                'languages': list(languages),
+                'versions': list(versions)
+            }
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching card versions for {card_name}: {str(e)}")
+            return None
+        
     @staticmethod
     def get_card_suggestions(query, limit=20):
         scryfall_api_url = "https://api.scryfall.com/catalog/card-names"
@@ -63,34 +122,11 @@ class CardDataManager:
         finally:
             # Respect Scryfall's rate limiting
             time.sleep(0.1)
-
+    
     @staticmethod
     def get_all_user_buylist_cards():
         print('Getting stored buylist cards!')
         return UserBuylistCard.query.all()
-
-    @staticmethod
-    def get_scryfall_card_versions(card_name):
-        response = requests.get(SCRYFALL_SEARCH_API_URL, params={'q': f'!"{card_name}"'})
-        response.raise_for_status()
-        
-        data = response.json()
-        sets = set()
-        languages = set()
-        versions = set()
-
-        for card in data['data']:
-            sets.add((card['set'], card['set_name']))
-            languages.add(card['lang'])
-            if 'finishes' in card:
-                versions.update(card['finishes'])
-
-        return {
-            'name': card_name,
-            'sets': [{'code': code, 'name': name} for code, name in sets],
-            'languages': list(languages),
-            'versions': list(versions)
-        }
     
     @staticmethod
     def get_all_sets_from_scryfall():
