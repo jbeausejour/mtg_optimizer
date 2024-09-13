@@ -2,6 +2,14 @@
 python app/tasks/celery_worker.py
 python -m tests.test_tasks
 
+# Flask db 
+flask db heads
+    flask db merge heads
+flask db current
+flask db history
+flask db migrate -m "Add Settings model"
+flask db upgrade
+
 # Redis
 curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list

@@ -4,7 +4,6 @@ from flask import current_app
 from app.extensions import db
 from app.models.site import Site
 from app.models.card import UserBuylistCard
-from app.models.sets import Sets
 from sqlalchemy import text, inspect
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))

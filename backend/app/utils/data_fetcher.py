@@ -14,7 +14,6 @@ from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
-
 class ExternalDataSynchronizer:
     
     STRATEGY_ADD_TO_CART = 1
@@ -83,6 +82,8 @@ class ExternalDataSynchronizer:
 
     @staticmethod
     def save_cards_to_db(site, cards_df):
+        
+        logger.info(f"Saving to DB")
         try:
             scan = Scan()
             db.session.add(scan)

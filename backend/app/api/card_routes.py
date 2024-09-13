@@ -47,5 +47,5 @@ def fetch_card():
 
 @card_routes.route('/sets', methods=['GET'])
 def get_sets():
-    sets_data = CardDataManager.get_all_sets_from_scryfall()
+    sets_data = CardDataManager.get_all_sets_from_scryfall()	   
     return jsonify([set_data.to_dict() for set_data in sets_data])

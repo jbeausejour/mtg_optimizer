@@ -6,6 +6,7 @@ from app.models.scan import Scan, ScanResult
 from app.models.card import MarketplaceCard
 from app.models.site import Site
 from app.utils.optimization import PurchaseOptimizer
+from app.utils.data_fetcher import ExternalDataSynchronizer
 from datetime import datetime, timedelta
 import logging
 
@@ -81,6 +82,25 @@ def cleanup_old_scans():
         logger.exception("Error during cleanup")
         db.session.rollback()
         return {'status': 'Failed', 'error': str(e)}
+
+@celery_app.task(bind=True)
+def start_scraping_task(self, site_ids, card_names):
+    logger.info("start_scraping_task is running")
+    self.update_state(state='PROCESSING', meta={'status': 'Initializing scraping task'})
+    
+    try:
+        sites = Site.query.filter(Site.id.in_(site_ids)).all()
+        
+        scraper = ExternalDataSynchronizer()
+        results = scraper.scrape_multiple_sites(sites, card_names)
+        
+        self.update_state(state='PROCESSING', meta={'status': 'Saving results to database'})
+        scraper.save_results_to_db(results)
+        
+        return {'status': 'Scraping completed', 'sites_scraped': len(sites), 'cards_scraped': len(card_names)}
+    except Exception as e:
+        self.update_state(state='FAILURE', meta={'status': f'Error: {str(e)}'})
+        raise
 
 @celery_app.task(bind=True)
 def test_task(self):

@@ -222,7 +222,7 @@ const Optimize = () => {
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/optimize`, {
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/start_scraping`, {
         sites: sitesToOptimize,
         strategy: 'milp', // or 'nsga_ii' or 'hybrid'
         min_store: 2, // Add a state variable for this

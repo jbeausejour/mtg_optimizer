@@ -40,7 +40,6 @@ class MarketplaceCard(db.Model):
     def __repr__(self):
         return f'<MarketplaceCard {self.name}>'
 
-    
 class UserBuylistCard(db.Model):
     __tablename__ = 'user_buylist_card'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)

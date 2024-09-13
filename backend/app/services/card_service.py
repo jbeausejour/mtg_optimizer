@@ -22,12 +22,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SCRYFALL_API_BASE = "https://api.scryfall.com"
-SCRYFALL_API_URL = "https://api.scryfall.com/cards/named"
-SCRYFALL_SEARCH_API_URL = "https://api.scryfall.com/cards/search"
+SCRYFALL_API_NAMED_URL = f"{SCRYFALL_API_BASE}/cards/named"
+SCRYFALL_API_SEARCH_URL = f"{SCRYFALL_API_BASE}/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 class CardDataManager:
 
+    @staticmethod
+    def scryfall_request(url, params=None):
+        """Helper function to handle Scryfall API requests."""
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logger.error(f"Error during Scryfall request: {str(e)}")
+            return None
+        
     @staticmethod
     def get_scryfall_card_versions(card_name):
         try:
@@ -88,7 +99,7 @@ class CardDataManager:
         
     @staticmethod
     def get_card_suggestions(query, limit=20):
-        scryfall_api_url = "https://api.scryfall.com/catalog/card-names"
+        scryfall_api_url = f"{SCRYFALL_API_BASE}/catalog/card-names"
         try:
             response = requests.get(scryfall_api_url)
             response.raise_for_status()
@@ -104,7 +115,7 @@ class CardDataManager:
 
     @staticmethod
     def get_scryfall_suggestions(query, limit=10):
-        scryfall_api_url = "https://api.scryfall.com/cards/autocomplete"
+        scryfall_api_url = f"{SCRYFALL_API_BASE}/cards/autocomplete"
         params = {
             'q': query,
             'include_extras': 'false',
@@ -155,7 +166,6 @@ class CardDataManager:
         return [name[0] for name in unique_names]
 
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
-        base_url = "https://api.scryfall.com/cards/named"
         
         # Try exact match first
         params = {
@@ -163,7 +173,7 @@ class CardDataManager:
             'set': set_code,
             'lang': language
         }
-        response = requests.get(base_url, params=params)
+        response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
         
         if response.status_code == 200:
             card_data = response.json()
@@ -171,7 +181,7 @@ class CardDataManager:
             # If exact match fails, try fuzzy search
             params['fuzzy'] = card_name
             del params['exact']
-            response = requests.get(base_url, params=params)
+            response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
             
             if response.status_code == 200:
                 card_data = response.json()
@@ -259,7 +269,7 @@ class CardDataManager:
         if language:
             params['lang'] = language
 
-        response = requests.get(SCRYFALL_API_URL, params=params)
+        response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
         response.raise_for_status()
         data = response.json()
 
@@ -275,7 +285,7 @@ class CardDataManager:
     def fetch_sets_from_scryfall():
         logger.info("Fetching sets from Scryfall")
         try:
-            response = requests.get('https://api.scryfall.com/sets')
+            response = requests.get('f"{SCRYFALL_API_BASE}/sets')
             response.raise_for_status()
             sets_data = response.json()['data']
         except requests.RequestException as e:
@@ -322,23 +332,6 @@ class CardDataManager:
             logger.error(f"Error committing sets data to database: {str(e)}")
 
         return sets_data
-        
-    @staticmethod
-    def fetch_all_printings(prints_search_uri):
-        response = requests.get(prints_search_uri)
-        response.raise_for_status()
-        data = response.json()
-        
-        all_parts = []
-        for card in data.get('data', []):
-            all_parts.append({
-                'set': card.get('set'),
-                'set_name': card.get('set_name'),
-                'prices': card.get('prices'),
-                'scryfall_uri': card.get('scryfall_uri')
-            })
-        
-        return all_parts
     
     @staticmethod
     def fetch_additional_data(card_name, set_code):
@@ -560,7 +553,7 @@ class CardDataManager:
 
     #a revoir
     @staticmethod
-    async def update_cards_data():
+    async def update_marketplace_cards_data():
         await ExternalDataSynchronizer.update_all_cards()
 
     @staticmethod
