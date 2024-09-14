@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button } from 'antd';
-import axios from 'axios';
+import api from '../utils/api';
 import { useTheme } from '../utils/ThemeContext';
 
 const Dashboard = () => {
@@ -12,15 +12,15 @@ const Dashboard = () => {
   const { theme } = useTheme();
 
   useEffect(() => {
-    axios.get(`${process.env.REACT_APP_API_URL}/sites`)
+    api.get('/sites')
       .then(response => setTotalSites(response.data.length))
       .catch(error => console.error('Error fetching sites:', error));
 
-    axios.get(`${process.env.REACT_APP_API_URL}/cards`)
+    api.get('/cards')
       .then(response => setTotalCards(response.data.length))
       .catch(error => console.error('Error fetching cards:', error));
 
-    axios.get(`${process.env.REACT_APP_API_URL}/scans?limit=5`)
+    api.get('/scans?limit=5')
       .then(response => setLatestScans(response.data))
       .catch(error => console.error('Error fetching scans:', error));
   }, []);
@@ -46,7 +46,7 @@ const Dashboard = () => {
           <Card 
             title="Total Cards" 
             bordered={false}
-            onClick={() => handleCardClick('/optimize')}
+            onClick={() => handleCardClick('/card-management')}
             style={{ cursor: 'pointer' }}
           >
             {totalCards}

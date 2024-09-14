@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, DatePicker, message } from 'antd';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import axios from 'axios';
+import api from '../utils/api';
 
 const { RangePicker } = DatePicker;
 
@@ -17,7 +17,7 @@ const PriceTracker = () => {
 
   const fetchCards = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/cards`);
+      const response = await api.get('/cards');
       setCards(response.data);
     } catch (error) {
       message.error('Failed to fetch cards');
@@ -26,7 +26,7 @@ const PriceTracker = () => {
 
   const fetchPriceHistory = async (cardId, startDate, endDate) => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/price-history`, {
+      const response = await api.get('/price-history', {
         params: { cardId, startDate, endDate }
       });
       setPriceHistory(response.data);

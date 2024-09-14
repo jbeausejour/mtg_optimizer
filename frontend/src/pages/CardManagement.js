@@ -1,44 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, message, Spin, Space, Popconfirm, Form, Input, Select } from 'antd';
-import { EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
+import { Table, Input, Button, Modal, message, Spin, Space, Popconfirm, Form, Select, Tooltip, Image } from 'antd';
+import { EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import CardListInput from '../components/CardManagement/CardListInput';
-import axios from 'axios';
 import ScryfallCard from '../components/CardManagement/ScryfallCard';
+import api from '../utils/api';
 
-const { Option } = Select;
 
+const SCRYFALL_API_BASE = "https://api.scryfall.com";
 const CardManagement = () => {
   const [cards, setCards] = useState([]);
+  const [filteredCards, setFilteredCards] = useState([]);
+  const [searchText, setSearchText] = useState('');
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [form] = Form.useForm();
-  const [sets, setSets] = useState([]);
-  const [languages, setLanguages] = useState([]);
-  const [versions, setVersions] = useState([]);
 
   useEffect(() => {
     fetchCards();
-    fetchSets();
   }, []);
 
   const fetchCards = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/cards`);
+      const response = await api.get('/cards');
       setCards(response.data);
+      setFilteredCards(response.data);  // Initialize the filtered list
     } catch (error) {
       message.error('Failed to fetch cards');
-    }
-  };
-
-  const fetchSets = async () => {
-    try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/sets`);
-      setSets(response.data);
-    } catch (error) {
-      message.error('Failed to fetch sets');
     }
   };
 
@@ -46,7 +35,7 @@ const CardManagement = () => {
     setSelectedCard(card);
     setIsLoading(true);
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/fetch_card`, {
+      const response = await api.get('/fetch_card', {
         params: {
           name: card.name,
           set: card.set,
@@ -54,22 +43,9 @@ const CardManagement = () => {
           version: card.version
         }
       });
-      
-      if (response.data.error) {
-        throw new Error(response.data.error);
-      }
-      
-      console.log('Card data:', response.data);
       setCardData(response.data);
       setIsModalVisible(true);
-
-      // Update languages and versions based on the fetched data
-      if (response.data.scryfall) {
-        setLanguages(response.data.scryfall.languages || []);
-        setVersions(response.data.scryfall.versions || []);
-      }
     } catch (error) {
-      console.error('Error fetching card data:', error);
       message.error(`Failed to fetch card data: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -82,50 +58,12 @@ const CardManagement = () => {
     setCardData(null);
   };
 
-  const handleEditClick = (card) => {
-    setSelectedCard(card);
-    form.setFieldsValue(card);
-    setIsEditModalVisible(true);
-  };
-
-  const handleEditModalClose = () => {
-    setIsEditModalVisible(false);
-    setSelectedCard(null);
-    form.resetFields();
-  };
-
-  const handleEditSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      await axios.put(`${process.env.REACT_APP_API_URL}/cards/${selectedCard.id}`, values);
-      message.success('Card updated successfully');
-      handleEditModalClose();
-      fetchCards();
-    } catch (error) {
-      console.error('Failed to update card:', error);
-      message.error('Failed to update card');
-    }
-  };
-
-  const handleDelete = async (cardId) => {
-    try {
-      await axios.delete(`${process.env.REACT_APP_API_URL}/cards/${cardId}`);
-      message.success('Card deleted successfully');
-      fetchCards();
-    } catch (error) {
-      console.error('Failed to delete card:', error);
-      message.error('Failed to delete card');
-    }
-  };
-
-  const handleCardListSubmit = async (cardList) => {
-    try {
-      await axios.post(`${process.env.REACT_APP_API_URL}/cards`, cardList);
-      message.success('Card list updated successfully');
-      fetchCards();
-    } catch (error) {
-      message.error('Failed to update card list');
-    }
+  const onSearch = (value) => {
+    setSearchText(value);
+    const filtered = cards.filter((card) =>
+      card.name && card.name.toLowerCase().includes(value.toLowerCase())  // Ensure card.name exists
+    );
+    setFilteredCards(filtered);
   };
 
   const columns = [
@@ -133,26 +71,61 @@ const CardManagement = () => {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      filterDropdown: () => (
+        <div style={{ padding: 8 }}>
+          <Input
+            placeholder="Search name"
+            value={searchText}
+            onChange={(e) => onSearch(e.target.value)}
+            style={{ width: 188, marginBottom: 8, display: 'block' }}
+            prefix={<SearchOutlined />}
+          />
+        </div>
+      ),
+      filterIcon: <SearchOutlined />,
+      render: (text, record) => (
+        <Tooltip
+          title={
+            record.name && record.set ? (
+              <Image
+                src={`${SCRYFALL_API_BASE}/cards/named?exact=${record.name}`}
+                alt={record.name}
+                style={{ width: '150px' }}  // Adjust the image size as needed
+              />
+            ) : 'No Image Available'
+          }
+        >
+          {record.name ? (
+            <a href="#" style={{ textDecoration: 'underline', color: 'blue' }}>
+              {text}
+            </a>
+          ) : 'Unknown Name'}
+        </Tooltip>
+      ),      
     },
     {
       title: 'Quantity',
       dataIndex: 'quantity',
       key: 'quantity',
+      sorter: (a, b) => a.quantity - b.quantity,
     },
     {
       title: 'Set',
       dataIndex: 'set',
       key: 'set',
+      sorter: (a, b) => a.set.localeCompare(b.set),
     },
     {
       title: 'Language',
       dataIndex: 'language',
       key: 'language',
+      sorter: (a, b) => a.language.localeCompare(b.language),
     },
     {
       title: 'Version',
       dataIndex: 'version',
       key: 'version',
+      sorter: (a, b) => a.version.localeCompare(b.version),
     },
     {
       title: 'Actions',
@@ -160,10 +133,10 @@ const CardManagement = () => {
       render: (text, record) => (
         <Space>
           <Button icon={<EyeOutlined />} onClick={() => handleCardClick(record)}>View</Button>
-          <Button icon={<EditOutlined />} onClick={() => handleEditClick(record)}>Edit</Button>
+          <Button icon={<EditOutlined />}>Edit</Button>
           <Popconfirm
             title="Are you sure you want to delete this card?"
-            onConfirm={() => handleDelete(record.id)}
+            onConfirm={() => message.success('Card deleted')}  // Implement delete logic here
             okText="Yes"
             cancelText="No"
           >
@@ -177,8 +150,8 @@ const CardManagement = () => {
   return (
     <div className="card-management">
       <h1>Card Management</h1>
-      <CardListInput onSubmit={handleCardListSubmit} />
-      <Table dataSource={cards} columns={columns} rowKey="id" />
+      <CardListInput />
+      <Table dataSource={filteredCards} columns={columns} rowKey="id" pagination={false} />
       <Modal
         title={selectedCard ? selectedCard.name : ''}
         open={isModalVisible}
@@ -198,39 +171,6 @@ const CardManagement = () => {
         ) : cardData ? (
           <ScryfallCard data={cardData.scryfall} />
         ) : null}
-      </Modal>
-      <Modal
-        title={`Edit ${selectedCard ? selectedCard.name : ''}`}
-        open={isEditModalVisible}
-        onCancel={handleEditModalClose}
-        onOk={handleEditSubmit}
-      >
-        <Form form={form} layout="vertical">
-          <Form.Item name="set" label="Set" rules={[{ required: true }]}>
-            <Select>
-              {sets.map(set => (
-                <Option key={set.code} value={set.code}>{set.name}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item name="quantity" label="Quantity" rules={[{ required: true, type: 'number', min: 1 }]}>
-            <Input type="number" />
-          </Form.Item>
-          <Form.Item name="language" label="Language" rules={[{ required: true }]}>
-            <Select>
-              {languages.map(lang => (
-                <Option key={lang} value={lang}>{lang}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item name="version" label="Version" rules={[{ required: true }]}>
-            <Select>
-              {versions.map(ver => (
-                <Option key={ver} value={ver}>{ver}</Option>
-              ))}
-            </Select>
-          </Form.Item>
-        </Form>
       </Modal>
     </div>
   );

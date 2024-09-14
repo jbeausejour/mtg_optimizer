@@ -1,16 +1,22 @@
 import React, { useState } from 'react';
 import { Form, Input, Button, message } from 'antd';
-import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../utils/AuthContext';
+import api from '../utils/api';
 
-const Register = ({ onRegisterSuccess }) => {
+const Register = () => {
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const { login } = useAuth();
 
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/register`, values);
+      await api.post('/register', values);
       message.success('Registration successful');
-      onRegisterSuccess();
+      // Optionally log the user in immediately after registration
+      await login(values);
+      navigate('/');
     } catch (error) {
       message.error('Registration failed: ' + (error.response?.data?.message || error.message));
     } finally {

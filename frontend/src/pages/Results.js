@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, Table } from 'antd';
-import axios from 'axios';
 import { useTheme } from '../utils/ThemeContext';
+import api from '../utils/api';
 
 const Results = () => {
   const { scanId } = useParams();
@@ -11,7 +11,7 @@ const Results = () => {
   const { theme } = useTheme();
 
   useEffect(() => {
-    axios.get(`${process.env.REACT_APP_API_URL}/results/${scanId}`)
+    api.get('/results/${scanId}')
       .then(response => setScan(response.data))
       .catch(error => console.error('Error fetching results:', error));
   }, [scanId]);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Descriptions, Image, Tag, Typography, Table, Spin, Divider, Space } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import CardListInput from '../components/CardManagement/CardListInput';
@@ -196,7 +196,7 @@ const Optimize = () => {
 
   const fetchCards = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/cards`);
+      const response = await api.get('/cards');
       setCards(response.data);
     } catch (error) {
       console.error('Error fetching cards:', error);
@@ -206,7 +206,7 @@ const Optimize = () => {
 
   const fetchSites = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/sites`);
+      const response = await api.get('/sites');
       setSites(response.data);
       const initialSelected = {};
       response.data.forEach(site => {
@@ -222,7 +222,7 @@ const Optimize = () => {
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/start_scraping`, {
+      const response = await api.post('/start_scraping', {
         sites: sitesToOptimize,
         strategy: 'milp', // or 'nsga_ii' or 'hybrid'
         min_store: 2, // Add a state variable for this
@@ -238,7 +238,7 @@ const Optimize = () => {
 
   const checkTaskStatus = async (id) => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/task_status/${id}`);
+      const response = await api.get('/task_status/${id}');
       setTaskStatus(response.data.status);
       if (response.data.state === 'SUCCESS') {
         message.success('Optimization completed successfully!');
@@ -255,7 +255,7 @@ const Optimize = () => {
 
   const handleCardListSubmit = async (newCardList) => {
     try {
-      await axios.post(`${process.env.REACT_APP_API_URL}/card_list`, { cardList: newCardList });
+      await api.post('/card_list', { cardList: newCardList });
       message.success('Card list submitted successfully');
       setCardList(newCardList);
       fetchCards();
@@ -269,7 +269,7 @@ const Optimize = () => {
     setSelectedCard(card);
     setIsLoading(true);
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/fetch_card?name=${card.name}`);
+      const response = await api.get('/fetch_card?name=${card.name}');
       
       if (response.data.error) {
         throw new Error(response.data.error);

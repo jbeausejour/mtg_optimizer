@@ -61,8 +61,13 @@ def delete_setting(key):
 @settings_routes.route('/login', methods=['POST'])
 def login():
     data = request.json
+    logging.info(f"Login attempt for user: {data.get('username')}")
+    
     user = User.query.filter_by(username=data['username']).first()
     if user and user.check_password(data['password']):
         access_token = create_access_token(identity=user.id)
+        logging.info(f"Login successful for user: {user.username}")
         return jsonify(access_token=access_token), 200
+    
+    logging.warning(f"Failed login attempt for user: {data.get('username')}")
     return jsonify({'message': 'Invalid username or password'}), 401

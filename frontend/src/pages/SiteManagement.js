@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useContext } from 'react';
 import { Table, Input, Button, Form, message, Switch, Modal } from 'antd';
-import axios from 'axios';
 import { SaveOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import React, { useState, useEffect, useContext } from 'react';
+import api from '../utils/api';
 
 const SiteManagement = () => {
   const [sites, setSites] = useState([]);
@@ -19,7 +19,7 @@ const SiteManagement = () => {
 
   const fetchSiteList = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/sites`);
+      const response = await api.get('/sites');
       setSites(response.data.map(item => ({ ...item, key: item.id })));
     } catch (error) {
       console.error('Error fetching site list:', error);
@@ -39,7 +39,7 @@ const SiteManagement = () => {
 
   const handleAdd = async (data) => {
     try {
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/sets`, data);
+      const response = await api.post('/sets', data);
       setSites([...sites, { ...response.data, key: response.data.id }]);
       message.success('Site added successfully');
       setIsModalVisible(false);

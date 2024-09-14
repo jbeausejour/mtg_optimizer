@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider } from './utils/ThemeContext';
-import Layout from './components/Layout';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { AuthProvider } from './utils/AuthContext';
 import Navigation from './components/Navigation';
 import Login from './components/Login';
 import Register from './components/Register';
@@ -12,53 +11,44 @@ import Optimize from './pages/Optimize';
 import Results from './pages/Results';
 import PriceTracker from './pages/PriceTracker';
 import Settings from './pages/Settings';
-import ErrorBoundary from './utils/ErrorBoundary';
-import './global.css';
+import ProtectedRoute from './components/ProtectedRoute';
+
+// Custom Hook to conditionally render navigation based on route
+const Layout = ({ children }) => {
+  const location = useLocation();
+  const showNavbar = location.pathname !== '/login' && location.pathname !== '/register';
+  
+  return (
+    <div className="app-container">
+      {showNavbar && <Navigation />}
+      <div className="content-container">
+        {children}
+      </div>
+    </div>
+  );
+};
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      setIsAuthenticated(true);
-    }
-  }, []);
-
-  const handleLoginSuccess = (token) => {
-    localStorage.setItem('token', token);
-    setIsAuthenticated(true);
-  };
-
-  const PrivateRoute = ({ children }) => {
-    return isAuthenticated ? children : <Navigate to="/login" />;
-  };
-
   return (
-    <ThemeProvider>
+    <AuthProvider>
       <Router>
-        <ErrorBoundary>
-          <Layout>
-            {isAuthenticated && <Navigation />}
-            <Routes>
-              <Route path="/login" element={
-                isAuthenticated ? <Navigate to="/" /> : <Login onLoginSuccess={handleLoginSuccess} />
-              } />
-              <Route path="/register" element={
-                isAuthenticated ? <Navigate to="/" /> : <Register onRegisterSuccess={() => navigate('/login')} />
-              } />
-              <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-              <Route path="/cards" element={<PrivateRoute><CardManagement /></PrivateRoute>} />
-              <Route path="/site-management" element={<PrivateRoute><SiteManagement /></PrivateRoute>} />
-              <Route path="/optimize" element={<PrivateRoute><Optimize /></PrivateRoute>} />
-              <Route path="/results" element={<PrivateRoute><Results /></PrivateRoute>} />
-              <Route path="/price-tracker" element={<PrivateRoute><PriceTracker /></PrivateRoute>} />
-              <Route path="/settings" element={<PrivateRoute><Settings /></PrivateRoute>} />
-            </Routes>
-          </Layout>
-        </ErrorBoundary>
+        <Layout>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/card-management" element={<CardManagement />} />
+              <Route path="/site-management" element={<SiteManagement />} />
+              <Route path="/optimize" element={<Optimize />} />
+              <Route path="/results" element={<Results />} />
+              <Route path="/price-tracker" element={<PriceTracker />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
+          </Routes>
+        </Layout>
       </Router>
-    </ThemeProvider>
+    </AuthProvider>
   );
 }
 

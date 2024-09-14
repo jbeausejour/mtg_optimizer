@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Input, Button, List, Select, Space, AutoComplete } from 'antd';
-import axios from 'axios';
 import debounce from 'lodash/debounce';
+import api from '../../utils/api';
 
 const { Option } = Select;
 
@@ -17,11 +17,12 @@ const CardListInput = ({ onSubmit }) => {
   const fetchSuggestions = async (query) => {
     if (query.length > 2) {
       try {
-        const response = await axios.get(`${process.env.REACT_APP_API_URL}/card_suggestions?query=${query}`);
+        const response = await api.get(`/card_suggestions?query=${query}`);
         console.log('Suggestions received:', response.data);
         setSuggestions(response.data.map(name => ({ value: name })));
       } catch (error) {
         console.error('Error fetching suggestions:', error);
+        setSuggestions([]);
       }
     } else {
       setSuggestions([]);
@@ -32,14 +33,17 @@ const CardListInput = ({ onSubmit }) => {
 
   const fetchCardVersions = async (cardName) => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/card_versions?name=${cardName}`);
+      const response = await api.get(`/card_versions?name=${encodeURIComponent(cardName)}`);
       console.log('Card versions received:', response.data);
       setCardVersions(response.data);
       setSets(response.data.sets);
     } catch (error) {
       console.error('Error fetching card versions:', error);
+      setCardVersions(null);
+      setSets([]);
     }
   };
+
 
   const handleCardSelect = (value) => {
     setCardName(value);

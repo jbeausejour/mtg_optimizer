@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Switch, Select, message } from 'antd';
-import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../utils/AuthContext';
+import api from '../utils/api';
 
 const { Option } = Select;
 
 const Settings = () => {
   const [form] = Form.useForm();
   const [settings, setSettings] = useState({});
+  const navigate = useNavigate();
+  const { logout } = useAuth();
 
   useEffect(() => {
     fetchSettings();
@@ -14,20 +18,66 @@ const Settings = () => {
 
   const fetchSettings = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/settings`);
+      const token = localStorage.getItem('accessToken');
+      const response = await api.get('/settings', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       setSettings(response.data);
       form.setFieldsValue(response.data);
     } catch (error) {
-      message.error('Failed to fetch settings');
+      if (error.response) {
+        switch (error.response.status) {
+          case 401:
+            message.error('Your session has expired. Please log in again.');
+            logout();
+            navigate('/login');
+            break;
+          case 403:
+            message.error('You do not have permission to access settings.');
+            break;
+          default:
+            message.error('An error occurred while fetching settings.');
+        }
+      } else if (error.request) {
+        message.error('No response received from the server. Please try again later.');
+      } else {
+        message.error('An unexpected error occurred.');
+      }
+      console.error('Error fetching settings:', error);
     }
   };
 
   const onFinish = async (values) => {
     try {
-      await axios.post(`${process.env.REACT_APP_API_URL}/settings`, values);
+      const token = localStorage.getItem('accessToken');
+      await api.post(`/settings`, values, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       message.success('Settings updated successfully');
     } catch (error) {
-      message.error('Failed to update settings');
+      if (error.response) {
+        switch (error.response.status) {
+          case 401:
+            message.error('Your session has expired. Please log in again.');
+            logout();
+            navigate('/login');
+            break;
+          case 403:
+            message.error('You do not have permission to update settings.');
+            break;
+          default:
+            message.error('An error occurred while updating settings.');
+        }
+      } else if (error.request) {
+        message.error('No response received from the server. Please try again later.');
+      } else {
+        message.error('An unexpected error occurred.');
+      }
+      console.error('Error updating settings:', error);
     }
   };
 
