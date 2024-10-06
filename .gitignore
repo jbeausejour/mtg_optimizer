@@ -16,6 +16,7 @@ node_modules/
 results/
 logs/
 package-lock.json
+backend/static/*
 backend/__pycache__/
 backend/__pycache__/*
 backend/migrations/__pycache__/env.cpython-312.pyc
