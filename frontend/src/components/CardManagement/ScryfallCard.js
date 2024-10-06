@@ -1,134 +1,137 @@
-import React from 'react';
-import { Card, Row, Col, Image, Typography, Divider, Space, Tag } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Card, Row, Col, Image, Typography, Divider, Space, Tag, message } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
 
-const formatCardName = (name) => {
-  if (!name) return '';
-  const part = name.split(' // ')[0];
-  const noApostrophes = part.replace(/'/g, '');
-  const formatted = noApostrophes.replace(/\s+/g, '-').toLowerCase();
-  return formatted;
-};
+const SCRYFALL_API_BASE = "https://api.scryfall.com";
 
-const formatSetCode = (setCode) => {
-  let formattedSetCode = setCode;
-  if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
-    formattedSetCode = formattedSetCode.slice(1);
-  }
-  return formattedSetCode.toLowerCase();
-};
+const ScryfallCard = ({ card, onSetClick }) => {
+  const [cardData, setCardData] = useState(card);
+  const [availablePrints, setAvailablePrints] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-const ManaSymbol = ({ symbol }) => {
-  const cleanSymbol = symbol.replace(/[{/}]/g, '');
-  const symbolUrl = `https://svgs.scryfall.io/card-symbols/${cleanSymbol}.svg`;
-  return (
-    <img 
-      src={symbolUrl} 
-      alt={cleanSymbol} 
-      className="mana-symbol" 
-      style={{width: '16px', height: '16px', margin: '0 1px', verticalAlign: 'text-bottom'}} 
-    />
-  );
-};
+  const cardName = cardData?.name;
+  const initialSetCode = cardData?.set;
 
-const SetSymbol = ({ setCode, rarity }) => {
-  const formattedSetCode = formatSetCode(setCode);
-  const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
-  const rarityColor = {
-    common: 'black',
-    uncommon: 'silver',
-    rare: 'gold',
-    mythic: '#D37E2A'
+  // Fetch all available prints for this card when it loads
+  useEffect(() => {
+    const fetchAvailablePrints = async () => {
+      try {
+        const response = await fetch(cardData.prints_search_uri);
+        const result = await response.json();
+        setAvailablePrints(result.data.filter(print => !print.digital && print.purchase_uris)); // Filter out digital-only versions
+      } catch (error) {
+        message.error('Failed to load available prints');
+      }
+    };
+
+    fetchAvailablePrints();
+  }, [cardData.prints_search_uri]);
+
+  const handleSetChange = async (setCode) => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${SCRYFALL_API_BASE}/cards/named?exact=${cardName}&set=${setCode}`);
+      const updatedCardData = await response.json();
+      setCardData(updatedCardData);  // Update the card details based on the selected set
+      onSetClick(setCode);  // Trigger callback to notify parent of the set selection
+    } catch (error) {
+      message.error('Failed to fetch card details for the selected set');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  return (
-    <img 
-      src={symbolUrl} 
-      alt={formattedSetCode} 
-      className="set-symbol" 
-      style={{
-        width: '16px', 
-        height: '16px', 
-        marginRight: '4px', 
-        verticalAlign: 'text-bottom',
-        filter: `brightness(0) saturate(100%) ${rarityColor[rarity]}`
-      }} 
-    />
-  );
-};
-
-const LegalityTag = ({ format, legality }) => {
-  const color = {
-    legal: 'green',
-    not_legal: 'default',
-    banned: 'red',
-    restricted: 'blue'
+  // Handle hover effect for card image
+  const handleHover = (e) => {
+    const cardImage = e.target;
+    cardImage.style.transform = 'scale(1.1)';
+    cardImage.style.transition = 'transform 0.3s ease';
   };
-  return (
-    <Tag color={color[legality]}>
-      {format}
-    </Tag>
-  );
-};
 
-const ScryfallCard = ({ data }) => {
-  if (!data) return <div>No card data available</div>;
+  const handleMouseOut = (e) => {
+    const cardImage = e.target;
+    cardImage.style.transform = 'scale(1)';
+  };
+
+  if (!cardData) return <div>No card data available</div>;
 
   return (
-    <Card className="scryfall-card">
+    <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
       <Row gutter={16}>
         <Col span={8}>
-          {data.image_uris && data.image_uris.normal ? (
-            <Image src={data.image_uris.normal} alt={data.name} />
+          {isLoading ? (
+            <div>Loading...</div>
           ) : (
-            <div>No image available</div>
+            <>
+              {cardData.image_uris && cardData.image_uris.normal ? (
+                <Image 
+                  src={cardData.image_uris.normal} 
+                  alt={cardData.name} 
+                  onMouseEnter={handleHover} 
+                  onMouseLeave={handleMouseOut} 
+                  style={{ transition: "transform 0.3s", borderRadius: "8px" }} 
+                />
+              ) : (
+                <div>No image available</div>
+              )}
+              <Divider />
+              <Space direction="vertical" size="small">
+                <Text><strong>Mana Value:</strong> {cardData.cmc}</Text>
+                <Text><strong>Types:</strong> {cardData.type_line}</Text>
+                <Text><strong>Rarity:</strong> {cardData.rarity}</Text>
+                <Text>
+                  <strong>Expansion:</strong> {cardData.set_name}
+                </Text>
+                <Text><strong>Card Number:</strong> {cardData.collector_number}</Text>
+                <Text><strong>Artist:</strong> {cardData.artist}</Text>
+              </Space>
+              <Divider />
+              <Space direction="vertical">
+                <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${cardData.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
+                  <LinkOutlined /> View on Gatherer
+                </a>
+                <a href={`https://edhrec.com/cards/${cardData.name.replace(/\s+/g, '-').toLowerCase()}`} target="_blank" rel="noopener noreferrer">
+                  <LinkOutlined /> Card analysis on EDHREC
+                </a> 
+              </Space>
+            </>
           )}
-          <Divider />
-          <Space direction="vertical" size="small">
-            <Text><strong>Mana Value:</strong> {data.cmc}</Text>
-            <Text><strong>Types:</strong> {data.type_line}</Text>
-            <Text><strong>Rarity:</strong> {data.rarity}</Text>
-            <Text>
-              <strong>Expansion:</strong> <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name}
-            </Text>
-            <Text><strong>Card Number:</strong> {data.collector_number}</Text>
-            <Text><strong>Artist:</strong> {data.artist}</Text>
-          </Space>
-          <Divider />
-          <Space direction="vertical">
-            <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
-              <LinkOutlined /> View on Gatherer
-            </a>
-            <a href={`https://edhrec.com/cards/${formatCardName(data.name)}`} target="_blank" rel="noopener noreferrer">
-              <LinkOutlined /> Card analysis on EDHREC
-            </a> 
-          </Space>
         </Col>
         <Col span={16}>
           <Title level={3}>
-            {data.name}
+            {cardData.name}
             <span className="mana-cost">
-              {data.mana_cost && data.mana_cost.split('').map((char, index) => 
-                char === '{' || char === '}' ? null : <ManaSymbol key={index} symbol={`{${char}}`} />
+              {cardData.mana_cost && cardData.mana_cost.split('').map((char, index) => 
+                char === '{' || char === '}' ? null : <img key={index} src={`https://svgs.scryfall.io/card-symbols/${char.replace(/[{}]/g, '')}.svg`} alt={char} style={{ width: '16px', height: '16px', margin: '0 1px', verticalAlign: 'text-bottom' }} />
               )}
             </span>
           </Title>
-          <Text strong>{data.set_name} ({data.set.toUpperCase()})</Text>
+          <Text strong>{cardData.set_name} ({cardData.set.toUpperCase()})</Text>
           <Divider />
-          <Text>{data.type_line}</Text>
-          <Paragraph>{data.oracle_text}</Paragraph>
-          {data.flavor_text && <Text italic>{data.flavor_text}</Text>}
-          <Text>{data.power && data.toughness ? `${data.power}/${data.toughness}` : ''}</Text>
+          <Text>{cardData.type_line}</Text>
+          <Paragraph>{cardData.oracle_text}</Paragraph>
+          {cardData.flavor_text && <Text italic>{cardData.flavor_text}</Text>}
+          <Text>{cardData.power && cardData.toughness ? `${cardData.power}/${cardData.toughness}` : ''}</Text>
           <Divider />
-          <Row gutter={[8, 8]}>
-            {Object.entries(data.legalities).map(([format, legality]) => (
-              <Col key={format}>
-                <LegalityTag format={format} legality={legality} />
+          
+          <Title level={4}>Available Sets and Prices</Title>
+          {availablePrints.map(print => (
+            <Row key={print.id} style={{ marginBottom: '8px' }}>
+              <Col span={16}>
+                <a onClick={() => handleSetChange(print.set)} style={{ cursor: 'pointer', color: '#1890ff' }}>
+                  {print.set_name} ({print.set.toUpperCase()})
+                </a>
               </Col>
-            ))}
-          </Row>
+              <Col span={8}>
+                <Space>
+                  {print.prices.usd && <Text strong>USD: ${print.prices.usd}</Text>}
+                </Space>
+              </Col>
+            </Row>
+          ))}
+          
         </Col>
       </Row>
     </Card>

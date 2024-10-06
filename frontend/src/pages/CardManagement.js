@@ -5,8 +5,8 @@ import CardListInput from '../components/CardManagement/CardListInput';
 import ScryfallCard from '../components/CardManagement/ScryfallCard';
 import api from '../utils/api';
 
-
 const SCRYFALL_API_BASE = "https://api.scryfall.com";
+
 const CardManagement = () => {
   const [cards, setCards] = useState([]);
   const [filteredCards, setFilteredCards] = useState([]);
@@ -23,30 +23,50 @@ const CardManagement = () => {
 
   const fetchCards = async () => {
     try {
-      const response = await api.get('/cards');
+      const response = await api.get('/cards'); 
       setCards(response.data);
       setFilteredCards(response.data);  // Initialize the filtered list
     } catch (error) {
-      message.error('Failed to fetch cards');
+      message.error('Failed to fetch user buylist');
     }
   };
 
   const handleCardClick = async (card) => {
+
+    console.log('Card clicked:', card);
+
+    if (!card.name) {
+      message.error('Card name is missing');
+      return;
+    }
+
     setSelectedCard(card);
     setIsLoading(true);
+
+    // Construct the query parameters for Scryfall API
+    let query = `fuzzy=${encodeURIComponent(card.name)}`;
+    if (card.set) {
+      query += `&set=${encodeURIComponent(card.set)}`;
+    }
+    if (card.language) {
+      query += `&lang=${encodeURIComponent(card.language)}`;
+    }
+    console.log('Scryfall API query:', query);  // Log the query
+
+    // Fetch card details from Scryfall API
     try {
-      const response = await api.get('/fetch_card', {
-        params: {
-          name: card.name,
-          set: card.set,
-          language: card.language,
-          version: card.version
-        }
-      });
-      setCardData(response.data);
+      const response = await fetch(`${SCRYFALL_API_BASE}/cards/named?${query}`);
+      const scryfallData = await response.json();
+
+      console.log('Scryfall data:', scryfallData);  // Log the fetched data
+      
+      if (scryfallData.status === 404) {
+        throw new Error('Card not found');
+      }
+      setCardData(scryfallData);
       setIsModalVisible(true);
     } catch (error) {
-      message.error(`Failed to fetch card data: ${error.message}`);
+      message.error(`Failed to fetch card details: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -164,16 +184,23 @@ const CardManagement = () => {
         ]}
       >
         {isLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin size="large" />
-            <p>Loading card data...</p>
-          </div>
+          <Spin size="large" />
         ) : cardData ? (
-          <ScryfallCard data={cardData.scryfall} />
-        ) : null}
+          <ScryfallCard card={cardData} onSetClick={handleSetClick} />
+        ) : <div>No card data available</div>}
       </Modal>
     </div>
   );
+};
+
+const handleSetClick = async (setCode) => {
+  try {
+    console.log('Set clicked:', setCode);  // Log the clicked set
+    await api.post('/save_set_selection', { set: setCode });
+    message.success('Set selection saved successfully');
+  } catch (error) {
+    message.error(`Failed to save set: ${error.message}`);
+  }
 };
 
 export default CardManagement;
