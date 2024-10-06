@@ -10,8 +10,9 @@ __pypackages__/
 .env
 mtg_optimizer.code-workspace
 .vscode/
-frontend/build/
-frontend/node_modules/
+static/
+build/
+node_modules/
 results/
 logs/
 package-lock.json
