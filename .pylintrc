@@ -1,2 +1,2 @@
 [MESSAGES CONTROL]
-disable=no-member
+disable=no-member,missing-module-docstring

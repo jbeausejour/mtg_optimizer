@@ -11,6 +11,7 @@ optimization_routes = Blueprint("optimization_routes", __name__)
 
 @optimization_routes.route("/optimize", methods=["POST"])
 def start_task():
+    """Function that start an optimize task."""
     logger.info("start-task called")
     task = test_task.apply_async()
     return jsonify({"message": "Task started!", "task_id": task.id})
@@ -18,6 +19,7 @@ def start_task():
 
 @optimization_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
+    """Function that check the status of a task."""
     task = test_task.AsyncResult(task_id)
     response = {"state": task.state, "status": task.info if task.info else ""}
     return jsonify(response)
@@ -25,12 +27,13 @@ def task_status(task_id):
 
 @optimization_routes.route("/start_scraping", methods=["POST"])
 def start_scraping():
+    """Function that start the scrapping task."""
     data = request.json
+    logging.info("Received data: %s", data)
 
     # Extracting parameters from request data
     site_ids = data.get("sites", [])
     card_list = data.get("card_list", [])
-    # Default to 'milp' if not provided
     strategy = data.get("strategy", "milp")
     min_store = data.get("min_store", 1)
     find_min_store = data.get("find_min_store", False)

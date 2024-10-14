@@ -7,6 +7,7 @@ import { LinkOutlined } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
 
+//Formats a card name to lowercase with hyphens, removing apostrophes. (Utility function)
 const formatCardName = (name) => {
   if (!name) return '';
   const part = name.split(' // ')[0]; // Take the first part if split by ' // '
@@ -15,7 +16,13 @@ const formatCardName = (name) => {
   return formatted;
 };
 
+//Formats the set code to lowercase, handling special cases for prefixes like 'p' or 't'. (Utility function)
 const formatSetCode = (setCode) => {
+  if (!setCode) {
+    console.error('Error: setCode is undefined or null');
+    return '';
+  }
+
   let formattedSetCode = setCode;
   if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
     formattedSetCode = formattedSetCode.slice(1);
@@ -23,6 +30,7 @@ const formatSetCode = (setCode) => {
   return formattedSetCode.toLowerCase();
 };
 
+//Formats oracle text into paragraphs, with symbols converted to icons. (Utility function)
 const formatOracleText = (text) => {
   if (!text) return null; // Return null or an appropriate fallback if text is undefined or empty
   return text.split('\n').map((paragraph, index) => (
@@ -34,6 +42,7 @@ const formatOracleText = (text) => {
   ));
 };
 
+//Renders an image of the mana symbol based on the input. (Utility function)
 const ManaSymbol = ({ symbol }) => {
   const cleanSymbol = symbol.replace(/[{/}]/g, '');
   const symbolUrl = `https://svgs.scryfall.io/card-symbols/${cleanSymbol}.svg`;
@@ -47,6 +56,7 @@ const ManaSymbol = ({ symbol }) => {
   );
 };
 
+//Renders the symbol of a card set with coloring based on rarity. (Utility function)
 const SetSymbol = ({ setCode, rarity }) => {
   const formattedSetCode = formatSetCode(setCode);
   const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
@@ -73,6 +83,7 @@ const SetSymbol = ({ setCode, rarity }) => {
   );
 };
 
+//Displays the legality of the card in different formats. (Utility function)
 const LegalityTag = ({ format, legality }) => {
   const color = {
     legal: 'green',
@@ -87,6 +98,7 @@ const LegalityTag = ({ format, legality }) => {
   );
 };
 
+//Displays detailed information of a card from Scryfall API. (Result of user clicking on a card)
 const ScryfallCard = ({ data }) => {
   if (!data) return <div>No card data available</div>;
 
@@ -163,29 +175,36 @@ const ScryfallCard = ({ data }) => {
   );
 };
 
+//Main component rendering the UI for optimization tasks
 const Optimize = () => {
   const [cards, setCards] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [cardList, setCardList] = useState([]);
-  const [selectedCard, setSelectedCard] = useState(null);
-  const [isModalVisible, setIsModalVisible] = useState(false);
   const [cardData, setCardData] = useState(null);
+  const [cardList, setCardList] = useState([]);
+
+  const [selectedCard, setSelectedCard] = useState({});
+  const [sites, setSites] = useState([]);
   const [selectedSites, setSelectedSites] = useState({});
-  const [taskId, setTaskId] = useState(null);
-  const [taskStatus, setTaskStatus] = useState(null);
-  const [optimizationResult, setOptimizationResult] = useState(null); // Stores optimization results
-  const { theme } = useTheme();
+  
   const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
   const [minStore, setMinStore] = useState(2);
   const [findMinStore, setFindMinStore] = useState(false);
+
+  const [taskId, setTaskId] = useState(null);
+  const [taskStatus, setTaskStatus] = useState(null);
+  const [optimizationResult, setOptimizationResult] = useState(null); // Stores optimization results
+
+  const { theme } = useTheme();
   const { Option } = Select;
   const [isLoading, setIsLoading] = useState(false);
+  const [isModalVisible, setIsModalVisible] = useState(false);
 
+  //Fetches the list of cards and sites when the component mounts. (Initial data load)
   useEffect(() => {
     fetchCards();
     fetchSites();
   }, []);
 
+  //Checks task status periodically when an optimization task starts. (Triggered by taskId change)
   useEffect(() => {
     if (taskId) {
       const interval = setInterval(() => {
@@ -195,6 +214,7 @@ const Optimize = () => {
     }
   }, [taskId]);
 
+  //Fetches available cards to display in the "MTG Card List". (Initial data load)
   const fetchCards = async () => {
     try {
       const response = await api.get('/cards');
@@ -205,6 +225,7 @@ const Optimize = () => {
     }
   };
 
+  //Fetches available sites to display in the "Site List". (Initial data load)
   const fetchSites = async () => {
     try {
       const response = await api.get('/sites');
@@ -220,9 +241,24 @@ const Optimize = () => {
     }
   };
 
+  // Handles the optimization request by posting the selected cards, strategy, 
+  // and site information to the backend. (Triggered by the "Run Optimization" button)
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
+      // Log to verify data before sending the request
+      console.log("Sites:", sitesToOptimize);
+      console.log("Strategy:", optimizationStrategy);
+      console.log("Min Store:", minStore);
+      console.log("Find Min Store:", findMinStore);
+      console.log("Card List:", cardList);
+      console.log("Sending request data:", JSON.stringify({
+        sites: sitesToOptimize,
+        strategy: optimizationStrategy,
+        min_store: minStore,
+        find_min_store: findMinStore,
+        card_list: cardList,
+      }));
       
       // Add cardList and strategy to the request
       const response = await api.post('/start_scraping', {
@@ -242,6 +278,7 @@ const Optimize = () => {
   };
   
 
+  //Checks the status of the ongoing optimization task. (Triggered periodically after starting an optimization)
   const checkTaskStatus = async (id) => {
     try {
       const response = await api.get(`/task_status/${id}`);
@@ -256,6 +293,7 @@ const Optimize = () => {
     }
   };
 
+  //Submits the user-added card list and updates the state. (Result of user submitting a card list)
   const handleCardListSubmit = async (newCardList) => {
     try {
       await api.post('/card_list', { cardList: newCardList });
@@ -268,11 +306,12 @@ const Optimize = () => {
     }
   };
 
+  //Handles when a user clicks on a card, fetching detailed data for that card. (User clicks on a card from the card list)
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     setIsLoading(true);
     try {
-      const response = await api.get('/fetch_card?name=${card.name}');
+      const response = await api.get(`/fetch_card?name=${card.name}`);
       
       if (response.data.error) {
         throw new Error(response.data.error);
@@ -289,10 +328,12 @@ const Optimize = () => {
     }
   };
 
+  //Closes the modal that shows card details. (User closes the card details modal)
   const handleModalClose = () => {
     setIsModalVisible(false);
   };
 
+  //Toggles whether a site is selected for optimization. (User toggles site selection switch)
   const handleSiteSelect = (siteId) => {
     setSelectedSites(prev => ({
       ...prev,

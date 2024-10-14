@@ -11,7 +11,7 @@ const Results = () => {
   const { theme } = useTheme();
 
   useEffect(() => {
-    api.get('/results/${scanId}')
+    api.get(`/results/${scanId}`)
       .then(response => setScan(response.data))
       .catch(error => console.error('Error fetching results:', error));
   }, [scanId]);

@@ -17,6 +17,7 @@ from app.models.sets import Sets
 from app.utils.data_fetcher import ExternalDataSynchronizer
 from app.utils.optimization import PurchaseOptimizer
 from app.utils.selenium_driver import SeleniumDriver
+from mtgsdk import Card
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,85 +58,64 @@ class CardDataManager:
 
             # Extract the prints_search_uri
             prints_search_uri = base_card_data.get("prints_search_uri")
-            # logger.info(f"prints_search_uri is: {prints_search_uri}")
             if not prints_search_uri:
-                logger.error(
-                    "prints_search_uri not found for card: %s", card_name)
+                logger.error("prints_search_uri not found for card: %s", card_name)
                 return None
 
             # Step 2: Get all printings using the prints_search_uri
             all_printings = []
             while prints_search_uri:
-                response = requests.get(
-                    prints_search_uri, timeout=REQUEST_TIMEOUT)
+                response = requests.get(prints_search_uri, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
 
                 all_printings.extend(data["data"])
-                # logger.info(f"prints_search_uri found sets: {all_printings}")
                 prints_search_uri = data.get("next_page")
 
-            # Process the data
-            sets = set()
+            # Step 3: Process the data
+            sets = []
             languages = set()
             versions = set()
+            seen_set_codes = set()  # Track set codes to avoid duplicates
 
             for card in all_printings:
-                sets.append(
-                    {
-                        "code": card["set"],
-                        "name": card["set_name"],
-                        "released_at": (
-                            datetime.strptime(
-                                card["released_at"], "%Y-%m-%d").date()
-                            if card["released_at"]
-                            else None
-                        ),
-                    }
-                )
+                if card["set"] not in seen_set_codes:
+                    seen_set_codes.add(card["set"])
+                    sets.append(
+                        {
+                            "code": card["set"],
+                            "name": card["set_name"],
+                            "released_at": (
+                                datetime.strptime(card["released_at"], "%Y-%m-%d").date()
+                                if card["released_at"]
+                                else None
+                            ),
+                        }
+                    )
                 languages.add(card["lang"])
                 if "finishes" in card:
                     versions.update(card["finishes"])
 
-            # if sort_by == 'release_date':
-            #     sets.sort(key=lambda x: x['released_at'] or datetime.min.date(), reverse=True)
-            # elif sort_by == 'alphabetical':
-            #     sets.sort(key=lambda x: x['name'])
-            sets.sort(
-                key=lambda x: x["released_at"] or datetime.min.date(), reverse=True
-            )
+            # Step 4: Sort sets by release date (default to the earliest date if missing)
+            sets.sort(key=lambda x: x["released_at"] or datetime.min.date(), reverse=True)
 
+            # Step 5: Return final structured data
             return {
-                # Use the official name from Scryfall
                 "name": base_card_data["name"],
-                "sets": [{"code": code, "name": name} for code, name in sets],
+                "sets": [{"code": entry["code"], "name": entry["name"]} for entry in sets],
                 "languages": list(languages),
                 "versions": list(versions),
             }
 
         except requests.RequestException as e:
-            logger.error("Error fetching card versions for %s: %s",
-                         card_name, str(e))
+            logger.error("Error fetching card versions for %s: %s", card_name, str(e))
             return None
+
 
     @staticmethod
     def get_card_suggestions(query, limit=20):
-        scryfall_api_url = f"{SCRYFALL_API_BASE}/catalog/card-names"
-        try:
-            response = requests.get(scryfall_api_url, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            all_card_names = response.json()["data"]
-
-            # Filter card names based on the query
-            suggestions = [
-                name for name in all_card_names if query.lower() in name.lower()
-            ]
-
-            return suggestions[:limit]  # Return only up to the limit
-        except requests.RequestException as e:
-            logger.error(
-                "Error fetching card suggestions from Scryfall: %s", str(e))
-            return []
+        cards = Card.where(name=query).all()
+        return [card.name for card in cards][:limit]
 
     @staticmethod
     def get_scryfall_suggestions(query, limit=10):
@@ -198,50 +178,16 @@ class CardDataManager:
 
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
+        cards = Card.where(name=card_name).all()
+        if set_code:
+            cards = [card for card in cards if card.set.lower() == set_code.lower()]
+        if language:
+            cards = [card for card in cards if card.language.lower() == language.lower()]
 
-        # Try exact match first
-        params = {"exact": card_name, "set": set_code, "lang": language}
-        response = requests.get(
-            SCRYFALL_API_NAMED_URL, params=params, timeout=REQUEST_TIMEOUT
-        )
-
-        if response.status_code == 200:
-            card_data = response.json()
-        else:
-            # If exact match fails, try fuzzy search
-            params["fuzzy"] = card_name
-            del params["exact"]
-            response = requests.get(
-                SCRYFALL_API_NAMED_URL, params=params, timeout=REQUEST_TIMEOUT
-            )
-
-            if response.status_code == 200:
-                card_data = response.json()
-            else:
-                # If both searches fail, return None or raise an exception
-                return None  # or raise an exception
-
-        # If version is specified, find the matching version
-        if version and "all_parts" in card_data:
-            for part in card_data["all_parts"]:
-                if (
-                    part["component"] == "combo_piece"
-                    and fuzz.ratio(part.get("name", ""), version) > 90
-                ):
-                    response = requests.get(
-                        part["uri"], timeout=REQUEST_TIMEOUT)
-                    if response.status_code == 200:
-                        card_data = response.json()
-                    break
-
-        # Fetch all printings
-        if "prints_search_uri" in card_data:
-            all_printings = CardDataManager.fetch_all_printings(
-                card_data["prints_search_uri"]
-            )
-            card_data["all_printings"] = all_printings
-
-        return {"scryfall": card_data, "scan_timestamp": datetime.now().isoformat()}
+        # Apply further filtering or return the card data if found
+        if cards:
+            return {"scryfall": cards[0].to_dict(), "scan_timestamp": datetime.now().isoformat()}
+        return None
 
     @staticmethod
     def fetch_all_printings(prints_search_uri):

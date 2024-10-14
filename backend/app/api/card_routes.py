@@ -43,9 +43,7 @@ def fetch_card():
         return jsonify({"error": "Card name is required"}), 400
 
     try:
-        card_data = CardDataManager.fetch_card_data(
-            card_name, set_code, language, version
-        )
+        card_data = CardDataManager.fetch_card_data(card_name, set_code, language, version)
         if card_data is None:
             return jsonify({"error": "Card not found"}), 404
         return jsonify(card_data)
