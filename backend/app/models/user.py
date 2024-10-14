@@ -1,5 +1,7 @@
+from werkzeug.security import check_password_hash, generate_password_hash
+
 from app.extensions import db
-from werkzeug.security import generate_password_hash, check_password_hash
+
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -14,8 +16,4 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self):
-        return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email
-        }
+        return {"id": self.id, "username": self.username, "email": self.email}

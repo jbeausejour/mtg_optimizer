@@ -1,8 +1,10 @@
-from app.extensions import db
 from datetime import datetime, timezone
 
+from app.extensions import db
+
+
 class MarketplaceCard(db.Model):
-    __tablename__ = 'marketplace_card'
+    __tablename__ = "marketplace_card"
     id = db.Column(db.Integer, primary_key=True)
     site = db.Column(db.String(255), nullable=False)
     name = db.Column(db.String(255), nullable=False)
@@ -13,35 +15,42 @@ class MarketplaceCard(db.Model):
     language = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Integer, nullable=False)
     price = db.Column(db.Float, nullable=False)
-    set_id = db.Column(db.String(36), db.ForeignKey('sets.id', name='fk_card_set_id'))
+    set_id = db.Column(db.String(36), db.ForeignKey(
+        "sets.id", name="fk_card_set_id"))
     created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
-    
-    set = db.relationship('Sets', back_populates='marketplace_cards')
-    scan_results = db.relationship('ScanResult', back_populates='marketplace_card')
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc),
+    )
+
+    set = db.relationship("Sets", back_populates="marketplace_cards")
+    scan_results = db.relationship(
+        "ScanResult", back_populates="marketplace_card")
 
     def to_dict(self):
         return {
-            'id': self.id,
-            'site': self.site,
-            'name': self.name,
-            'edition': self.edition,
-            'version': self.version,
-            'foil': self.foil,
-            'quality': self.quality,
-            'language': self.language,
-            'quantity': self.quantity,
-            'price': self.price,
-            'set_id': self.set_id,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            "id": self.id,
+            "site": self.site,
+            "name": self.name,
+            "edition": self.edition,
+            "version": self.version,
+            "foil": self.foil,
+            "quality": self.quality,
+            "language": self.language,
+            "quantity": self.quantity,
+            "price": self.price,
+            "set_id": self.set_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
     def __repr__(self):
-        return f'<MarketplaceCard {self.name}>'
+        return f"<MarketplaceCard {self.name}>"
+
 
 class UserBuylistCard(db.Model):
-    __tablename__ = 'user_buylist_card'
+    __tablename__ = "user_buylist_card"
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(255), nullable=False)
     edition = db.Column(db.String(255))
@@ -53,18 +62,19 @@ class UserBuylistCard(db.Model):
 
     def to_dict(self):
         return {
-            'id': self.id,
-            'name': self.name,
-            'edition': self.edition,
-            'version': self.version,
-            'foil': self.foil,
-            'quality': self.quality,
-            'language': self.language,
-            'quantity': self.quantity
+            "id": self.id,
+            "name": self.name,
+            "edition": self.edition,
+            "version": self.version,
+            "foil": self.foil,
+            "quality": self.quality,
+            "language": self.language,
+            "quantity": self.quantity,
         }
 
+
 class ScryfallCardData(db.Model):
-    __tablename__ = 'scryfall_card_data'
+    __tablename__ = "scryfall_card_data"
     id = db.Column(db.Integer, primary_key=True)
     card_name = db.Column(db.String(255), nullable=False)
     oracle_id = db.Column(db.String(255), nullable=False)
@@ -83,4 +93,4 @@ class ScryfallCardData(db.Model):
     purchase_data = db.Column(db.JSON)
 
     def __repr__(self):
-        return f'<CardData {self.card_name}>'
+        return f"<CardData {self.card_name}>"

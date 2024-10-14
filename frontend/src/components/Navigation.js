@@ -11,18 +11,16 @@ const Navigation = () => {
   const { theme, toggleTheme } = useTheme();
   const { logout } = useAuth();
 
- // Hide navigation when the login page is loaded
+  // Hide navigation when the login page is loaded
   useEffect(() => {
     const navbar = document.querySelector('.navbar');
-    if (navbar) {
+    if (location.pathname === '/login' && navbar) {
       navbar.style.display = 'none';
+    } else if (navbar) {
+      navbar.style.display = 'block';
     }
-    return () => {
-      if (navbar) {
-        navbar.style.display = 'block';
-      }
-    };
-  }, []);
+  }, [location.pathname]);
+
   const handleLogout = () => {
     logout();
     message.success('Logged out successfully');
@@ -63,7 +61,7 @@ const Navigation = () => {
     {
       key: "user",
       label: (
-        <Dropdown Menu={userMenu} trigger={['click']}>
+        <Dropdown overlay={userMenu} trigger={['click']}>
           <Avatar icon={<UserOutlined />} style={{ cursor: 'pointer' }} />
         </Dropdown>
       )

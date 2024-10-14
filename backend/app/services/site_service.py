@@ -1,12 +1,14 @@
-from app.models.site import Site
-from app.extensions import db
 from sqlalchemy.exc import IntegrityError
+
+from app.extensions import db
+from app.models.site import Site
+
 
 class MarketplaceManager:
     @staticmethod
     def get_all_sites():
         return Site.query.all()
-    
+
     @staticmethod
     def add_site(data):
         new_site = Site(**data)

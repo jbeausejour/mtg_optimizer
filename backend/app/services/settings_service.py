@@ -1,5 +1,6 @@
-from app.models.settings import Settings
 from app.extensions import db
+from app.models.settings import Settings
+
 
 class SettingsService:
     @staticmethod

@@ -1,5 +1,6 @@
 from app.models.scan import Scan, ScanResult
 
+
 class PriceScanManager:
     @staticmethod
     def get_scan_results(scan_id):

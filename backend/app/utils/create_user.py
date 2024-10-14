@@ -1,11 +1,12 @@
-from app.models.user import User
-from app.extensions import db
 from werkzeug.security import generate_password_hash
 
+from app.extensions import db
+from app.models.user import User
+
 # Create a new user
-username = 'Julz'
-email = 'jules.beausejour@gmail.com'
-password = 'Julz'  # Replace with the actual password
+username = "Julz"
+email = "jules.beausejour@gmail.com"
+password = "Julz"  # Replace with the actual password
 
 # Create the user object
 new_user = User(username=username, email=email)

@@ -1,5 +1,6 @@
 from app.extensions import db
 
+
 class Site(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), unique=True, nullable=False)
@@ -9,15 +10,15 @@ class Site(db.Model):
     country = db.Column(db.String(50), nullable=False)
     type = db.Column(db.String(50), nullable=False)
 
-    scan_results = db.relationship('ScanResult', back_populates='site')
+    scan_results = db.relationship("ScanResult", back_populates="site")
 
     def to_dict(self):
         return {
-            'id': self.id,
-            'name': self.name,
-            'url': self.url,
-            'method': self.method,
-            'active': self.active,
-            'country': self.country,
-            'type': self.type
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "method": self.method,
+            "active": self.active,
+            "country": self.country,
+            "type": self.type,
         }

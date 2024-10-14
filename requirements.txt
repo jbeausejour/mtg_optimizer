@@ -4,6 +4,8 @@ flask-sqlalchemy==3.1.1
 flask-migrate==4.0.7
 flask-jwt-extended==4.6.0
 flask-cors==4.0.1
+Flask-rq2==18.3
+Flask-Limiter==3.8.0
 htmldom==2.0
 fuzzywuzzy==0.18.0
 deap==1.4.1
@@ -22,5 +24,5 @@ celery==5.4.0
 celery[sqlalchemy]==5.4.0
 psycopg2-binary==2.9.9
 pytest==8.3.2
-flask-rq2==18.3
-redis==5.0.1
+wheel==0.44.0
+setuptools==75.1.0

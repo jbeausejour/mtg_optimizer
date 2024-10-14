@@ -1,6 +1,6 @@
-from .card import MarketplaceCard, UserBuylistCard, ScryfallCardData
-from .scan import Scan, ScanResult, OptimizationResult
+from .card import MarketplaceCard, ScryfallCardData, UserBuylistCard
+from .scan import OptimizationResult, Scan, ScanResult
 from .sets import Sets
-from .site import Site
 from .settings import Settings
+from .site import Site
 from .user import User

@@ -1,26 +1,28 @@
-import time
-import sys
-import os
 import logging
-from flask import current_app
-from celery.exceptions import TimeoutError
+import os
+import sys
+import time
 
+from celery.exceptions import TimeoutError
+from flask import current_app
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Add the project root directory to the Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from app import create_app
 from app.tasks.celery_app import celery_app
 from app.tasks.optimization_tasks import test_task
 
+
 def setup_app():
     app = create_app()
     app.app_context().push()
     return app
+
 
 def test_simple_task():
     logger.info("Sending test task")
@@ -34,8 +36,8 @@ def test_simple_task():
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
 
+
 if __name__ == "__main__":
     app = setup_app()
     logger.info("Testing simple task:")
     test_simple_task()
-    

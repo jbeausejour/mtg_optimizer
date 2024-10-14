@@ -24,6 +24,7 @@ const Settings = () => {
           'Authorization': `Bearer ${token}`
         }
       });
+      console.log('Fetched settings:', response.data);
       setSettings(response.data);
       form.setFieldsValue(response.data);
     } catch (error) {
@@ -92,8 +93,8 @@ const Settings = () => {
             <Option value="hybrid">Hybrid</Option>
           </Select>
         </Form.Item>
-        <Form.Item name="priceAlertThreshold" label="Price Alert Threshold (%)" type="number">
-          <Input />
+        <Form.Item name="priceAlertThreshold" label="Price Alert Threshold (%)">
+          <Input type="number" />
         </Form.Item>
         <Form.Item name="enablePriceAlerts" label="Enable Price Alerts" valuePropName="checked">
           <Switch />

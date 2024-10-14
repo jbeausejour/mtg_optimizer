@@ -173,6 +173,7 @@ const Optimize = () => {
   const [selectedSites, setSelectedSites] = useState({});
   const [taskId, setTaskId] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
+  const [optimizationResult, setOptimizationResult] = useState(null); // Stores optimization results
   const { theme } = useTheme();
   const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
   const [minStore, setMinStore] = useState(2);
@@ -222,12 +223,16 @@ const Optimize = () => {
   const handleOptimize = async () => {
     try {
       const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
+      
+      // Add cardList and strategy to the request
       const response = await api.post('/start_scraping', {
         sites: sitesToOptimize,
-        strategy: 'milp', // or 'nsga_ii' or 'hybrid'
-        min_store: 2, // Add a state variable for this
-        find_min_store: false // Add a state variable for this
+        strategy: optimizationStrategy, // User-selected strategy (MILP, NSGA-II, etc.)
+        min_store: minStore, // Minimum store count
+        find_min_store: findMinStore, // Boolean
+        card_list: cardList // Add the card list to the request
       });
+  
       setTaskId(response.data.task_id);
       message.success('Optimization task started!');
     } catch (error) {
@@ -235,18 +240,16 @@ const Optimize = () => {
       console.error('Error during optimization:', error);
     }
   };
+  
 
   const checkTaskStatus = async (id) => {
     try {
-      const response = await api.get('/task_status/${id}');
+      const response = await api.get(`/task_status/${id}`);
       setTaskStatus(response.data.status);
       if (response.data.state === 'SUCCESS') {
         message.success('Optimization completed successfully!');
         setTaskId(null);
-        // Redirect to the results page
-        if (response.data.result && response.data.result.scan_id) {
-          history.push(`/results/${response.data.result.scan_id}`);
-        }
+        setOptimizationResult(response.data.result); // Store the result to display
       }
     } catch (error) {
       console.error('Error checking task status:', error);
@@ -335,6 +338,15 @@ const Optimize = () => {
         Run Optimization
       </Button>
       {taskStatus && <p>Task Status: {taskStatus}</p>}
+      {optimizationResult && (
+        <div>
+          <Divider />
+          <Title level={4}>Optimization Results</Title>
+          <pre style={{ backgroundColor: '#f0f0f0', padding: '10px', borderRadius: '5px' }}>
+            {JSON.stringify(optimizationResult, null, 2)}
+          </pre>
+        </div>
+      )}
       <Row gutter={16}>
         <Col span={12}>
           <Card title="MTG Card List" className={`ant-card ${theme}`}>
