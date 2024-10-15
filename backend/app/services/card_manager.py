@@ -9,6 +9,7 @@ from mtgsdk import Card, Set
 import logging
 import requests
 from fuzzywuzzy import fuzz
+from flask import current_app
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class CardManager:
             data = CardManager.fetch_scryfall_data(card_name, set_code, language, version)
             return data
         except Exception as e:
-            logger.debug(f"Error fetching card data for '{card_name}': {str(e)}")
+            current_app.logger.debug(f"Error fetching card data for '{card_name}': {str(e)}")
             return None
 
     # Set Operations
@@ -58,7 +59,7 @@ class CardManager:
             ]
             return sets_data
         except Exception as e:
-            logger.error(f"Error fetching sets data: {str(e)}")
+            current_app.logger.error(f"Error fetching sets data: {str(e)}")
             return []
 
 
@@ -119,14 +120,14 @@ class CardManager:
                 response = requests.get(next_page)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
-                logger.error(f"Error fetching printings data from Scryfall: {str(e)}")
+                current_app.logger.error(f"Error fetching printings data from Scryfall: {str(e)}")
                 return []
 
             data = response.json()
-            logger.debug(f"Scryfall all printings data for page: {data}")
+            current_app.logger.debug(f"Scryfall all printings data for page: {data}")
 
             for card in data.get('data', []):
-                logger.debug(f"Processing card printing: {card}")
+                current_app.logger.debug(f"Processing card printing: {card}")
                 all_printings.append({
                     'set': card.get('set'),
                     'set_name': card.get('set_name'),

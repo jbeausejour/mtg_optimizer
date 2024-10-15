@@ -40,15 +40,27 @@ def create_app(config_class=get_config()):
 
 def setup_logging(app):
     """Setup func"""
+    # Configure the log level for the app
+    app.logger.setLevel(logging.INFO)
+
+    # Check if logs should be written to stdout
     if not app.debug and not app.testing:
         if app.config.get("LOG_TO_STDOUT"):
-            app.logger.addHandler(logging.StreamHandler())
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(logging.INFO)
+            stream_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
+                )
+            )
+            app.logger.addHandler(stream_handler)
         else:
             if not os.path.exists("logs"):
                 os.mkdir("logs")
             file_handler = RotatingFileHandler(
                 "logs/mtg_optimizer.log", maxBytes=10240, backupCount=10
             )
+            file_handler.setLevel(logging.INFO)
             file_handler.setFormatter(
                 logging.Formatter(
                     "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
@@ -56,5 +68,30 @@ def setup_logging(app):
             )
             app.logger.addHandler(file_handler)
 
-        app.logger.setLevel(logging.INFO)
-        app.logger.info("MTG Optimizer startup")
+    # Add a custom logger setup if needed
+    logger = logging.getLogger("your_logger_name")
+    logger.setLevel(logging.INFO)
+
+    # Add file handler for the custom logger
+    file_handler = RotatingFileHandler(
+        "logs/custom_mtg_optimizer.log", maxBytes=10240, backupCount=10
+    )
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
+        )
+    )
+    logger.addHandler(file_handler)
+
+    # Add stream handler to custom logger
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"
+        )
+    )
+    logger.addHandler(stream_handler)
+
+    # Log the startup message
+    app.logger.info("MTG Optimizer startup")

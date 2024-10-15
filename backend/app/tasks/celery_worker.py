@@ -5,8 +5,28 @@ import sys
 from app import create_app
 from app.tasks.celery_app import celery_app
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("celery_worker_logger")
+
+# Configure a file handler for the worker log
+if not os.path.exists("logs"):
+    os.makedirs("logs")
+
+file_handler = logging.handlers.RotatingFileHandler(
+    "logs/celery_worker.log", maxBytes=10240, backupCount=10
+)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]")
+)
+logger.addHandler(file_handler)
+
+# Add a stream handler for console output
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]")
+)
+logger.addHandler(console_handler)
 
 # Get the absolute path of the current file
 current_path = os.path.abspath(os.path.dirname(__file__))

@@ -23,6 +23,7 @@ class ScanResult(db.Model):
     card_name = db.Column(db.String(255), nullable=False)  # Store the card name for fetching details
     site_id = db.Column(db.Integer, db.ForeignKey("site.id", name="fk_ScanResult_site_id"), nullable=False)
     price = db.Column(db.Float, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     site = db.relationship("Site", back_populates="scan_results")
 

@@ -18,6 +18,9 @@ sudo apt-get install redis
 sudo service redis-server start
 redis-cli FLUSHDB
 redis-cli ping
+Delete all tasks
+EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 "celery-task-meta-*"
+
 
 # Backend Terminal Installation
 pip install -r requirements.txt

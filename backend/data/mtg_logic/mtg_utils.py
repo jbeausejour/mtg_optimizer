@@ -86,7 +86,7 @@ def calculate_stats(group):
     std_price = group["Weighted_Price"].std()
     idx_min = group["Weighted_Price"].idxmin()
 
-    logger.info(
+    current_app.logger.info(
         color_msg(
             [
                 ("[INFO] ", "d_yellow"),
@@ -112,7 +112,7 @@ def calculate_stats(group):
 
 
 def check_dataframe(df):
-    logger.debug(
+    current_app.logger.debug(
         color_msg([("[INFO] ", "d_yellow"), ("Checking dataframe...\n", "rst")])
     )
 
@@ -130,7 +130,7 @@ def check_unmapped_cards(sites_results_df, cards_name_list):
     not_in_dataframe = [item for item in cards_name_list if item not in all_names_in_df]
     nbr = len(not_in_dataframe)
     if nbr > 0:
-        logger.warning(
+        current_app.logger.warning(
             color_msg(
                 [
                     ("[Warning] ", "d_yellow"),
@@ -141,7 +141,7 @@ def check_unmapped_cards(sites_results_df, cards_name_list):
             )
         )
         for item in not_in_dataframe:
-            logger.info(color_msg([("     --> ", "d_yellow"), (str(item), "d_cyan")]))
+            current_app.logger.info(color_msg([("     --> ", "d_yellow"), (str(item), "d_cyan")]))
     return nbr
 
 
@@ -157,7 +157,7 @@ def check_unmapped_qualities(master_df):
 
     # Log/Print unmapped qualities
     if unmapped_qualities_before_mapping:
-        logger.warning(
+        current_app.logger.warning(
             color_msg(
                 [
                     (
@@ -172,7 +172,7 @@ def check_unmapped_qualities(master_df):
         # Log/Print DataFrame entries with unmapped qualities
         for unmapped_quality in unmapped_qualities_before_mapping:
             unmapped_entries = master_df[master_df["Quality"] == unmapped_quality]
-            logger.warning(
+            current_app.logger.warning(
                 color_msg(
                     [
                         ("Warning: ", "d_yellow"),
@@ -230,7 +230,7 @@ def display_purchasing_plan(purchasing_plan):
             ("at a total price of ", "rst"),
             (f"${row['Price']:.2f}", "b_green"),
         ]
-        logger.info(color_msg(message))
+        current_app.logger.info(color_msg(message))
 
     # Calculate and display the total cost
     total_cost = grouped_plan["Price"].sum()
@@ -239,7 +239,7 @@ def display_purchasing_plan(purchasing_plan):
         ("Total cost of the purchasing plan: ", "rst"),
         (f"${total_cost:.2f}", "b_green"),
     ]
-    logger.info(color_msg(total_cost_message))
+    current_app.logger.info(color_msg(total_cost_message))
 
 
 def fetch_all_card_details(card_names, special_site_flag=True, save_all_research=True):
@@ -296,7 +296,7 @@ def fetch_all_card_details(card_names, special_site_flag=True, save_all_research
             domain = extract_domain(site)
 
             # Creating a mix of colored and non-colored text
-            logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
+            current_app.logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
 
             mixed_message = color_msg(
                 [("Results for site:", "rst"), (domain, "b_cyan")]
@@ -311,7 +311,7 @@ def fetch_all_card_details(card_names, special_site_flag=True, save_all_research
             )
             mixed_msg_pad(mixed_message)
 
-            logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
+            current_app.logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
 
             if cards_df is not None and not cards_df.empty:
                 if master_df.empty:
@@ -352,7 +352,7 @@ def fetch_all_card_details(card_names, special_site_flag=True, save_all_research
                 )
                 mixed_msg_pad(mixed_message)
 
-                logger.error(
+                current_app.logger.error(
                     color_msg(
                         [
                             (str(domain), "b_cyan"),
@@ -360,10 +360,10 @@ def fetch_all_card_details(card_names, special_site_flag=True, save_all_research
                         ]
                     )
                 )
-            logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
+            current_app.logger.info(color_msg([(str(dash_line_message), "b_magenta")]))
         except Exception:
             stack_trace = traceback.format_exc()
-            logger.error(
+            current_app.logger.error(
                 color_msg(
                     [
                         (str(site), "b_cyan"),
@@ -401,7 +401,7 @@ def find_best_sites(master_df, unfulfilled_items_df):
     ]
 
     while not unfulfilled_items_df.empty:
-        logger.info(
+        current_app.logger.info(
             f"Start of iteration {iteration}. Number of unfulfilled cards: {len(unfulfilled_items_df)}"
         )
 
@@ -419,7 +419,7 @@ def find_best_sites(master_df, unfulfilled_items_df):
             if site_total_cost > 0:
                 score = num_cards_fulfilled_by_site / site_total_cost
             else:
-                logger.info(
+                current_app.logger.info(
                     f"Site {site_name} has zero total cost. Assigning score as -inf."
                 )
                 score = float("-inf")  # Assign a default score for zero cost
@@ -430,10 +430,10 @@ def find_best_sites(master_df, unfulfilled_items_df):
                 best_site_fulfillment = site_fulfillment_df
 
         if not best_site:
-            logger.warning("Warning: no site can fulfill any more cards, break")
+            current_app.logger.warning("Warning: no site can fulfill any more cards, break")
             break
 
-        logger.info(
+        current_app.logger.info(
             f"End of Bulk Fulfillment step: Best site is {best_site} fulfilling {len(best_site_fulfillment)} cards."
         )
 
@@ -455,15 +455,15 @@ def find_best_sites(master_df, unfulfilled_items_df):
             ~unfulfilled_items_df["Name"].isin(cost_optimized_cards["Name"])
         ]
 
-        logger.info(
+        current_app.logger.info(
             f"Unfulfilled cards after update: {unfulfilled_items_df['Name'].tolist()}"
         )
-        logger.info(
+        current_app.logger.info(
             f"End of iteration {iteration}. Number of unfulfilled cards: {len(unfulfilled_items_df)}"
         )
         iteration += 1
         if iteration > 100:
-            logger.warning("Reached maximum iterations. Breaking out of the loop.")
+            current_app.logger.warning("Reached maximum iterations. Breaking out of the loop.")
             break
 
     for _, card_row in unfulfilled_items_df.iterrows():
@@ -491,7 +491,7 @@ def get_weighted_price(row):
         return row["Price"] * quality_weights[row["Quality"]]
     except KeyError:
         # Set a default value if the quality is not found
-        logger.warning(
+        current_app.logger.warning(
             color_msg(
                 [
                     ("Quality: ", "rst"),
@@ -502,8 +502,8 @@ def get_weighted_price(row):
         )
         return row["Price"] * 1.0
     except Exception as e:
-        logger.exception("An error occurred")
-        logger.error(
+        current_app.logger.exception("An error occurred")
+        current_app.logger.error(
             color_msg(
                 [
                     ("Error: ", "d_red"),
@@ -525,7 +525,7 @@ def print_df(df):
     pd.set_option("display.width", None)
     pd.set_option("display.max_colwidth", None)
 
-    logger.info(f"Printing dataframe:\n\n{df}")
+    current_app.logger.info(f"Printing dataframe:\n\n{df}")
 
     pd.reset_option("display.max_rows")
     pd.reset_option("display.max_columns")
@@ -572,7 +572,7 @@ def process_cards(df):
 
 
 def read_card_list(data_path):
-    logger.info(color_msg([("Reading buy list: ", "rst"), (" good", "b_green")]))
+    current_app.logger.info(color_msg([("Reading buy list: ", "rst"), (" good", "b_green")]))
 
     # Define a list of card names to search for
     with open(f"{data_path}/buy_list.txt", "r") as f:
@@ -594,7 +594,7 @@ def read_card_list(data_path):
 
     message_type = " bad..." if len(card_names) != total_qty else " good"
     message_color = "b_red" if len(card_names) != total_qty else "b_green"
-    logger.info(
+    current_app.logger.info(
         color_msg(
             [
                 (f"{str(len(card_names))}/{total_qty}", "d_cyan"),
@@ -603,11 +603,11 @@ def read_card_list(data_path):
             ]
         )
     )
-    logger.debug(f"--------------------")
-    logger.debug(
+    current_app.logger.debug(f"--------------------")
+    current_app.logger.debug(
         f"cards are: \n%s", "\n".join([f"{q}x {name}" for name, q in card_list])
     )
-    logger.debug(f"--------------------")
+    current_app.logger.debug(f"--------------------")
     return card_list
 
 
@@ -617,7 +617,7 @@ def read_csv(file_paths):
 
 
 def read_site_list(special_site_flag):
-    logger.info(
+    current_app.logger.info(
         color_msg(
             [
                 ("[INFO] ", "b_yellow"),
@@ -656,7 +656,7 @@ def read_site_list(special_site_flag):
         regular_sites + special_sites if special_site_flag else regular_sites
     )
 
-    logger.info(
+    current_app.logger.info(
         color_msg(
             [
                 ("[INFO] ", "b_yellow"),
@@ -666,12 +666,12 @@ def read_site_list(special_site_flag):
             ]
         )
     )
-    logger.debug(f"--------------------")
-    logger.debug(
+    current_app.logger.debug(f"--------------------")
+    current_app.logger.debug(
         "sites are: \n%s",
         "\n".join([f"{site}, {strategy}" for site, strategy in considered_sites]),
     )
-    logger.debug(f"--------------------")
+    current_app.logger.debug(f"--------------------")
     return considered_sites
 
 
@@ -695,7 +695,7 @@ def save_dataframe_with_retry(container, filename):
 
                 # If the file is accessible, save the DataFrame to it
                 container.to_csv(filename, index=False)
-                logger.info(
+                current_app.logger.info(
                     color_msg(
                         [
                             ("[INFO] ", "d_yellow"),
@@ -710,7 +710,7 @@ def save_dataframe_with_retry(container, filename):
                 return  # Exit the function after successful save
             except PermissionError:
                 # If the file is not accessible, prompt the user to close it
-                logger.error(
+                current_app.logger.error(
                     color_msg(
                         [
                             ("Please close the file: ", "rst"),
@@ -722,7 +722,7 @@ def save_dataframe_with_retry(container, filename):
         else:
             # If the file does not exist, save the DataFrame to it
             container.to_csv(filename, index=False)
-            logger.info(
+            current_app.logger.info(
                 color_msg(
                     [
                         ("[INFO] ", "d_yellow"),
@@ -745,7 +745,7 @@ def save_dataframe_with_retry(container, filename):
                 .lower()
             )
             if choice == "c":
-                logger.info(color_msg([("Operation cancelled.", "b_cyan")]))
+                current_app.logger.info(color_msg([("Operation cancelled.", "b_cyan")]))
                 return  # Exit the function if canceled
             elif choice == "d":
                 new_filename = input("Enter a different filename: ").strip()
@@ -757,7 +757,7 @@ def save_dataframe_with_retry(container, filename):
     filename_base, file_extension = os.path.splitext(filename)
     new_filename = f"{filename_base}_{retry_count}{file_extension}"
     container.to_csv(new_filename, index=False)
-    logger.info(
+    current_app.logger.info(
         color_msg(
             [
                 ("Data saved ", "rst"),
@@ -789,7 +789,7 @@ def save_the_data(unique_cards, results_path):
     min_sites = 0
     total_unique_cards = len(unique_cards)
 
-    logger.debug(
+    current_app.logger.debug(
         color_msg(
             [
                 ("Unique cards [", "rst"),
@@ -807,7 +807,7 @@ def save_the_data(unique_cards, results_path):
         if cards_accumulated >= total_unique_cards:
             break
 
-    # logger.info(color_msg([
+    # current_app.logger.info(color_msg([
     #     ("Minimum number of different sites to order from: ", "rst"),
     #     (str(min_sites), "b_cyan"),
     #     (" good", "b_green")]))
@@ -820,7 +820,7 @@ def save_the_data(unique_cards, results_path):
         unique_cards_per_site, f"{results_path}/unique_cards_per_site.csv"
     )
 
-    logger.info(color_msg([("Data saved to CSV files: ", "rst"), (" good", "b_green")]))
+    current_app.logger.info(color_msg([("Data saved to CSV files: ", "rst"), (" good", "b_green")]))
 
 
 def should_consider_site(site_name, flag):
@@ -853,23 +853,23 @@ def update_unfulfilled_items(unfulfilled_items_df, fulfilled_items_df):
     :return: Updated DataFrame of items still needed
     """
     # return unfulfilled_items_df[~unfulfilled_items_df['Name'].isin(fulfilled_items_df['Name'])]
-    # logger.debug(f"Attempting to remove:\n {fulfilled_items_df}")
-    # logger.debug(f"\n From :\n {unfulfilled_items_df}")
+    # current_app.logger.debug(f"Attempting to remove:\n {fulfilled_items_df}")
+    # current_app.logger.debug(f"\n From :\n {unfulfilled_items_df}")
 
     # Step 1 & 2: Check if names in `unfulfilled_items_df` are in `fulfilled_items_df`
     name_is_in_fulfilled = unfulfilled_items_df["Name"].isin(fulfilled_items_df["Name"])
-    # logger.debug(f"Step 1 & 2: Check if names:\n {name_is_in_fulfilled}")
+    # current_app.logger.debug(f"Step 1 & 2: Check if names:\n {name_is_in_fulfilled}")
 
     # Step 3: Negate the condition
     name_is_not_in_fulfilled = ~name_is_in_fulfilled
-    # logger.debug(f"Step 3: Negate the condition:\n {name_is_not_in_fulfilled}")
+    # current_app.logger.debug(f"Step 3: Negate the condition:\n {name_is_not_in_fulfilled}")
 
     # Step 4: Apply the condition to `unfulfilled_items_df` and assign it to `updated_df`
     updated_df = unfulfilled_items_df[name_is_not_in_fulfilled]
-    # logger.debug(f"Step 4: Apply the condition:\n {updated_df}")
+    # current_app.logger.debug(f"Step 4: Apply the condition:\n {updated_df}")
 
     updated_df = unfulfilled_items_df[
         ~unfulfilled_items_df["Name"].isin(fulfilled_items_df["Name"])
     ]
-    # logger.debug(f"Items after removal:\n {updated_df}")
+    # current_app.logger.debug(f"Items after removal:\n {updated_df}")
     return updated_df

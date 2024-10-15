@@ -19,7 +19,9 @@ from app.utils.helpers import (
     parse_card_string,
 )
 
-logger = logging.getLogger(__name__)
+from app.utils.logging_utils import get_logger
+
+logger = get_logger("datafetcher_logger")
 
 
 class ExternalDataSynchronizer:

@@ -18,7 +18,7 @@ SQL_FILE = os.path.join(DATA_DIR, "sql", "magic_sets.sql")
 
 def truncate_tables():
     # Delete all rows from each table
-    # db.session.query(Site).delete()
+    db.session.query(Site).delete()
     db.session.query(UserBuylistCard).delete()
     # db.session.query(Sets).delete()
 
@@ -75,9 +75,7 @@ def load_card_list():
 
         card = UserBuylistCard(
             name=card_name,
-            quantity=quantity,
-            quality="NM",  # Default value, adjust as needed
-            language="English",  # Default value
+            quantity=quantity
         )
         db.session.merge(card)  # Use merge to add or update
 
@@ -112,7 +110,7 @@ def load_sql_file():
 
 
 def load_all_data():
-    # load_site_list()
+    load_site_list()
     load_card_list()
     # load_sql_file()
 

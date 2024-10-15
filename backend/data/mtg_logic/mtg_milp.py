@@ -66,7 +66,7 @@ def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
                         ("each, totalizing ", "rst"),
                         (f"${card_store_total_price}", message_color),
                     ]
-                    logger.info(color_msg(message))
+                    current_app.logger.info(color_msg(message))
 
     # Create and sort the DataFrame
     results_df = pd.DataFrame(results)
@@ -83,7 +83,7 @@ def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
     )
 
     if not limited_output:
-        logger.info(
+        current_app.logger.info(
             color_msg(
                 [
                     ("[INFO] ", "d_yellow"),
@@ -92,7 +92,7 @@ def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
                 ]
             )
         )
-        logger.info(
+        current_app.logger.info(
             color_msg(
                 [
                     ("[INFO] ", "d_yellow"),
@@ -101,7 +101,7 @@ def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
                 ]
             )
         )
-        logger.info(
+        current_app.logger.info(
             color_msg(
                 [
                     ("[INFO] ", "d_yellow"),
@@ -110,7 +110,7 @@ def process_result(buy_vars, costs, limited_output, total_qty, card_details_df):
                 ]
             )
         )
-        logger.info(
+        current_app.logger.info(
             color_msg(
                 [
                     ("[INFO] ", "d_yellow"),
@@ -176,7 +176,7 @@ def run_pulp(
             return all_iterations_results[0]["sorted_results_df"], None
     else:
         message = [("[INFO] ", "d_yellow"), ("Starting iterative algo", "rst")]
-        logger.info(color_msg(message))
+        current_app.logger.info(color_msg(message))
         still_going = True
         iteration = 1
         current_min = min_store
@@ -189,7 +189,7 @@ def run_pulp(
                 ("]: Current number of diff. stores: ", "rst"),
                 (f"{current_min}", "d_cyan"),
             ]
-            logger.info(color_msg(message))
+            current_app.logger.info(color_msg(message))
 
             prob, buy_vars = setup_prob(
                 costs,
@@ -226,7 +226,7 @@ def run_pulp(
                         message_color,
                     ),
                 ]
-                logger.info(color_msg(message))
+                current_app.logger.info(color_msg(message))
 
                 iteration += 1
                 current_min -= 1
@@ -260,18 +260,18 @@ def run_pulp(
                     "d_cyan",
                 ),
             ]
-            logger.info(color_msg(message))
+            current_app.logger.info(color_msg(message))
 
             message = [
                 ("[INFO] ", "d_yellow"),
                 ("Using these 'stores: #cards': ", "rst"),
             ]
-            logger.info(color_msg(message))
+            current_app.logger.info(color_msg(message))
             for store in least_expensive_and_complete_iteration["List_stores"].split(
                 ","
             ):
                 message = [("[INFO] ", "d_yellow"), (f"{store}", "d_cyan")]
-                logger.info(color_msg(message))
+                current_app.logger.info(color_msg(message))
 
             return (
                 least_expensive_and_complete_iteration["sorted_results_df"],

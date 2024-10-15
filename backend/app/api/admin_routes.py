@@ -1,9 +1,11 @@
 import logging
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import create_access_token, jwt_required
 from sqlalchemy.exc import IntegrityError
 from app.services.card_manager import CardManager
 from app.models.user import User
+from app.utils.create_user import create_user
+from app.utils.load_initial_data import load_all_data, truncate_tables
 from app.utils.validators import validate_setting_key, validate_setting_value
 
 logger = logging.getLogger(__name__)
@@ -24,10 +26,10 @@ def add_site():
         new_site = CardManager.add_site(data)
         return jsonify(new_site.to_dict()), 201
     except IntegrityError as ie:
-        logger.error(f"Database integrity error: {str(ie)}")
+        current_app.logger.error(f"Database integrity error: {str(ie)}")
         return jsonify({"error": "Database integrity error"}), 409
     except Exception as e:
-        logger.error(f"Error adding site: {str(e)}")
+        current_app.logger.error(f"Error adding site: {str(e)}")
         return jsonify({"error": "Failed to add site"}), 500
 
 @admin_routes.route("/sites/<int:site_id>", methods=["PUT"])
@@ -43,13 +45,13 @@ def update_site(site_id):
             "site": updated_site.to_dict(),
         }), 200
     except ValueError as ve:
-        logger.warning(f"Validation error updating site: {str(ve)}")
+        current_app.logger.warning(f"Validation error updating site: {str(ve)}")
         return jsonify({"error": str(ve)}), 400
     except IntegrityError as ie:
-        logger.error(f"Integrity error updating site: {str(ie)}")
+        current_app.logger.error(f"Integrity error updating site: {str(ie)}")
         return jsonify({"error": "Database integrity error"}), 409
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
+        current_app.logger.error(f"Unexpected error: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 # Settings Operations
@@ -73,20 +75,44 @@ def update_settings():
 
         setting = CardManager.update_setting(key, value)
         updated_settings.append(setting.to_dict())
-        logger.info(f"Setting updated: {key}")
+        current_app.logger.info(f"Setting updated: {key}")
 
     return jsonify(updated_settings), 200
 
 @admin_routes.route("/login", methods=["POST"])
 def login():
     data = request.json
-    logging.info(f"Login attempt for user: {data.get('username')}")
+    current_app.logger.info(f"Login attempt for user: {data.get('username')}")
 
     user = User.query.filter_by(username=data["username"]).first()
     if user and user.check_password(data["password"]):
         access_token = create_access_token(identity=user.id)
-        logging.info(f"Login successful for user: {user.username}")
+        current_app.logger.info(f"Login successful for user: {user.username}")
         return jsonify(access_token=access_token), 200
 
-    logging.warning(f"Failed login attempt for user: {data.get('username')}")
+    current_app.logger.warning(f"Failed login attempt for user: {data.get('username')}")
     return jsonify({"message": "Invalid username or password"}), 401
+
+@admin_routes.route("/create_user", methods=["POST"])
+def create_user():
+    try:
+        logger.info("Creating user")
+        create_user()
+    except Exception as e:
+        print("user exist")
+
+@admin_routes.route("/load-data", methods=["POST"])
+def load_data():
+    try:
+        logger.info("Starting data truncation")
+        truncate_tables()
+        logger.info("Data truncation completed")
+
+        logger.info("Starting data loading")
+        load_all_data()
+        logger.info("Data loading completed successfully")
+
+        return jsonify({"message": "Data loaded successfully"}), 200
+    except Exception as e:
+        logger.error(f"Error during data loading: {str(e)}")
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500

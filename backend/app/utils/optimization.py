@@ -10,8 +10,10 @@ from deap import algorithms, base, creator, tools
 from app.extensions import db
 from app.models.scan import ScanResult
 from mtgsdk import card
+from app.utils.logging_utils import get_logger
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger("optimization_logger")
 
 # DEAP Setup
 creator.create("FitnessMulti", base.Fitness, weights=(-1.0, 1.0, 1.0, -1.0))
@@ -23,6 +25,7 @@ class PurchaseOptimizer:
         self.card_details_df = card_details_df
         self.buylist_df = buylist_df
         self.config = config
+        logger.info("PurchaseOptimizer initialized with config: %s", self.config)
 
     def run_milp_optimization(self):
         return self._run_pulp(

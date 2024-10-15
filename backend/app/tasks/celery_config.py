@@ -24,8 +24,9 @@ class CeleryConfig:
 
     task_track_started = True
     task_time_limit = 30 * 60  # 30 minutes
-    worker_hijack_root_logger = False  # Don't hijack the root logger
-    worker_redirect_stdouts = False  # Don't redirect stdout/stderr
+    worker_hijack_root_logger = False  # Don't hijack the root logger    
+    worker_redirect_stdouts = True  # Redirect stdout/stderr to the Celery logger
+    worker_redirect_stdouts_level = "INFO"  # Ensure all standard output is logged
 
     # Logging configuration
     worker_log_format = "[%(asctime)s: %(levelname)s/%(processName)s] %(message)s"

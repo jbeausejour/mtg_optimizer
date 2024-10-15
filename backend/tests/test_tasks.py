@@ -25,19 +25,19 @@ def setup_app():
 
 
 def test_simple_task():
-    logger.info("Sending test task")
+    current_app.logger.info("Sending test task")
     result = test_task.delay()
-    logger.info(f"Test task ID: {result.id}")
+    current_app.logger.info(f"Test task ID: {result.id}")
     try:
         task_result = result.get(timeout=10)
-        logger.info(f"Test task result: {task_result}")
+        current_app.logger.info(f"Test task result: {task_result}")
     except TimeoutError:
-        logger.error("Test task timed out")
+        current_app.logger.error("Test task timed out")
     except Exception as e:
-        logger.error(f"Error occurred: {str(e)}")
+        current_app.logger.error(f"Error occurred: {str(e)}")
 
 
 if __name__ == "__main__":
     app = setup_app()
-    logger.info("Testing simple task:")
+    current_app.logger.info("Testing simple task:")
     test_simple_task()

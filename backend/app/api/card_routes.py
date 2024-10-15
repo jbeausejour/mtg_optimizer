@@ -1,7 +1,8 @@
 import logging
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from app.services.card_manager import CardManager
 from app.tasks.optimization_tasks import start_scraping_task
+from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ def get_cards():
         cards = CardManager.get_user_buylist_cards()
         return jsonify([card.to_dict() for card in cards])
     except Exception as e:
-        logger.error(f"Error fetching user cards: {str(e)}")
+        current_app.logger.error(f"Error fetching user cards: {str(e)}")
         return jsonify({"error": "Failed to fetch user cards"}), 500
 
 @card_routes.route("/fetch_card", methods=["GET"])
@@ -51,16 +52,25 @@ def fetch_card():
 # Optimization Operations (Merged from optimization_routes)
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
-    """Checks the status of an optimization task."""
-    task = start_scraping_task.AsyncResult(task_id)
-    response = {"state": task.state, "status": task.info if task.info else ""}
-    return jsonify(response)
+    try:
+        result = AsyncResult(task_id)
+        response = {
+            'state': result.state,
+            'status': result.info.get('status', '') if result.info else None,
+        }
+        if result.state == 'FAILURE':
+            response['error'] = str(result.info)  # Convert the error message to a string to make it JSON serializable
+        return jsonify(response)
+    except Exception as e:
+        # Properly serialize the exception message before returning
+        return jsonify({'error': str(e)}), 500
+
 
 @card_routes.route("/start_scraping", methods=["POST"])
 def start_scraping():
     """Starts the scraping task."""
     data = request.json
-    logging.info("Received data: %s", data)
+    current_app.logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
     card_list = data.get("card_list", [])
@@ -83,7 +93,7 @@ def get_sets():
         sets = CardManager.fetch_all_sets()
         return jsonify(sets)
     except Exception as e:
-        logger.error(f"Error fetching sets: {str(e)}")
+        current_app.logger.error(f"Error fetching sets: {str(e)}")
         return jsonify({"error": "Failed to fetch sets"}), 500
 
 # Scan Operations
@@ -93,7 +103,7 @@ def get_scan_results(scan_id):
         scan = CardManager.get_scan_results(scan_id)
         return jsonify(scan.to_dict())
     except Exception as e:
-        logger.error(f"Error fetching scan results: {str(e)}")
+        current_app.logger.error(f"Error fetching scan results: {str(e)}")
         return jsonify({"error": "Failed to fetch scan results"}), 500
 
 @card_routes.route("/scans", methods=["GET"])
@@ -103,5 +113,5 @@ def get_all_scans():
         scans = CardManager.get_all_scan_results(limit)
         return jsonify([scan.to_dict() for scan in scans])
     except Exception as e:
-        logger.error(f"Error fetching scans: {str(e)}")
+        current_app.logger.error(f"Error fetching scans: {str(e)}")
         return jsonify({"error": "Failed to fetch scans"}), 500

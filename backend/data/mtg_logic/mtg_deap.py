@@ -189,7 +189,7 @@ def run_nsga_ii(card_details_df, buylist, milp_solution=None):
         current_time = datetime.datetime.now()
         delta_time = current_time - last_time
         delta_time_str = str(delta_time)
-        logger.warning(
+        current_app.logger.warning(
             color_msg(
                 [
                     ("[INFOS] ", "d_yellow"),
@@ -203,7 +203,7 @@ def run_nsga_ii(card_details_df, buylist, milp_solution=None):
         )
         avg_fitness = sum(ind.fitness.values[0] for ind in pop) / len(pop)
         best_fitness = tools.selBest(pop, 1)[0].fitness.values
-        logger.warning(
+        current_app.logger.warning(
             color_msg(
                 [
                     ("[INFOS] ", "d_yellow"),
@@ -225,7 +225,7 @@ def run_nsga_ii(card_details_df, buylist, milp_solution=None):
         else:
             generations_without_improvement += 1
         if generations_without_improvement >= num_generations_threshold:
-            logger.warning(
+            current_app.logger.warning(
                 color_msg(
                     [
                         ("[INFOS] ", "d_yellow"),
