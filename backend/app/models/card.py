@@ -1,6 +1,4 @@
-from datetime import datetime, timezone
 from app.extensions import db
-
 
 class UserBuylistCard(db.Model):
     __tablename__ = "user_buylist_card"

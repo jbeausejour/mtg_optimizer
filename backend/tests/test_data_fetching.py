@@ -63,7 +63,7 @@ class TestExternalDataSynchronizer(unittest.TestCase):
     @patch("app.utils.data_fetcher.Scan")
     @patch("app.utils.data_fetcher.MarketplaceCard")
     @patch("app.utils.data_fetcher.ScanResult")
-    def test_save_cards_to_db(
+    def test_save_results_to_db(
         self, mock_scan_result, mock_marketplace_card, mock_scan, mock_session
     ):
         site = Mock(name="Test Site")
@@ -82,7 +82,7 @@ class TestExternalDataSynchronizer(unittest.TestCase):
             ]
         )
 
-        ExternalDataSynchronizer.save_cards_to_db(site, cards_df)
+        ExternalDataSynchronizer.save_results_to_db(site, cards_df)
 
         mock_scan.assert_called_once_with()
         mock_marketplace_card.assert_called_once_with(
@@ -134,12 +134,12 @@ class TestExternalDataSynchronizer(unittest.TestCase):
 
     @patch("app.utils.data_fetcher.db.session")
     @patch("app.utils.data_fetcher.Scan")
-    def test_save_cards_to_db_empty_dataframe(self, mock_scan, mock_session):
+    def test_save_results_to_db_empty_dataframe(self, mock_scan, mock_session):
         site = Mock(name="Test Site")
         empty_df = pd.DataFrame()
         card_names = []
 
-        ExternalDataSynchronizer.save_cards_to_db(site, empty_df)
+        ExternalDataSynchronizer.save_results_to_db(site, empty_df)
 
         mock_scan.assert_called_once_with(card_names=card_names)
         self.assertEqual(mock_session.add.call_count, 1)

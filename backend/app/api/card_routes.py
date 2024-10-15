@@ -1,6 +1,7 @@
 import logging
 from flask import Blueprint, jsonify, request
 from app.services.card_manager import CardManager
+from app.tasks.optimization_tasks import start_scraping_task
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,12 @@ def fetch_card():
     card_name = request.args.get("name")
     set_code = request.args.get("set")
     language = request.args.get("language")
+    version = request.args.get('version')
 
     if not card_name:
         return jsonify({"error": "Card name is required"}), 400
 
-    card_data = CardManager.fetch_card_data(card_name, set_code, language)
+    card_data = CardManager.fetch_card_data(card_name, set_code, language, version)
     if card_data is None:
         return jsonify({
             "scryfall": {
@@ -44,11 +46,35 @@ def fetch_card():
             "scan_timestamp": None
         }), 404
 
-    if isinstance(card_data, dict) and 'scryfall' in card_data:
-        card_data['scryfall'] = {key: value for key, value in card_data['scryfall'].items() if value is not None}
-
     return jsonify(card_data)
 
+# Optimization Operations (Merged from optimization_routes)
+@card_routes.route("/task_status/<task_id>", methods=["GET"])
+def task_status(task_id):
+    """Checks the status of an optimization task."""
+    task = start_scraping_task.AsyncResult(task_id)
+    response = {"state": task.state, "status": task.info if task.info else ""}
+    return jsonify(response)
+
+@card_routes.route("/start_scraping", methods=["POST"])
+def start_scraping():
+    """Starts the scraping task."""
+    data = request.json
+    logging.info("Received data: %s", data)
+
+    site_ids = data.get("sites", [])
+    card_list = data.get("card_list", [])
+    strategy = data.get("strategy", "milp")
+    min_store = data.get("min_store", 1)
+    find_min_store = data.get("find_min_store", False)
+
+    if not site_ids or not card_list:
+        return jsonify({"error": "Missing site_ids or card_list"}), 400
+
+    task = start_scraping_task.apply_async(
+        args=[site_ids, card_list, strategy, min_store, find_min_store]
+    )
+    return jsonify({"task_id": task.id}), 202
 
 # Set Operations
 @card_routes.route("/sets", methods=["GET"])

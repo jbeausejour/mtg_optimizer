@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../utils/api';
-import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Descriptions, Image, Tag, Typography, Table, Spin, Divider, Space } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Image, Tag, Typography, Spin, Divider, Space } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import CardListInput from '../components/CardManagement/CardListInput';
 import { LinkOutlined } from '@ant-design/icons';
@@ -61,10 +61,12 @@ const SetSymbol = ({ setCode, rarity }) => {
   const formattedSetCode = formatSetCode(setCode);
   const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
   const rarityColor = {
-    common: 'black',
-    uncommon: 'silver',
-    rare: 'gold',
-    mythic: '#D37E2A'
+    common: '#000000', // Black
+    uncommon: '#C0C0C0', // Silver
+    rare: '#FFD700', // Gold
+    special: '#FFD700', // Gold    
+    mythic: '#D37E2A', // Orange
+    bonus: '#FFD700' // Gold
   };
 
   return (
@@ -77,7 +79,8 @@ const SetSymbol = ({ setCode, rarity }) => {
         height: '16px', 
         marginRight: '4px', 
         verticalAlign: 'text-bottom',
-        filter: `brightness(0) saturate(100%) ${rarityColor[rarity]}`
+        filter: `brightness(0) saturate(100%) ${rarityColor[rarity]}`,
+        fill: rarityColor[rarity]
       }} 
     />
   );
@@ -100,13 +103,37 @@ const LegalityTag = ({ format, legality }) => {
 
 //Displays detailed information of a card from Scryfall API. (Result of user clicking on a card)
 const ScryfallCard = ({ data }) => {
+  const [hoveredPrinting, setHoveredPrinting] = useState(null);
+  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
+  const [selectedPrinting, setSelectedPrinting] = useState(null);
+
   if (!data) return <div>No card data available</div>;
+
+  const allPrintings = data.all_printings || [];
+
+  const handleMouseEnter = (item, e) => {
+    setHoveredPrinting(item);
+    setHoverPosition({ x: e.clientX + 20, y: e.clientY + 20 }); // Slight offset to avoid overlapping with the cursor
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredPrinting(null);
+  };
+
+  const handleMouseMove = (e) => {
+    if (hoveredPrinting) {
+      setHoverPosition({ x: e.clientX + 20, y: e.clientY + 20 });
+    }
+  };
 
   return (
     <Card className="scryfall-card">
       <Row gutter={16}>
         <Col span={8}>
-          {data.image_uris?.normal ? (
+          {/* Display the card image, either hovered printing or the default image */}
+          {hoveredPrinting?.image_uris?.normal ? (
+            <Image src={hoveredPrinting.image_uris.normal} alt={hoveredPrinting.name} />
+          ) : data.image_uris?.normal ? (
             <Image src={data.image_uris.normal} alt={data.name} />
           ) : (
             <div>No image available</div>
@@ -130,16 +157,47 @@ const ScryfallCard = ({ data }) => {
           <Divider />
           <Title level={5}>All Printings</Title>
           <List
-            dataSource={data.all_parts || []}
-            renderItem={item => (
-              <List.Item>
-                <a href={item.scryfall_uri} target="_blank" rel="noopener noreferrer">
+            dataSource={allPrintings}
+            renderItem={(item) => (
+              <List.Item
+                onMouseEnter={(e) => handleMouseEnter(item, e)}
+                onMouseMove={handleMouseMove}
+                onMouseLeave={handleMouseLeave}
+              >
+                <a
+                  href={item.scryfall_uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-component="card-tooltip"
+                  data-card-image-front={item.image_uris?.normal}
+                  data-card-id={item.id}
+                >
                   <SetSymbol setCode={item.set} rarity={item.rarity} />
-                  {item.set_name} ({formatSetCode(item.set)}) - ${item.prices?.usd || 'N/A'}
+                  {item.set_code} {formatSetCode(item.set)} - ${item.prices?.usd || 'N/A'}
                 </a>
               </List.Item>
             )}
           />
+          {/* Hover Image Preview */}
+          {hoveredPrinting && hoveredPrinting.image_uris && (
+            <div
+              style={{
+                position: 'fixed',
+                top: hoverPosition.y,
+                left: hoverPosition.x,
+                zIndex: 1000,
+                backgroundColor: 'white',
+                border: '1px solid #ccc',
+                padding: '5px',
+              }}
+            >
+              <Image
+                src={hoveredPrinting.image_uris.normal}
+                alt={hoveredPrinting.name}
+                width={150}
+              />
+            </div>
+          )}
           <Divider />
           <Space direction="vertical">
             {data.multiverse_ids?.[0] && (
@@ -180,6 +238,10 @@ const ScryfallCard = ({ data }) => {
     </Card>
   );
 };
+
+
+
+
 
 //Main component rendering the UI for optimization tasks
 const Optimize = () => {
@@ -225,6 +287,7 @@ const Optimize = () => {
     try {
       const response = await api.get('/cards');
       setCards(response.data);
+      setCardList(response.data);
     } catch (error) {
       console.error('Error fetching cards:', error);
       message.error('Failed to fetch cards');
@@ -304,8 +367,8 @@ const Optimize = () => {
     try {
       await api.post('/card_list', { cardList: newCardList });
       message.success('Card list submitted successfully');
-      setCardList(newCardList);
-      fetchCards();
+      setCards(newCardList); // Update the `cards` state
+      setCardList(newCardList); // Also update the `cardList` state to keep them in sync
     } catch (error) {
       message.error('Failed to submit card list');
       console.error('Error submitting card list:', error);
