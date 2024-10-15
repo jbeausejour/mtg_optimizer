@@ -27,9 +27,11 @@ def create_app(config_class=get_config()):
     celery_app.conf.update(app.config)
 
     with app.app_context():
-        from .api.routes import register_blueprints
+        from app.api.admin_routes import admin_routes
+        from app.api.card_routes import card_routes
 
-        register_blueprints(app)
+        app.register_blueprint(admin_routes, url_prefix='/api/v1')
+        app.register_blueprint(card_routes, url_prefix='/api/v1')
 
     setup_logging(app)
 

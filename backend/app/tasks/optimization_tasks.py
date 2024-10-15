@@ -1,20 +1,13 @@
 import logging
-import time
-from datetime import datetime, timedelta
-
 from flask import current_app
-
+from mtgsdk import Card  # Importing mtgsdk to dynamically fetch card data
 from app.extensions import db
-from app.models.card import MarketplaceCard
 from app.models.scan import Scan, ScanResult
 from app.models.site import Site
-from app.utils.data_fetcher import ExternalDataSynchronizer
 from app.utils.optimization import PurchaseOptimizer
-
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
 
 @celery_app.task(bind=True)
 def optimize_cards(self, card_list_dicts, site_ids):
@@ -24,14 +17,11 @@ def optimize_cards(self, card_list_dicts, site_ids):
         db.session.add(new_scan)
         db.session.commit()
 
-        # Fetch full card objects and sites
-        cards = MarketplaceCard.query.filter(
-            MarketplaceCard.id.in_([card["id"] for card in card_list_dicts])
-        ).all()
+        # Fetch card details dynamically from mtgsdk
+        cards = [Card.where(name=card["name"]).all()[0] for card in card_list_dicts]
         sites = Site.query.filter(Site.id.in_(site_ids)).all()
 
-        self.update_state(state="PROGRESS", meta={
-                          "status": "Fetched cards and sites"})
+        self.update_state(state="PROGRESS", meta={"status": "Fetched cards and sites"})
 
         # Prepare optimization config
         config = {
@@ -46,15 +36,14 @@ def optimize_cards(self, card_list_dicts, site_ids):
             "find_min_store": current_app.config.get("FIND_MIN_STORE", False),
         }
 
-        self.update_state(state="PROGRESS", meta={
-                          "status": "Running optimization"})
+        self.update_state(state="PROGRESS", meta={"status": "Running optimization"})
         results = PurchaseOptimizer.run_optimization(cards, sites, config)
 
         self.update_state(state="PROGRESS", meta={"status": "Saving results"})
         for result in results:
             scan_result = ScanResult(
                 scan_id=new_scan.id,
-                card_id=result["card_id"],
+                card_name=result["card_name"],
                 site_id=result["site_id"],
                 price=result["price"],
             )
@@ -69,81 +58,3 @@ def optimize_cards(self, card_list_dicts, site_ids):
         self.update_state(state="FAILURE", meta={"status": f"Error: {str(e)}"})
         db.session.rollback()
         return {"status": "Failed", "error": str(e)}
-
-
-@celery_app.task
-def cleanup_old_scans():
-    try:
-        days_to_keep = current_app.config.get("SCAN_RETENTION_DAYS", 30)
-        cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
-        old_scans = Scan.query.filter(Scan.created_at < cutoff_date).all()
-
-        for scan in old_scans:
-            db.session.delete(scan)
-
-        db.session.commit()
-        logger.info(f"Cleaned up {len(old_scans)} old scans")
-        return {"status": "Cleanup completed", "scans_removed": len(old_scans)}
-    except Exception as e:
-        logger.exception("Error during cleanup")
-        db.session.rollback()
-        return {"status": "Failed", "error": str(e)}
-
-
-@celery_app.task(bind=True)
-def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min_store):
-    logger.info("start_scraping_task is running")
-    self.update_state(state="PROCESSING", meta={
-                      "status": "Initializing scraping task"})
-
-    try:
-        # Fetch the list of sites to scrape
-        sites = Site.query.filter(Site.id.in_(site_ids)).all()
-
-        # Initialize the scraper with required parameters
-        scraper = ExternalDataSynchronizer()
-
-        # Pass additional parameters to the scraping function
-        results = scraper.scrape_multiple_sites(
-            sites, card_list, strategy=strategy)
-
-        self.update_state(
-            state="PROCESSING", meta={"status": "Saving results to database"}
-        )
-        scraper.save_results_to_db(results)
-
-        # Optionally, optimize results based on passed strategy, min_store, etc.
-        optimizer = PurchaseOptimizer(
-            results,
-            card_list,
-            config={
-                "strategy": strategy,
-                "min_store": min_store,
-                "find_min_store": find_min_store,
-            },
-        )
-        optimization_results = optimizer.run_optimization(card_list)
-        # Save or process optimization results as needed
-        return {
-            "status": "Scraping completed",
-            "sites_scraped": len(sites),
-            "cards_scraped": len(card_list),
-        }
-    except Exception as e:
-        self.update_state(state="FAILURE", meta={"status": f"Error: {str(e)}"})
-        logger.exception("Error during scraping task")
-        db.session.rollback()
-        return {"status": "Failed", "error": str(e)}
-
-
-@celery_app.task(bind=True)
-def test_task(self):
-    logger.info("Test task is running")
-    total = 10
-    for i in range(total):
-        time.sleep(1)  # Simulate a time-consuming task
-        self.update_state(
-            state="PROGRESS", meta={"status": f"Processing {i+1}/{total}"}
-        )
-    return {"status": "Task completed!", "result": 42}
-    # return "Hello, Celery!"

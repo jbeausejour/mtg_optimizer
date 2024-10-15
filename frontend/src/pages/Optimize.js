@@ -106,21 +106,26 @@ const ScryfallCard = ({ data }) => {
     <Card className="scryfall-card">
       <Row gutter={16}>
         <Col span={8}>
-          {data.image_uris && data.image_uris.normal ? (
+          {data.image_uris?.normal ? (
             <Image src={data.image_uris.normal} alt={data.name} />
           ) : (
             <div>No image available</div>
           )}
           <Divider />
           <Space direction="vertical" size="small">
-            <Text><strong>Mana Value:</strong> {data.cmc}</Text>
-            <Text><strong>Types:</strong> {data.type_line}</Text>
-            <Text><strong>Rarity:</strong> {data.rarity}</Text>
+            <Text><strong>Mana Value:</strong> {data.cmc || 'N/A'}</Text>
+            <Text><strong>Types:</strong> {data.type_line || 'N/A'}</Text>
+            <Text><strong>Rarity:</strong> {data.rarity || 'N/A'}</Text>
             <Text>
-              <strong>Expansion:</strong> <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name}
+              <strong>Expansion:</strong> 
+              {data.set ? (
+                <>
+                  <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name || 'N/A'}
+                </>
+              ) : 'N/A'}
             </Text>
-            <Text><strong>Card Number:</strong> {data.collector_number}</Text>
-            <Text><strong>Artist:</strong> {data.artist}</Text>
+            <Text><strong>Card Number:</strong> {data.collector_number || 'N/A'}</Text>
+            <Text><strong>Artist:</strong> {data.artist || 'N/A'}</Text>
           </Space>
           <Divider />
           <Title level={5}>All Printings</Title>
@@ -132,18 +137,19 @@ const ScryfallCard = ({ data }) => {
                   <SetSymbol setCode={item.set} rarity={item.rarity} />
                   {item.set_name} ({formatSetCode(item.set)}) - ${item.prices?.usd || 'N/A'}
                 </a>
-                {/* <Switch onChange={() => onVersionChange(item)} /> */}
               </List.Item>
             )}
           />
           <Divider />
           <Space direction="vertical">
-            <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
-              <LinkOutlined /> View on Gatherer
-            </a>
+            {data.multiverse_ids?.[0] && (
+              <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
+                <LinkOutlined /> View on Gatherer
+              </a>
+            )}
             <a href={`https://edhrec.com/cards/${formatCardName(data.name)}`} target="_blank" rel="noopener noreferrer">
               <LinkOutlined /> Card analysis on EDHREC
-            </a> 
+            </a>
           </Space>
         </Col>
         <Col span={16}>
@@ -155,15 +161,15 @@ const ScryfallCard = ({ data }) => {
               )}
             </span>
           </Title>
-          <Text strong>{data.set_name} ({data.set.toUpperCase()})</Text>
+          <Text strong>{data.set_name ? `${data.set_name} (${data.set?.toUpperCase()})` : 'N/A'}</Text>
           <Divider />
-          <Text>{data.type_line}</Text>
-          {formatOracleText(data.oracle_text)}
+          <Text>{data.type_line || 'N/A'}</Text>
+          {data.oracle_text && formatOracleText(data.oracle_text)}
           {data.flavor_text && <Text italic>{data.flavor_text}</Text>}
           <Text>{data.power && data.toughness ? `${data.power}/${data.toughness}` : ''}</Text>
           <Divider />
           <Row gutter={[8, 8]}>
-            {Object.entries(data.legalities).map(([format, legality]) => (
+            {data.legalities && Object.entries(data.legalities).map(([format, legality]) => (
               <Col key={format}>
                 <LegalityTag format={format} legality={legality} />
               </Col>
