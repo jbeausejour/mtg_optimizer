@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Input, Button, Modal, message, Spin, Space, Popconfirm, Form, Select, Tooltip, Image } from 'antd';
+import { Table, Input, Button, Modal, message, Spin, Space, Popconfirm, Form, List, Tooltip, Image } from 'antd';
 import { EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import CardListInput from '../components/CardManagement/CardListInput';
+import { useTheme } from '../utils/ThemeContext';
 import ScryfallCard from '../components/CardManagement/ScryfallCard';
 import api from '../utils/api';
 
@@ -12,10 +13,12 @@ const CardManagement = () => {
   const [filteredCards, setFilteredCards] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState('view'); // "view" or "edit"
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [form] = Form.useForm();
+  const { theme } = useTheme();
 
   useEffect(() => {
     fetchCards();
@@ -31,51 +34,115 @@ const CardManagement = () => {
     }
   };
 
-  const handleCardClick = async (card) => {
+  const fetchCardData = async (card) => {
+    try {
+      const response = await api.get(`/fetch_card?name=${card.name}`);
+      if (response.data.error) throw new Error(response.data.error);
+      return response.data;
+    } catch (error) {
+      message.error(`Failed to fetch card data: ${error.message}`);
+      throw error; // Rethrow for further handling
+    }
+  };
+  
+  const handleViewCard = async (card) => {
+    console.log('ViewCard clicked:', card); // Debug log
+    setModalMode('view'); // Set mode explicitly
+    setSelectedCard(card); // Set selected card
+    setIsLoading(true);
+  
+    try {
+      const data = await fetchCardData(card); // Fetch card data
+      setCardData(data); // Update card data
+      setIsModalVisible(true); // Open modal
+    } catch (error) {
+      console.error('Error fetching card data:', error);
+      message.error(`Failed to fetch card data: ${error.message}`);
+    } finally {
+      setIsLoading(false); // Stop spinner
+    }
+  };
+  
+  const handleEditCard = async (card) => {
+    console.log('EditCard clicked:', card); // Debug log
+    setModalMode('edit'); // Set mode explicitly
+    setSelectedCard(card); // Set selected card
+    setIsLoading(true);
+  
+    try {
+      const data = await fetchCardData(card); // Fetch card data
+      setCardData(data); // Update card data
+      setIsModalVisible(true); // Open modal
+    } catch (error) {
+      console.error('Error fetching card data:', error);
+      message.error(`Failed to fetch card data: ${error.message}`);
+    } finally {
+      setIsLoading(false); // Stop spinner
+    }
+  };
+  
+  const handleModalClose = () => {
+    console.log('Modal closed'); // Debug log
+    setIsModalVisible(false); // Close modal
+    setSelectedCard(null); // Clear selected card
+    setCardData(null); // Clear card data
+    setTimeout(() => setModalMode('view'), 0); // Reset mode to "view"
+  };
 
-    console.log('Card clicked:', card);
-
-    if (!card.name) {
-      message.error('Card name is missing');
+  const handleSaveEdit = async (selectedPrinting) => {
+    if (!selectedCard || !selectedPrinting) {
+      message.error('No card or printing selected');
       return;
     }
-
-    setSelectedCard(card);
-    setIsLoading(true);
-
-    // Construct the query parameters for Scryfall API
-    let query = `fuzzy=${encodeURIComponent(card.name)}`;
-    if (card.set) {
-      query += `&set=${encodeURIComponent(card.set)}`;
-    }
-    if (card.language) {
-      query += `&lang=${encodeURIComponent(card.language)}`;
-    }
-    console.log('Scryfall API query:', query);  // Log the query
-
-    // Fetch card details from Scryfall API
+  
+    const updatedCard = {
+      id: selectedCard.id,
+      name: selectedPrinting.name,
+      set: selectedPrinting.set,
+      language: selectedPrinting.lang || selectedCard.language,
+      quantity: selectedCard.quantity,
+      version: selectedPrinting.version || selectedCard.version,
+      foil: selectedCard.foil,
+    };
+  
     try {
-      const response = await fetch(`${SCRYFALL_API_BASE}/cards/named?${query}`);
-      const scryfallData = await response.json();
-
-      console.log('Scryfall data:', scryfallData);  // Log the fetched data
-      
-      if (scryfallData.status === 404) {
-        throw new Error('Card not found');
-      }
-      setCardData(scryfallData);
-      setIsModalVisible(true);
+      const response = await api.put(`/cards/${selectedCard.id}`, updatedCard, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+  
+      const updatedCardData = response.data;
+  
+      // Update the local state with the updated card
+      setCards((prevCards) =>
+        prevCards.map((card) =>
+          card.id === updatedCardData.id ? updatedCardData : card
+        )
+      );
+      setFilteredCards((prevCards) =>
+        prevCards.map((card) =>
+          card.id === updatedCardData.id ? updatedCardData : card
+        )
+      );
+  
+      message.success('Card updated successfully');
+      handleModalClose();
     } catch (error) {
-      message.error(`Failed to fetch card details: ${error.message}`);
-    } finally {
-      setIsLoading(false);
+      console.error('Error updating card:', error);
+      message.error(`Failed to update card: ${error.message}`);
     }
   };
 
-  const handleModalClose = () => {
-    setIsModalVisible(false);
-    setSelectedCard(null);
-    setCardData(null);
+  const handleDeleteCard = async (cardId) => {
+    try {
+      await api.delete(`/cards/${cardId}`);
+      message.success('Card deleted successfully');
+      setCards((prev) => prev.filter((card) => card.id !== cardId));
+      setFilteredCards((prev) => prev.filter((card) => card.id !== cardId));
+    } catch (error) {
+      message.error(`Failed to delete card: ${error.message}`);
+    }
   };
 
   const onSearch = (value) => {
@@ -85,93 +152,73 @@ const CardManagement = () => {
     );
     setFilteredCards(filtered);
   };
-
-  const columns = [
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      filterDropdown: () => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="Search name"
-            value={searchText}
-            onChange={(e) => onSearch(e.target.value)}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-            prefix={<SearchOutlined />}
-          />
-        </div>
-      ),
-      filterIcon: <SearchOutlined />,
-      render: (text, record) => (
-        <Tooltip
-          title={
-            record.name && record.set ? (
-              <Image
-                src={`${SCRYFALL_API_BASE}/cards/named?exact=${record.name}`}
-                alt={record.name}
-                style={{ width: '150px' }}  // Adjust the image size as needed
-              />
-            ) : 'No Image Available'
-          }
-        >
-          {record.name ? (
-            <a href="#" style={{ textDecoration: 'underline', color: 'blue' }}>
-              {text}
-            </a>
-          ) : 'Unknown Name'}
-        </Tooltip>
-      ),      
-    },
-    {
-      title: 'Quantity',
-      dataIndex: 'quantity',
-      key: 'quantity',
-      sorter: (a, b) => a.quantity - b.quantity,
-    },
-    {
-      title: 'Set',
-      dataIndex: 'set',
-      key: 'set',
-      sorter: (a, b) => a.set.localeCompare(b.set),
-    },
-    {
-      title: 'Language',
-      dataIndex: 'language',
-      key: 'language',
-      sorter: (a, b) => a.language.localeCompare(b.language),
-    },
-    {
-      title: 'Version',
-      dataIndex: 'version',
-      key: 'version',
-      sorter: (a, b) => a.version.localeCompare(b.version),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (text, record) => (
-        <Space>
-          <Button icon={<EyeOutlined />} onClick={() => handleCardClick(record)}>View</Button>
-          <Button icon={<EditOutlined />}>Edit</Button>
-          <Popconfirm
-            title="Are you sure you want to delete this card?"
-            onConfirm={() => message.success('Card deleted')}  // Implement delete logic here
-            okText="Yes"
-            cancelText="No"
-          >
-            <Button icon={<DeleteOutlined />} danger>Delete</Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
+  
   return (
+    console.log('isEditMode:', modalMode),
     <div className="card-management">
       <h1>Card Management</h1>
-      <CardListInput />
-      <Table dataSource={filteredCards} columns={columns} rowKey="id" pagination={false} />
+      {/* Search Input */}
+      <Input
+        placeholder="Search cards..."
+        value={searchText}
+        onChange={(e) => handleSearch(e.target.value)}
+        style={{ marginBottom: 16 }}
+      />
+
+      {/* List with Columns */}
+      <List
+        bordered
+        dataSource={filteredCards}
+        renderItem={(card) => (
+          <List.Item
+            className={`list-item custom-hover-row ${theme}`} 
+            onClick={() => handleViewCard(card)}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+              {/* Card Name */}
+              <div style={{ flex: 2 }}>
+                {card.name}
+              </div>
+
+              {/* Quantity */}
+              <div style={{ flex: 1, textAlign: 'center' }}>{card.quantity}</div>
+
+              {/* Set */}
+              <div style={{ flex: 1, textAlign: 'center' }}>{card.set}</div>
+
+              {/* Language */}
+              <div style={{ flex: 1, textAlign: 'center' }}>{card.language || 'N/A'}</div>
+
+              {/* Actions */}
+              <div style={{ flex: 2, textAlign: 'right' }}>
+                <Space>
+                  <Button icon={<EyeOutlined />} onClick={() => handleViewCard(card)}>View</Button>
+                  <Button
+                    icon={<EditOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent the event from propagating to parent handlers
+                      handleEditCard(card);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Popconfirm
+                    title="Are you sure you want to delete this card?"
+                    onConfirm={() => handleDeleteCard(card.id)}
+                    okText="Yes"
+                    cancelText="No"
+                  >
+                    <Button icon={<DeleteOutlined />} danger>Delete</Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            </div>
+          </List.Item>
+        )}
+        className={`ant-table ${theme}`}
+      />
+
+      {/* Modal for Viewing Card Details */}
       <Modal
         title={selectedCard ? selectedCard.name : ''}
         open={isModalVisible}
@@ -180,27 +227,23 @@ const CardManagement = () => {
         footer={[
           <Button key="close" onClick={handleModalClose}>
             Close
-          </Button>
+          </Button>,
         ]}
       >
         {isLoading ? (
           <Spin size="large" />
         ) : cardData ? (
-          <ScryfallCard card={cardData} onSetClick={handleSetClick} />
-        ) : <div>No card data available</div>}
+          console.log('Rendering ScryfallCard, modalMode:', modalMode), // Debug log
+          <ScryfallCard 
+            data={cardData.scryfall || cardData}
+            onPrintingSelect={modalMode === 'edit' ? handleSaveEdit : undefined} // Pass only in "edit" mode
+          />
+        ) : (
+          <div>No card data available</div>
+        )}
       </Modal>
     </div>
   );
-};
-
-const handleSetClick = async (setCode) => {
-  try {
-    console.log('Set clicked:', setCode);  // Log the clicked set
-    await api.post('/save_set_selection', { set: setCode });
-    message.success('Set selection saved successfully');
-  } catch (error) {
-    message.error(`Failed to save set: ${error.message}`);
-  }
 };
 
 export default CardManagement;

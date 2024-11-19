@@ -19,6 +19,64 @@ def get_cards():
         current_app.logger.error(f"Error fetching user cards: {str(e)}")
         return jsonify({"error": "Failed to fetch user cards"}), 500
 
+@card_routes.route("/cards/<int:card_id>", methods=["PUT"])
+def update_card(card_id):
+    """
+    Update a specific card in the user's buylist.
+    """
+    try:
+        data = request.json
+
+        # Delegate update to CardManager
+        updated_card = CardManager.update_user_buylist_card(card_id, data)
+        if not updated_card:
+            return jsonify({"error": "Card not found in user's buylist"}), 404
+
+        # Return the updated card with all fields
+        return jsonify(updated_card.to_dict()), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error updating card: {str(e)}")
+        return jsonify({"error": "Failed to update card"}), 500
+
+    
+@card_routes.route("/cards", methods=["POST"])
+def save_card():
+    """
+    Save a new card or update an existing card.
+    """
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        card_id = data.get("id")
+        card_name = data.get("name")
+        card_set = data.get("set")
+        card_language = data.get("language", "English")
+        card_quantity = data.get("quantity", 1)
+        card_version = data.get("version", "Standard")
+        foil = data.get("foil", False)
+
+        if not card_name:
+            return jsonify({"error": "Card name is required"}), 400
+
+        # Call the CardManager to save or update the card
+        saved_card = CardManager.save_card(
+            card_id=card_id,
+            name=card_name,
+            set=card_set,
+            language=card_language,
+            quantity=card_quantity,
+            version=card_version,
+            foil=foil,
+        )
+
+        return jsonify(saved_card.to_dict()), 200
+    except Exception as e:
+        current_app.logger.error(f"Error saving card: {str(e)}")
+        return jsonify({"error": "Failed to save card"}), 500
+   
 @card_routes.route("/fetch_card", methods=["GET"])
 def fetch_card():
     card_name = request.args.get("name")
@@ -48,7 +106,7 @@ def fetch_card():
         }), 404
 
     return jsonify(card_data)
-
+ 
 # Optimization Operations (Merged from optimization_routes)
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):

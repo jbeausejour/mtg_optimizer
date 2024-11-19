@@ -26,6 +26,13 @@ class CardManager:
         return UserBuylistCard.query.all()
     
     @staticmethod
+    def get_user_buylist_card_by_id(card_id):
+        """
+        Get a specific card from the user's buylist by ID.
+        """
+        return Card.query.filter_by(id=card_id).first()
+    
+    @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
         try:
             cards = Card.where(name=card_name).all()
@@ -44,6 +51,63 @@ class CardManager:
             current_app.logger.debug(f"Error fetching card data for '{card_name}': {str(e)}")
             return None
 
+    @staticmethod
+    def save_card(card_id=None, name=None, set=None, language="English", quantity=1, version="Standard", foil=False):
+        """
+        Save a new card or update an existing card in the database.
+        """
+        if card_id:
+            # Update existing card
+            card = UserBuylistCard.query.get(card_id)
+            if not card:
+                raise ValueError("Card not found")
+
+            card.name = name
+            card.set = set
+            card.language = language
+            card.quantity = quantity
+            card.version = version
+            card.foil = foil
+        else:
+            # Create new card
+            card = UserBuylistCard(
+                name=name,
+                set=set,
+                language=language,
+                quantity=quantity,
+                version=version,
+                foil=foil,
+            )
+            db.session.add(card)
+
+        db.session.commit()
+        return card
+
+    @staticmethod
+    def update_user_buylist_card(card_id, data):
+        """
+        Update a specific card in the user's buylist.
+        """
+        # Fetch the card by ID using the correct model
+        card = UserBuylistCard.query.get(card_id)
+        if not card:
+            return None
+
+        # Update card attributes
+        card.name = data.get("name", card.name)
+        card.set = data.get("set", card.set)
+        card.language = data.get("language", card.language)
+        card.quantity = data.get("quantity", card.quantity)
+        card.version = data.get("version", card.version)
+        card.foil = data.get("foil", card.foil)
+
+        # Commit changes to the database
+        db.session.commit()
+
+        return card
+
+
+    
     # Set Operations
     @staticmethod
     def fetch_all_sets():
@@ -61,7 +125,6 @@ class CardManager:
         except Exception as e:
             current_app.logger.error(f"Error fetching sets data: {str(e)}")
             return []
-
 
     # Scryfall section
     @staticmethod
