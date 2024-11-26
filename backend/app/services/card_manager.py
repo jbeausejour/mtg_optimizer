@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.extensions import db
 from app.models.card import UserBuylistCard
 from app.models.scan import Scan
@@ -10,6 +10,7 @@ import logging
 import requests
 from fuzzywuzzy import fuzz
 from flask import current_app
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,23 @@ CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 class CardManager:
     
+    @contextmanager
+    def transaction_context():
+        """Context manager for database transactions"""
+        try:
+            yield
+            db.session.commit()
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logger.error(f"Database error: {str(e)}")
+            raise
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error in transaction: {str(e)}")
+            raise
+        finally:
+            db.session.close()
+
     # Card Operations
     @staticmethod
     def get_user_buylist_cards():
@@ -53,35 +71,41 @@ class CardManager:
 
     @staticmethod
     def save_card(card_id=None, name=None, set=None, language="English", quantity=1, version="Standard", foil=False):
-        """
-        Save a new card or update an existing card in the database.
-        """
-        if card_id:
-            # Update existing card
-            card = UserBuylistCard.query.get(card_id)
-            if not card:
-                raise ValueError("Card not found")
+        """Save a new card or update an existing card with proper validation and error handling"""
+        try:
+            with CardManager.transaction_context():
+                if not name:
+                    raise ValueError("Card name is required")
+                
+                if quantity < 1:
+                    raise ValueError("Quantity must be positive")
 
-            card.name = name
-            card.set = set
-            card.language = language
-            card.quantity = quantity
-            card.version = version
-            card.foil = foil
-        else:
-            # Create new card
-            card = UserBuylistCard(
-                name=name,
-                set=set,
-                language=language,
-                quantity=quantity,
-                version=version,
-                foil=foil,
-            )
-            db.session.add(card)
-
-        db.session.commit()
-        return card
+                if card_id:
+                    card = UserBuylistCard.query.get(card_id)
+                    if not card:
+                        raise ValueError(f"Card with ID {card_id} not found")
+                    
+                    card.name = name
+                    card.set = set
+                    card.language = language
+                    card.quantity = quantity
+                    card.version = version
+                    card.foil = foil
+                else:
+                    card = UserBuylistCard(
+                        name=name,
+                        set=set,
+                        language=language,
+                        quantity=quantity,
+                        version=version,
+                        foil=foil,
+                    )
+                    db.session.add(card)
+                
+                return card
+        except Exception as e:
+            logger.error(f"Error saving card: {str(e)}")
+            raise
 
     @staticmethod
     def update_user_buylist_card(card_id, data):

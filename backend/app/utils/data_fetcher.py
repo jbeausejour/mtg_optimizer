@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 import pandas as pd
 from bs4 import BeautifulSoup
+from tenacity import retry, stop_after_attempt, wait_exponential
+from aiohttp import ClientTimeout
 
 from app.extensions import db
 from app.models.card import UserBuylistCard
@@ -32,9 +34,11 @@ class ExternalDataSynchronizer:
 
     def __init__(self):
         self.session = None
+        self.timeout = ClientTimeout(total=30)  # 30 seconds timeout
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
         }
+        self.max_retries = 3
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(headers=self.headers)
@@ -43,13 +47,16 @@ class ExternalDataSynchronizer:
     async def __aexit__(self, exc_type, exc, tb):
         await self.session.close()
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def fetch_url(self, url):
         try:
-            async with self.session.get(url) as response:
+            async with self.session.get(url, timeout=self.timeout) as response:
+                if response.status >= 400:
+                    raise Exception(f"HTTP {response.status}: {await response.text()}")
                 return await response.text()
         except Exception as e:
             logger.error(f"Error fetching {url}: {str(e)}")
-            return None
+            raise  # Propagate the error for retry handling
 
     async def post_request(self, url, payload):
         try:
@@ -60,16 +67,40 @@ class ExternalDataSynchronizer:
             return None
 
     async def scrape_multiple_sites(self, sites, card_names, strategy):
-        """
-        Scrape multiple sites with a given strategy.
-        """
-        tasks = []
-        async with aiohttp.ClientSession(headers=self.headers) as session:
+        results = []
+        logger.info(f"Starting multi-site scraping for {len(sites)} sites and {len(card_names)} cards")
+        
+        async with aiohttp.ClientSession(headers=self.headers, timeout=self.timeout) as session:
             self.session = session
-            for site in sites:
-                tasks.append(self.process_site(site, card_names, strategy))
-            results = await asyncio.gather(*tasks)
-        return results
+            try:
+                tasks = []
+                for site in sites:
+                    logger.info(f"Creating scraping task for site: {site.name}")
+                    task = asyncio.create_task(self.process_site(site, card_names, strategy))
+                    tasks.append(task)
+                
+                # Process tasks in batches
+                BATCH_SIZE = 5
+                total_batches = (len(tasks) + BATCH_SIZE - 1) // BATCH_SIZE
+                
+                for batch_num, i in enumerate(range(0, len(tasks), BATCH_SIZE), 1):
+                    logger.info(f"Processing batch {batch_num}/{total_batches}")
+                    batch = tasks[i:i + BATCH_SIZE]
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"Batch processing error: {str(result)}")
+                        elif result:
+                            logger.info(f"Successfully processed batch result with {len(result)} items")
+                            results.extend(result)
+                
+                logger.info(f"Completed scraping with {len(results)} total results")
+                return results
+                
+            except Exception as e:
+                logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}")
+                raise
 
     async def search_crystalcommerce(self, site, card_names):
         search_url = site.url
@@ -94,17 +125,25 @@ class ExternalDataSynchronizer:
         return BeautifulSoup(response_text, "html.parser") if response_text else None
 
     async def process_site(self, site, card_names, strategy):
-        """
-        Process an individual site based on the provided strategy.
-        """
-        soup = await self.search_crystalcommerce(site, card_names)
-        if not soup:
-            return
+        logger.info(f"Processing site {site.name} for {len(card_names)} cards using strategy {strategy}")
+        try:
+            soup = await self.search_crystalcommerce(site, card_names)
+            if not soup:
+                logger.warning(f"No data received from {site.name}")
+                return None
 
-        # Extract info based on strategy
-        cards_df = self.extract_info(soup, site, card_names, strategy)
-        if cards_df is not None and not cards_df.empty:
-            self.save_results_to_db(site, cards_df)
+            cards_df = self.extract_info(soup, site, card_names, strategy)
+            if cards_df is not None and not cards_df.empty:
+                logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}")
+                self.save_results_to_db(site, cards_df)
+                return cards_df.to_dict('records')
+            else:
+                logger.warning(f"No valid cards found for {site.name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error processing site {site.name}: {str(e)}")
+            return None
 
     @staticmethod
     def save_results_to_db(site, cards_df):

@@ -112,17 +112,41 @@ def fetch_card():
 def task_status(task_id):
     try:
         result = AsyncResult(task_id)
-        response = {
-            'state': result.state,
-            'status': result.info.get('status', '') if result.info else None,
-        }
-        if result.state == 'FAILURE':
-            response['error'] = str(result.info)  # Convert the error message to a string to make it JSON serializable
-        return jsonify(response)
+        
+        # Handle different task states
+        if result.state == 'PENDING':
+            response = {
+                'state': result.state,
+                'status': 'Task is waiting for execution'
+            }
+        elif result.state == 'FAILURE':
+            response = {
+                'state': result.state,
+                'status': 'Task failed',
+                'error': str(result.info) if result.info else 'Unknown error occurred'
+            }
+        elif result.state in ['PROGRESS', 'PROCESSING']:
+            response = {
+                'state': result.state,
+                'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info)
+            }
+        else:
+            # SUCCESS or other states
+            response = {
+                'state': result.state,
+                'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info),
+                'result': result.get() if result.successful() else None
+            }
+        
+        return jsonify(response), 200
+        
     except Exception as e:
-        # Properly serialize the exception message before returning
-        return jsonify({'error': str(e)}), 500
-
+        logger.exception(f"Error checking task status: {str(e)}")
+        return jsonify({
+            'state': 'ERROR',
+            'status': 'Error checking task status',
+            'error': str(e)
+        }), 500
 
 @card_routes.route("/start_scraping", methods=["POST"])
 def start_scraping():
