@@ -105,8 +105,6 @@ class CardManager:
         db.session.commit()
 
         return card
-
-
     
     # Set Operations
     @staticmethod

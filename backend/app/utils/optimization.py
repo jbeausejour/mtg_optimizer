@@ -68,7 +68,6 @@ class PurchaseOptimizer:
             "iterations": iterations if "iterations" in locals() else None,
         }
 
-
     def get_purchasing_plan(self, solution):
         return self._extract_purchasing_plan(
             solution, self.card_details_df, self.buylist_df
