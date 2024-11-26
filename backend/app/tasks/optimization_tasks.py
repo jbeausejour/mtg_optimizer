@@ -14,6 +14,7 @@ from .celery_app import celery_app
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 import asyncio
+from sqlalchemy import select
 
 # Configure a logger specifically for Celery tasks
 logger = logging.getLogger("celery_task_logger")
@@ -51,7 +52,10 @@ def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min
         sites = Site.query.filter(Site.id.in_(site_ids)).all()
         logger.info(f"Starting scraping task for {len(sites)} sites with {len(card_list)} cards")
         
-        # Check for outdated cards
+        # Extract card names from card_list
+        card_names = [card['name'] for card in card_list if 'name' in card]
+        
+        # Check for outdated cards using names only
         outdated_cards = [card for card in card_list if not is_data_fresh(card['name'])]
         logger.info(f"Found {len(outdated_cards)} outdated cards that need updating")
         
@@ -65,8 +69,9 @@ def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min
             asyncio.set_event_loop(loop)
             try:
                 logger.info("Initializing scraping loop")
+                # Pass only the names to the scraper
                 results = loop.run_until_complete(
-                    scraper.scrape_multiple_sites(sites, outdated_cards, strategy=strategy)
+                    scraper.scrape_multiple_sites(sites, card_names, strategy=strategy)
                 )
                 logger.info(f"Scraping completed. Retrieved {len(results) if results else 0} results")
             except Exception as e:
@@ -109,20 +114,30 @@ def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min
                 else:
                     card_details_df = pd.DataFrame()
 
-            buylist_df = pd.read_sql(Query(UserBuylistCard).statement, db.session.bind)
+            # Fix the SQLAlchemy query
+            try:
+                # Use SQLAlchemy properly with pandas
+                query = select(UserBuylistCard)
+                buylist_df = pd.read_sql_query(
+                    query, 
+                    db.session.bind,
+                    index_col=None
+                )
+                
+                if buylist_df.empty:
+                    logger.warning("No buylist data found")
+                    return {
+                        "status": "Completed",
+                        "message": "No buylist data to process",
+                        "results": []
+                    }
+                    
+                # ...rest of the optimization code...
+                
+            except Exception as e:
+                logger.error(f"Database error: {str(e)}")
+                raise
 
-            # config = {
-            #     "filename": f"optimization_task_{new_scan.id}",
-            #     "log_level_file": current_app.config.get("LOG_LEVEL_FILE", "INFO"),
-            #     "log_level_console": current_app.config.get("LOG_LEVEL_CONSOLE", "INFO"),
-            #     "special_site_flag": current_app.config.get("SPECIAL_SITE_FLAG", True),
-            #     "milp_strat": current_app.config.get("MILP_STRAT", True),
-            #     "hybrid_strat": current_app.config.get("HYBRID_STRAT", False),
-            #     "nsga_algo_strat": current_app.config.get("NSGA_ALGO_STRAT", False),
-            #     "min_store": current_app.config.get("MIN_STORE", 1),
-            #     "find_min_store": current_app.config.get("FIND_MIN_STORE", False),
-            # }
-            
             optimizer = PurchaseOptimizer(card_details_df, buylist_df, config={
                 "milp_strat": strategy == "milp",
                 "nsga_algo_strat": strategy == "nsga-ii",

@@ -16,10 +16,10 @@ class CeleryConfig:
     result_backend = "redis://127.0.0.1:6379/0"
 
     # Add these lines
-    broker_connection_max_retries = None  # Retry indefinitely
+    broker_connection_max_retries = 10  # Retry up to 10 times
     broker_pool_limit = None  # Disable connection pooling
     broker_connection_retry_on_startup = True
-    broker_transport_options = {"visibility_timeout": 3600}  # 1 hour.
+    broker_transport_options = {"visibility_timeout": 3600, 'socket_timeout': 10.0, 'socket_connect_timeout': 10.0}  # 1 hour.
     imports = ["app.tasks.optimization_tasks"]
 
     task_track_started = True
@@ -29,14 +29,18 @@ class CeleryConfig:
     worker_redirect_stdouts_level = "INFO"  # Ensure all standard output is logged
 
     # Logging configuration
-    worker_log_format = "[%(asctime)s: %(levelname)s/%(processName)s] %(message)s"
-    worker_task_log_format = "[%(asctime)s: %(levelname)s/%(processName)s] [%(task_name)s(%(task_id)s)] %(message)s"
+    worker_log_format = "%(asctime)s - %(message)s"
+    worker_task_log_format = "%(asctime)s - %(task_name)s - %(message)s"
 
     task_serializer = "json"
     result_serializer = "json"
     accept_content = ["json"]
     timezone = "UTC"
     enable_utc = True
+    result_expires = 3600  # Results expire after 1 hour
+
+    worker_concurrency = 20
+    worker_pool = 'solo'
 
     @staticmethod
     def as_dict():

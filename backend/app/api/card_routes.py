@@ -169,7 +169,7 @@ def task_status(task_id):
 def start_scraping():
     """Starts the scraping task."""
     data = request.json
-    current_app.logger.info("Received data: %s", data)
+    #current_app.logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
     card_list = data.get("card_list", [])
