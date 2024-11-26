@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request, current_app
 from app.services.card_manager import CardManager
 from app.tasks.optimization_tasks import start_scraping_task
 from celery.result import AsyncResult
+from celery.backends.base import DisabledBackend
 
 logger = logging.getLogger(__name__)
 
@@ -113,27 +114,43 @@ def task_status(task_id):
     try:
         result = AsyncResult(task_id)
         
+        # Check if backend is disabled
+        if isinstance(result.backend, DisabledBackend):
+            return jsonify({
+                'state': 'ERROR',
+                'status': 'Task status checking is not available',
+                'error': 'Celery backend is not configured'
+            }), 503
+        
+        try:
+            state = result.state
+        except AttributeError:
+            return jsonify({
+                'state': 'ERROR',
+                'status': 'Could not retrieve task status',
+                'error': 'Backend configuration error'
+            }), 503
+
         # Handle different task states
-        if result.state == 'PENDING':
+        if state == 'PENDING':
             response = {
-                'state': result.state,
+                'state': state,
                 'status': 'Task is waiting for execution'
             }
-        elif result.state == 'FAILURE':
+        elif state == 'FAILURE':
             response = {
-                'state': result.state,
+                'state': state,
                 'status': 'Task failed',
                 'error': str(result.info) if result.info else 'Unknown error occurred'
             }
-        elif result.state in ['PROGRESS', 'PROCESSING']:
+        elif state in ['PROGRESS', 'PROCESSING']:
             response = {
-                'state': result.state,
+                'state': state,
                 'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info)
             }
         else:
-            # SUCCESS or other states
             response = {
-                'state': result.state,
+                'state': state,
                 'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info),
                 'result': result.get() if result.successful() else None
             }
