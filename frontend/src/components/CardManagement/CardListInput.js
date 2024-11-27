@@ -53,7 +53,11 @@ const CardListInput = ({ onSubmit }) => {
 
   const handleAddCard = () => {
     if (cardName && selectedSet && quantity > 0) {
-      setCardList([...cardList, { name: cardName, quantity, set: selectedSet }]);
+      setCardList([...cardList, { 
+        name: cardName,     // Changed from 'Name'
+        quantity,           // Changed from 'Quantity'
+        set_name: selectedSet  // Changed from 'Edition' or 'set'
+      }]);
       setCardName('');
       setQuantity(1);
       setSelectedSet('');

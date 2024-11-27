@@ -63,7 +63,7 @@ const Dashboard = () => {
                     type="link" 
                     onClick={() => handleCardClick(`/results/${scan.id}`)}
                   >
-                    {scan.name} - {scan.date}
+                    {scan.id} - {scan.created_at || scan.date}
                   </Button>
                 </List.Item>
               )}

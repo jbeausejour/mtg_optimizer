@@ -1,5 +1,6 @@
 import logging
 import datetime
+from pytz import timezone
 from sqlalchemy.orm import Query
 import pandas as pd
 from flask import current_app
@@ -24,12 +25,16 @@ if not logger.hasHandlers():
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"))
     logger.addHandler(handler)
 
-def is_data_fresh(card_name, freshness_threshold_hours=24):
-    """ Check if data in ScanResult is fresh enough """
-    scan_result = ScanResult.query.filter_by(card_name=card_name).order_by(ScanResult.updated_at.desc()).first()
-    if scan_result:
-        return (datetime.datetime.utcnow() - scan_result.updated_at).total_seconds() < freshness_threshold_hours * 3600
-    return False
+def is_data_fresh(card_name):
+    """Check if the card data is fresh (less than 24 hours old)"""
+    scan_result = ScanResult.query.filter_by(name=card_name).order_by(ScanResult.updated_at.desc()).first()
+    
+    if not scan_result:
+        return False
+        
+    now = datetime.now(timezone.utc)
+    age = now - scan_result.updated_at.replace(tzinfo=timezone.utc)
+    return age.total_seconds() < 24 * 3600
 
 
 @celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
@@ -101,10 +106,22 @@ def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min
                 logger.warning("No scan results found in database")
                 card_details_df = pd.DataFrame()
             else:
+                # Get the latest scan
+                latest_scan = Scan.query.order_by(Scan.id.desc()).first()
+                if not latest_scan:
+                    logger.error("No scan found in database")
+                    return {
+                        "status": "Failed",
+                        "message": "No scan data available"
+                    }
+
                 for offset in range(0, total_records, BATCH_SIZE):
+                    query = db.session.query(ScanResult).filter(
+                        ScanResult.scan_id == latest_scan.id  # Use latest_scan.id instead of scan.id
+                    ).statement
                     batch = pd.read_sql(
-                        Query(ScanResult).offset(offset).limit(BATCH_SIZE).statement,
-                        db.session.bind
+                        query,
+                        db.session.bind,
                     )
                     if not batch.empty:
                         card_details.append(batch)
@@ -225,9 +242,16 @@ def optimize_cards(self, card_list_dicts, site_ids):
         for result in all_results:
             scan_result = ScanResult(
                 scan_id=new_scan.id,
-                card_id=result["card_id"],
+                name=result["name"],  # Changed from card_name
                 site_id=result["site_id"],
                 price=result["price"],
+                set_name=result["set_name"],  # Changed from edition
+                version=result.get("version", "Standard"),
+                foil=result.get("foil", False),
+                quality=result.get("quality"),
+                language=result.get("language", "English"),
+                quantity=result.get("quantity", 0),
+                updated_at=datetime.datetime.utcnow()
             )
             db.session.add(scan_result)
 

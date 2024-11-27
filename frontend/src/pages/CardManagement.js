@@ -97,12 +97,12 @@ const CardManagement = () => {
   
     const updatedCard = {
       id: selectedCard.id,
-      name: selectedPrinting.name,
-      set: selectedPrinting.set,
-      language: selectedPrinting.lang || selectedCard.language,
-      quantity: selectedCard.quantity,
-      version: selectedPrinting.version || selectedCard.version,
-      foil: selectedCard.foil,
+      name: selectedPrinting.name,         // Changed from 'Name'
+      set_name: selectedPrinting.set,      // Changed from 'Edition'
+      language: selectedPrinting.lang || selectedCard.language,  // Already lowercase
+      quantity: selectedCard.quantity,      // Already lowercase
+      version: selectedPrinting.version || selectedCard.version, // Already lowercase
+      foil: selectedCard.foil              // Already lowercase
     };
   
     try {
@@ -184,7 +184,7 @@ const CardManagement = () => {
               <div style={{ flex: 1, textAlign: 'center' }}>{card.quantity}</div>
 
               {/* Set */}
-              <div style={{ flex: 1, textAlign: 'center' }}>{card.set}</div>
+              <div style={{ flex: 1, textAlign: 'center' }}>{card.set_name}</div>
 
               {/* Language */}
               <div style={{ flex: 1, textAlign: 'center' }}>{card.language || 'N/A'}</div>

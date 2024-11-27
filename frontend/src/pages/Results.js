@@ -19,17 +19,17 @@ const Results = () => {
   const columns = [
     {
       title: 'Card Name',
-      dataIndex: ['Original_Card', 'Name'],
+      dataIndex: ['Original_Card', 'name'], // Changed from 'Name'
       key: 'card_name',
     },
     {
       title: 'Quantity',
-      dataIndex: 'Quantity',
+      dataIndex: 'quantity', // Changed from 'Quantity'
       key: 'quantity',
     },
     {
       title: 'Price',
-      dataIndex: 'Price',
+      dataIndex: 'price', // Changed from 'Price'
       key: 'price',
       render: (price) => `$${price.toFixed(2)}`,
     },

@@ -1,20 +1,15 @@
 from app.extensions import db
+from .base_card import BaseCard
 
-class UserBuylistCard(db.Model):
+class UserBuylistCard(BaseCard):
     __tablename__ = "user_buylist_card"
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String, nullable=False)
-    set = db.Column(db.String)
-    language = db.Column(db.String, default="English")
-    quantity = db.Column(db.Integer, default=1)
-    version = db.Column(db.String, default="Standard")
-    foil = db.Column(db.Boolean, default=False)
 
     def to_dict(self):
         return {
             "id": self.id,
-            "name": self.name,
-            "set": self.set,
+            "name": self.name,  # This will use the inherited column
+            "set_name": self.set_name,
             "language": self.language,
             "quantity": self.quantity,
             "version": self.version,

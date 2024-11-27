@@ -302,7 +302,21 @@ class ExternalDataSynchronizer:
 
             cards_df = self.extract_info(soup, site, card_names, strategy)
             if cards_df is not None and not cards_df.empty:
-                logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}")
+                # Create summary of results
+                summary = cards_df.groupby(['set_name', 'foil']).agg({
+                    'name': 'count',
+                    'price': ['min', 'max', 'mean'],
+                    'quantity': 'sum'
+                }).round(2)
+                
+                logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}:")
+                for (set_name, foil), row in summary.iterrows():
+                    logger.info(f"  {set_name} ({'Foil' if foil else 'Regular'}): "
+                              f"{int(row[('name', 'count')])} cards, "
+                              f"Price range: ${row[('price', 'min')]} - ${row[('price', 'max')]}, "
+                              f"Avg: ${row[('price', 'mean')]}, "
+                              f"Total qty: {int(row[('quantity', 'sum')])}")
+                
                 self.save_results_to_db(site, cards_df)
                 return cards_df.to_dict('records')
             else:
@@ -312,6 +326,15 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error processing site {site.name}: {str(e)}")
             return None
+
+    @staticmethod
+    def convert_foil_to_bool(foil_value):
+        """Convert foil value to boolean"""
+        if isinstance(foil_value, bool):
+            return foil_value
+        if isinstance(foil_value, str):
+            return foil_value.lower() in ['foil', 'true', '1', 'yes']
+        return False
 
     @staticmethod
     def save_results_to_db(site, cards_df):
@@ -327,15 +350,15 @@ class ExternalDataSynchronizer:
                 scan_result = ScanResult(
                     scan_id=scan.id,
                     site_id=site.id,
-                    name=row.get('Name'),
-                    edition=row.get('Edition'),
-                    version=row.get('Version'),
-                    foil=row.get('Foil', False),
-                    quality=row.get('Quality'),
-                    language=row.get('Language'),
-                    quantity=row.get('Quantity', 0),
-                    price=row.get('Price', 0.0),
-                    updated_at=datetime.datetime.utcnow()
+                    name=row.get('name'),
+                    set_name=row.get('set_name'),  # Changed from 'edition'
+                    price=row.get('price', 0.0),
+                    updated_at=datetime.datetime.utcnow(),
+                    version=row.get('version', 'Standard'),
+                    foil=ExternalDataSynchronizer.convert_foil_to_bool(row.get('foil', False)),  # Convert foil value
+                    quality=row.get('quality'),
+                    language=row.get('language', 'English'),
+                    quantity=row.get('quantity', 0)
                 )
                 scan_results.append(scan_result)
 
@@ -414,7 +437,16 @@ class ExternalDataSynchronizer:
             logger.warning(f"No products container found for site {site.name}")
             return pd.DataFrame()
 
-        required_fields = {'Name', 'Edition', 'Quality', 'Language', 'Quantity', 'Price'}
+        required_fields = {
+        'name',
+        'set_name',
+        'quality',
+        'language',
+        'quantity',
+        'price',
+        'version',
+        'foil'
+    }
 
         logger.info(f"Processing container for {site.name}")
         for container in products_containers:
@@ -422,7 +454,7 @@ class ExternalDataSynchronizer:
             logger.debug(f"Container HTML: {container.prettify()}")
             
             items = container.find_all("li", {"class": "product"})
-            logger.info(f"Found {len(items)} product items in {site.name}")
+            logger.debug(f"Found {len(items)} product items in {site.name}")
             
             for item in items:
                 try:
@@ -431,7 +463,7 @@ class ExternalDataSynchronizer:
                         item, site, card_names, excluded_categories
                     )
                     if card_attrs:
-                        logger.debug(f"Valid card found in {site.name}: {card_attrs['Name']}")
+                        logger.debug(f"Valid card found in {site.name}: {card_attrs['name']}") 
                         if all(key in card_attrs for key in required_fields):
                             ExternalDataSynchronizer.process_variants(
                                 item, card_attrs, cards, seen_variants, strategy
@@ -464,7 +496,7 @@ class ExternalDataSynchronizer:
     def process_product_item(item, site, card_names, excluded_categories):
         """Fixed dict handling with better HTML inspection"""
         try:
-            logger.info(f"Starting process_product_item for {site.name}")
+            logger.debug(f"Starting process_product_item for {site.name}")
             
             if ExternalDataSynchronizer.is_yugioh_card(item):
                 logger.debug(f"Skipping Yugioh card in {site.name}")
@@ -498,52 +530,59 @@ class ExternalDataSynchronizer:
                 logger.debug(f"Category {test_category} is in excluded list for {site.name}")
                 return None
 
-            # Create a dictionary with standardized keys
+            # Create a dictionary with standardized keys (all lowercase)
             card_info = {
-                'Name': '',
-                'Edition': test_category,
-                'Foil': False,
-                'Quality': 'Near Mint',
-                'Language': 'English',
-                'Quantity': 0,
-                'Price': 0.0,
-                'Version': None
+                'name': '',
+                'set_name': test_category,
+                'foil': False,
+                'quality': 'Near Mint',
+                'language': 'English',
+                'quantity': 0,
+                'price': 0.0,
+                'version': 'Standard'
             }
 
             parsed_card = parse_card_string(test_title)
             logger.debug(f"Parsed card result for {site.name}: {parsed_card}")
             
             if isinstance(parsed_card, dict):
-                #logger.info(f"Parsed card is dict: {parsed_card}")
-                # Update with parsed card info, maintaining our key casing
-                parsed_keys = {k.lower(): k for k in parsed_card.keys()}
-                for key in ['Name', 'Foil']:
-                    if key.lower() in parsed_keys:
-                        orig_key = parsed_keys[key.lower()]
-                        #logger.info(f"Setting card_info {key} to {parsed_card[orig_key]}")
-                        card_info[key] = parsed_card[orig_key]
+                # Update key mapping to handle both old and new formats
+                key_mapping = {
+                    'Name': 'name',
+                    'Foil': 'foil',
+                    'Edition': 'set_name',
+                    'Quality': 'quality',
+                    'Language': 'language',
+                    'Quantity': 'quantity',
+                    'Price': 'price',
+                    'Version': 'version'
+                }
+                
+                for old_key, new_key in key_mapping.items():
+                    if old_key in parsed_card:
+                        card_info[new_key] = parsed_card[old_key]
             else:
-                logger.debug(f"Parsed card is object with name: {getattr(parsed_card, 'Name', None)}")
+                logger.debug(f"Parsed card is object with name: {getattr(parsed_card, 'name', None)}")
                 # Handle object-style parsing result
-                card_info['Name'] = getattr(parsed_card, 'Name', test_title)
-                card_info['Foil'] = getattr(parsed_card, 'Foil', False)
+                card_info['name'] = getattr(parsed_card, 'name', test_title)
+                card_info['foil'] = getattr(parsed_card, 'foil', False)
 
             # Clean and validate card name
-            original_name = card_info['Name']
-            card_info['Name'] = clean_card_name(card_info['Name'], card_names)
-            logger.debug(f"Card name cleaned from '{original_name}' to '{card_info['Name']}' for {site.name}")
+            original_name = card_info['name']  
+            card_info['name'] = clean_card_name(card_info['name'], card_names)  
+            logger.debug(f"Card name cleaned from '{original_name}' to '{card_info['name']}' for {site.name}")
 
-            if not card_info['Name']:
+            if not card_info['name']: 
                 logger.warning(f"Card name cleaned to empty string in {site.name}")
                 return None
                 
-            if (card_info['Name'] not in card_names and 
-                card_info['Name'].split(" // ")[0].strip() not in card_names):
-                logger.warning(f"Card '{card_info['Name']}' not in requested list for {site.name}")
+            if (card_info['name'] not in card_names and  
+                card_info['name'].split(" // ")[0].strip() not in card_names):
+                logger.warning(f"Card '{card_info['name']}' not in requested list for {site.name}")
                 logger.debug(f"Available card names: {card_names}")
                 return None
 
-            logger.info(f"Successfully processed card '{card_info['Name']}' for {site.name}")
+            logger.debug(f"Successfully processed card '{card_info['name']}' for {site.name}")  
             return card_info
 
         except Exception as e:
@@ -564,12 +603,12 @@ class ExternalDataSynchronizer:
             if card_variant is not None:
                 # Create a hashable key from the variant's relevant data
                 variant_key = (
-                    card_variant.get('Name', ''),
-                    card_variant.get('Edition', ''),
-                    card_variant.get('Quality', ''),
-                    card_variant.get('Language', ''),
-                    card_variant.get('Foil', False),
-                    card_variant.get('Version', '')
+                    card_variant.get('name', ''),          # Updated keys
+                    card_variant.get('set_name', ''),      # to match
+                    card_variant.get('quality', ''),       # new schema
+                    card_variant.get('language', ''),
+                    card_variant.get('foil', False),
+                    card_variant.get('version', 'Standard')
                 )
                 if variant_key not in seen_variants:
                     cards.append(card_variant)
@@ -603,11 +642,6 @@ class ExternalDataSynchronizer:
         # Create new card dict if input is dict, otherwise modify object
         if isinstance(card, dict):
             card_data = card.copy()  # Create copy to avoid modifying original
-            if not card_data.get('Foil'):
-                card_data['Foil'] = product_foil
-            if not card_data.get('Edition'):
-                card_data['Edition'] = product_version
-
             quality_language = ExternalDataSynchronizer.normalize_variant_description(
                 attributes["data-variant"]
             )
@@ -621,16 +655,38 @@ class ExternalDataSynchronizer:
             )
 
             card_data.update({
-                'Quality': quality,
-                'Language': language,
-                'Quantity': int(qty_available),
-                'Edition': attributes["data-category"],
-                'Price': normalize_price(attributes["data-price"])
+                'quality': quality, 
+                'language': language,
+                'quantity': int(qty_available),  
+                'set_name': attributes["data-category"], 
+                'price': normalize_price(attributes["data-price"]),  
+                'foil': ExternalDataSynchronizer.convert_foil_to_bool(product_foil)  # Convert foil value here
             })
             return card_data
         else:
             # Handle object-style card
-            # ...existing object handling code...
+            card.foil = ExternalDataSynchronizer.convert_foil_to_bool(product_foil)
+            if product_version:
+                card.set_name = product_version
+
+            quality_language = ExternalDataSynchronizer.normalize_variant_description(
+                attributes["data-variant"]
+            )
+            quality, language = quality_language[:2]
+            
+            select_tag = variant.find("select", {"class": "qty"}) or variant.find(
+                "input", {"class": "qty"}
+            )
+            qty_available = (
+                select_tag["max"] if select_tag and "max" in select_tag.attrs else "0"
+            )
+
+            card.quality = quality
+            card.language = language
+            card.quantity = int(qty_available)
+            card.set_name = attributes["data-category"]
+            card.price = normalize_price(attributes["data-price"])
+            
             return card
 
     @staticmethod
@@ -656,10 +712,10 @@ class ExternalDataSynchronizer:
             if isinstance(card, dict):
                 card_data = card.copy()
                 card_data.update({
-                    'Quality': quality,
-                    'Language': language,
-                    'Quantity': quantity,
-                    'Price': price
+                    'quality': quality,      # Changed from 'Quality'
+                    'language': language,    # Changed from 'Language'
+                    'quantity': quantity,    # Changed from 'Quantity'
+                    'price': price          # Changed from 'Price'
                 })
                 logger.debug(f"Updated card data: {card_data}")
                 return card_data
@@ -672,7 +728,7 @@ class ExternalDataSynchronizer:
                 return card
 
         except Exception as e:
-            card_name = card.get('Name', '') if isinstance(card, dict) else getattr(card, 'Name', '')
+            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
             logger.exception(f"Error in strategy_scrapper for {card_name}: {str(e)}")
             return None
 
@@ -768,7 +824,7 @@ class ExternalDataSynchronizer:
             )
             return quality_language[:2]
         else:
-            card_name = card.get('Name', '') if isinstance(card, dict) else getattr(card, 'Name', '')
+            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
             logger.error(
                 f"Error in extract_quality_language for {card_name}: variant-description not found"
             )
@@ -784,7 +840,7 @@ class ExternalDataSynchronizer:
             variant_qty = variant_qty.text.strip()
             return extract_numbers(variant_qty)
         else:
-            card_name = card.get('Name', '') if isinstance(card, dict) else getattr(card, 'Name', '')
+            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '') 
             logger.error(
                 f"Error in extract_quantity for {card_name}: variant-qty not found"
             )
@@ -798,7 +854,7 @@ class ExternalDataSynchronizer:
             price_text = price_elem.text
             return normalize_price(price_text)
         else:
-            card_name = card.get('Name', '') if isinstance(card, dict) else getattr(card, 'Name', '')
+            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
             logger.error(
                 f"Error in extract_price for {card_name}: Price element not found"
             )

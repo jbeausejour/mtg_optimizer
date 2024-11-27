@@ -51,28 +51,21 @@ def save_card():
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
-        card_id = data.get("id")
-        card_name = data.get("name")
-        card_set = data.get("set")
-        card_language = data.get("language", "English")
-        card_quantity = data.get("quantity", 1)
-        card_version = data.get("version", "Standard")
-        foil = data.get("foil", False)
+        required_fields = ["name"]
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": "Missing required fields"}), 400
 
-        if not card_name:
-            return jsonify({"error": "Card name is required"}), 400
+        # Standardize data fields
+        card_data = {
+            "name": data.get("name"),
+            "set_name": data.get("set_name"),  # Changed from 'set'
+            "language": data.get("language", "English"),
+            "quantity": data.get("quantity", 0),
+            "version": data.get("version", "Standard"),
+            "foil": data.get("foil", False)
+        }
 
-        # Call the CardManager to save or update the card
-        saved_card = CardManager.save_card(
-            card_id=card_id,
-            name=card_name,
-            set=card_set,
-            language=card_language,
-            quantity=card_quantity,
-            version=card_version,
-            foil=foil,
-        )
-
+        saved_card = CardManager.save_card(**card_data)
         return jsonify(saved_card.to_dict()), 200
     except Exception as e:
         current_app.logger.error(f"Error saving card: {str(e)}")

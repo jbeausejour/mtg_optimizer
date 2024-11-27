@@ -39,3 +39,7 @@ npm cache clean --force
 npm run build
 xcopy .\build\*  "..\backend\static\" /s /e /y
 npm start
+
+
+#SQL
+SELECT sql FROM sqlite_master WHERE type='table' AND name='scan_result';
