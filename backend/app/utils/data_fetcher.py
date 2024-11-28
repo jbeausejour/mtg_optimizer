@@ -24,22 +24,7 @@ from app.utils.helpers import (
     parse_card_string,
 )
 
-from app.utils.logging_utils import get_logger
-
-# Simple console logger with no propagation
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.propagate = False
-
-# Remove any existing handlers
-for handler in logger.handlers[:]:
-    logger.removeHandler(handler)
-
-# Add only console handler
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-logger.addHandler(console_handler)
-
 
 class ExternalDataSynchronizer:
 
@@ -157,7 +142,7 @@ class ExternalDataSynchronizer:
         if auth_input:
             token = auth_input.get("value")
             if token:
-                logger.info(f"Found auth token via input field for {site.name}")
+                logger.debug(f"Found auth token via input field for {site.name}")
                 return token
 
         # Method 2: Meta tag
@@ -165,7 +150,7 @@ class ExternalDataSynchronizer:
         if meta_token:
             token = meta_token.get("content")
             if token:
-                logger.info(f"Found auth token via meta tag for {site.name}")
+                logger.debug(f"Found auth token via meta tag for {site.name}")
                 return token
 
         # Method 3: Form based
@@ -175,7 +160,7 @@ class ExternalDataSynchronizer:
             if hidden_input:
                 token = hidden_input.get("value")
                 if token:
-                    logger.info(f"Found auth token via form for {site.name}")
+                    logger.debug(f"Found auth token via form for {site.name}")
                     return token
 
         # Method 4: Script based (some sites store token in JS)
@@ -186,7 +171,7 @@ class ExternalDataSynchronizer:
                 token_match = re.search(r'["\']csrf[_-]token["\']\s*:\s*["\']([^"\']+)["\']', script.string)
                 if token_match:
                     token = token_match.group(1)
-                    logger.info(f"Found auth token via script for {site.name}")
+                    logger.debug(f"Found auth token via script for {site.name}")
                     return token
 
         # Add new fallback methods
@@ -338,39 +323,145 @@ class ExternalDataSynchronizer:
 
     @staticmethod
     def save_results_to_db(site, cards_df):
-        logger.info(f"Saving to DB")
+        logger.info(f"=== Starting database save for site: {site.name} ===")
         try:
+            # Normalize all qualities and languages before any DB operations
+            for idx, row in cards_df.iterrows():
+                
+                # Get current values
+                current_quality = row.get('quality', 'NM')
+                current_lang = row.get('language', 'English')
+                
+                # Normalize values
+                normalized_quality = ExternalDataSynchronizer.normalize_quality(current_quality)
+                normalized_lang = ExternalDataSynchronizer.normalize_language(current_lang)
+                
+                # Update DataFrame
+                cards_df.at[idx, 'quality'] = normalized_quality
+                cards_df.at[idx, 'language'] = normalized_lang
+
+            # Verify all qualities are valid
+            valid_qualities = {'NM', 'LP', 'MP', 'HP', 'DMG'}
+            invalid_qualities = cards_df[~cards_df['quality'].isin(valid_qualities)]
+            if not invalid_qualities.empty:
+                logger.error(f"Found invalid qualities in data for {site.name}:")
+                for _, row in invalid_qualities.iterrows():
+                    logger.error(f"Card '{row['name']}' has invalid quality: '{row['quality']}'")
+                    # Force to NM as last resort
+                    cards_df.loc[cards_df['name'] == row['name'], 'quality'] = 'NM'
+
+            # Verify all languages are valid
+            valid_languages = {
+                'English', 'Japanese', 'Chinese', 'Korean', 'Russian',
+                'German', 'Spanish', 'French', 'Italian', 'Portuguese'
+            }
+            invalid_langs = cards_df[~cards_df['language'].isin(valid_languages)]
+            if not invalid_langs.empty:
+                logger.error(f"Found invalid languages in data for {site.name}:")
+                for _, row in invalid_langs.iterrows():
+                    logger.error(f"Card '{row['name']}' has invalid language: '{row['language']}'")
+                    # Force to English as last resort
+                    cards_df.loc[cards_df['name'] == row['name'], 'language'] = 'English'
+
+            # Create scan and save results
             scan = Scan()
             db.session.add(scan)
             db.session.commit()
 
-            # Create list of model instances from DataFrame
+            # Create and save scan results
             scan_results = []
             for _, row in cards_df.iterrows():
                 scan_result = ScanResult(
                     scan_id=scan.id,
                     site_id=site.id,
-                    name=row.get('name'),
-                    set_name=row.get('set_name'),  # Changed from 'edition'
-                    price=row.get('price', 0.0),
+                    name=row['name'],
+                    set_name=row['set_name'],
+                    price=float(row.get('price', 0.0)),
                     updated_at=datetime.datetime.utcnow(),
                     version=row.get('version', 'Standard'),
-                    foil=ExternalDataSynchronizer.convert_foil_to_bool(row.get('foil', False)),  # Convert foil value
-                    quality=row.get('quality'),
-                    language=row.get('language', 'English'),
-                    quantity=row.get('quantity', 0)
+                    foil=ExternalDataSynchronizer.convert_foil_to_bool(row.get('foil', False)),
+                    quality=row['quality'],  # Already normalized
+                    language=row['language'],  # Already normalized
+                    quantity=int(row.get('quantity', 0))
                 )
                 scan_results.append(scan_result)
 
-            # Bulk insert
-            db.session.bulk_save_objects(scan_results)
-            db.session.commit()
-            logger.info(f"Successfully saved scan results for {site.name} with {len(cards_df)} cards.")
-            
+            try:
+                db.session.bulk_save_objects(scan_results)
+                db.session.commit()
+                logger.info(f"Successfully saved {len(scan_results)} scan results for {site.name}")
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"Bulk insert failed for {site.name}: {str(e)}")
+                raise
+
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error saving cards to database for site {site.name}: {str(e)}")
             raise
+
+    @staticmethod
+    def normalize_quality(quality):
+        """Normalize quality to standard values"""
+        logger.debug(f"=== Starting quality normalization for: {quality} ===")
+        
+        if not quality:
+            logger.debug("Empty quality value, defaulting to NM")
+            return 'NM'
+            
+        try:
+            quality = str(quality).upper().strip()
+            
+            # Mapping of various quality terms to standardized values
+            quality_map = {
+                'MINT': 'NM',
+                'NEAR MINT': 'NM',
+                'NM/M': 'NM',
+                'M/NM': 'NM',
+                'NM-MINT': 'NM',
+                'MINT/NEAR-MINT': 'NM',
+                'NEAR-MINT': 'NM',
+                'NM': 'NM',
+                'NEAR MINT/MINT': 'NM',
+                'MINT/NM': 'NM',
+                
+                'LIGHT PLAYED': 'LP',
+                'LIGHTLY PLAYED': 'LP',
+                'LP': 'LP',
+                'EX': 'LP',
+                'EXCELLENT': 'LP',
+                'SLIGHTLY PLAYED': 'LP',
+                'SP': 'LP',
+                
+                'MODERATE PLAYED': 'MP',
+                'MODERATELY PLAYED': 'MP',
+                'MP': 'MP',
+                'PLAYED': 'MP',
+                'PL': 'MP',
+                'GOOD': 'MP',
+                'GD': 'MP',
+                
+                'HEAVY PLAYED': 'HP',
+                'HEAVILY PLAYED': 'HP',
+                'HP': 'HP',
+                'POOR': 'HP',
+                'PR': 'HP',
+                
+                'DAMAGED': 'DMG',
+                'DMG': 'DMG',
+            }
+            
+            normalized = quality_map.get(quality)
+            if normalized:
+                logger.debug(f"Successfully normalized quality from '{quality}' to '{normalized}'")
+                return normalized
+            else:
+                logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
+                return 'NM'
+                
+        except Exception as e:
+            logger.error(f"Error normalizing quality '{quality}': {str(e)}")
+            return 'NM'
 
     @classmethod
     async def update_all_cards(cls):
@@ -483,11 +574,30 @@ class ExternalDataSynchronizer:
 
         try:
             df = pd.DataFrame(cards)
-            # Ensure all required columns exist
-            for field in required_fields:
-                if field not in df.columns:
-                    df[field] = None
+            # Ensure standard column names and data types
+            standard_columns = {
+                'name': str,
+                'set_name': str,
+                'price': float,
+                'version': str,
+                'foil': bool,
+                'quality': str,
+                'language': str,
+                'quantity': int
+            }
+            
+            # Add missing columns with default values
+            for col, dtype in standard_columns.items():
+                if col not in df.columns:
+                    df[col] = dtype()
+                df[col] = df[col].astype(dtype)
+            
+            # Normalize quality and language values
+            df['quality'] = df['quality'].apply(ExternalDataSynchronizer.normalize_quality)
+            df['language'] = df['language'].apply(ExternalDataSynchronizer.normalize_language)
+            
             return df
+            
         except Exception as e:
             logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
             return pd.DataFrame()
@@ -621,6 +731,147 @@ class ExternalDataSynchronizer:
         return a_tag and "yugioh" in a_tag["href"]
 
     @staticmethod
+    def normalize_quality(quality):
+        """Normalize quality to standard values"""
+        logger.debug(f"=== Starting quality normalization for: {quality} ===")
+        
+        if not quality:
+            logger.debug("Empty quality value, defaulting to NM")
+            return 'NM'
+            
+        try:
+            quality = str(quality).upper().strip()
+            
+            # Mapping of various quality terms to standardized values
+            quality_map = {
+                'MINT': 'NM',
+                'NEAR MINT': 'NM',
+                'NM/M': 'NM',
+                'M/NM': 'NM',
+                'NM-MINT': 'NM',
+                'MINT/NEAR-MINT': 'NM',
+                'NEAR-MINT': 'NM',
+                'NM': 'NM',
+                'NEAR MINT/MINT': 'NM',
+                'MINT/NM': 'NM',
+                
+                'LIGHT PLAYED': 'LP',
+                'LIGHTLY PLAYED': 'LP',
+                'LP': 'LP',
+                'EX': 'LP',
+                'EXCELLENT': 'LP',
+                'SLIGHTLY PLAYED': 'LP',
+                'SP': 'LP',
+                
+                'MODERATE PLAYED': 'MP',
+                'MODERATELY PLAYED': 'MP',
+                'MP': 'MP',
+                'PLAYED': 'MP',
+                'PL': 'MP',
+                'GOOD': 'MP',
+                'GD': 'MP',
+                
+                'HEAVY PLAYED': 'HP',
+                'HEAVILY PLAYED': 'HP',
+                'HP': 'HP',
+                'POOR': 'HP',
+                'PR': 'HP',
+                
+                'DAMAGED': 'DMG',
+                'DMG': 'DMG',
+            }
+            
+            normalized = quality_map.get(quality)
+            if normalized:
+                logger.debug(f"Successfully normalized quality from '{quality}' to '{normalized}'")
+                return normalized
+            else:
+                logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
+                return 'NM'
+                
+        except Exception as e:
+            logger.error(f"Error normalizing quality '{quality}': {str(e)}")
+            return 'NM'
+
+    @staticmethod
+    def normalize_language(language):
+        """Normalize language to standard values"""
+
+        if not language:
+            logger.info("Empty language value, defaulting to English")
+            return 'English'
+
+        language_map = {
+            # English variants
+            'en': 'English',
+            'eng': 'English',
+            'english': 'English',
+            'en-us': 'English',
+            'anglais': 'English',  # French word for English
+            # Japanese variants
+            'jp': 'Japanese',
+            'ja': 'Japanese',
+            'jpn': 'Japanese',
+            'japanese': 'Japanese',
+            'japonais': 'Japanese',  # French word for Japanese
+            # Chinese variants
+            'cn': 'Chinese',
+            'zh': 'Chinese',
+            'chi': 'Chinese',
+            'chinese': 'Chinese',
+            'chinois': 'Chinese',  # French word for Chinese
+            # Korean variants
+            'kr': 'Korean',
+            'ko': 'Korean',
+            'kor': 'Korean',
+            'korean': 'Korean',
+            'coréen': 'Korean',  # French word for Korean
+            # Russian variants
+            'ru': 'Russian',
+            'rus': 'Russian',
+            'russian': 'Russian',
+            'russe': 'Russian',  # French word for Russian
+            # German variants
+            'de': 'German',
+            'deu': 'German',
+            'ger': 'German',
+            'german': 'German',
+            'allemand': 'German',  # French word for German
+            # Spanish variants
+            'es': 'Spanish',
+            'esp': 'Spanish',
+            'spa': 'Spanish',
+            'spanish': 'Spanish',
+            'espagnol': 'Spanish',  # French word for Spanish
+            # French variants
+            'fr': 'French',
+            'fra': 'French',
+            'fre': 'French',
+            'french': 'French',
+            'français': 'French',
+            # Italian variants
+            'it': 'Italian',
+            'ita': 'Italian',
+            'italian': 'Italian',
+            'italien': 'Italian',  # French word for Italian
+            # Portuguese variants
+            'pt': 'Portuguese',
+            'por': 'Portuguese',
+            'portuguese': 'Portuguese',
+            'portugais': 'Portuguese',  # French word for Portuguese
+        }
+            
+        cleaned_language = language.lower().strip()
+        normalized = language_map.get(cleaned_language, 'English')
+        
+        if normalized == 'English' and cleaned_language not in language_map:
+            logger.warning(f"Unknown language value defaulting to English: '{language}' (cleaned: '{cleaned_language}')")
+        # else:
+        #     logger.info(f"Normalized language from '{language}' to '{normalized}'")
+            
+        return normalized
+
+    @staticmethod
     def strategy_add_to_cart(card, variant):
         """Modified to handle both dict and object card data"""
         if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
@@ -646,6 +897,8 @@ class ExternalDataSynchronizer:
                 attributes["data-variant"]
             )
             quality, language = quality_language[:2]
+            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
+            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
 
             select_tag = variant.find("select", {"class": "qty"}) or variant.find(
                 "input", {"class": "qty"}
@@ -673,7 +926,9 @@ class ExternalDataSynchronizer:
                 attributes["data-variant"]
             )
             quality, language = quality_language[:2]
-            
+            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
+            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
+
             select_tag = variant.find("select", {"class": "qty"}) or variant.find(
                 "input", {"class": "qty"}
             )
@@ -701,6 +956,9 @@ class ExternalDataSynchronizer:
             )
             if quality is None or language is None:
                 return None
+                
+            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
+            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
 
             quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
             if quantity is None:
@@ -721,10 +979,10 @@ class ExternalDataSynchronizer:
                 return card_data
             else:
                 # Handle object-style card
-                card.Quality = quality
-                card.Language = language
-                card.Quantity = quantity
-                card.Price = price
+                card.quality = quality
+                card.language = language
+                card.quantity = quantity
+                card.price = price
                 return card
 
         except Exception as e:
@@ -814,20 +1072,36 @@ class ExternalDataSynchronizer:
 
     @staticmethod
     def extract_quality_language(card, variant):
-        """Modified to handle both dict and object card data"""
+        """Extract and normalize quality and language from variant"""
+        card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')
+        logger.debug(f"=== Extracting quality/language for card: {card_name} ===")
+        
         variant_description = variant.find(
             "span", {"class": "variant-short-info variant-description"}
         ) or variant.find("span", {"class": "variant-short-info"})
+        
         if variant_description:
             quality_language = ExternalDataSynchronizer.normalize_variant_description(
                 variant_description.text
             )
-            return quality_language[:2]
+            logger.debug(f"Raw quality_language parts: {quality_language}")
+            
+            if len(quality_language) >= 2:
+                raw_quality, raw_language = quality_language[:2]
+                logger.debug(f"Before normalization - Quality: {raw_quality}, Language: {raw_language}")
+                
+                # Normalize both values
+                quality = ExternalDataSynchronizer.normalize_quality(raw_quality)
+                language = ExternalDataSynchronizer.normalize_language(raw_language)
+                
+                logger.debug(f"After normalization - Quality: {quality}, Language: {language}")
+                return quality, language
+            else:
+                logger.warning(f"Incomplete variant description: {variant_description.text}")
+                logger.debug("Using default values: 'NM', 'English'")
+                return 'NM', 'English'
         else:
-            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
-            logger.error(
-                f"Error in extract_quality_language for {card_name}: variant-description not found"
-            )
+            logger.error(f"No variant description found for card: {card_name}")
             return None, None
 
     @staticmethod

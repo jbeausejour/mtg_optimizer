@@ -1,6 +1,6 @@
 import logging
 from flask import Blueprint, jsonify, request, current_app
-from app.services.card_manager import CardManager
+from app.services.card_service import CardService
 from app.tasks.optimization_tasks import start_scraping_task
 from celery.result import AsyncResult
 from celery.backends.base import DisabledBackend
@@ -14,7 +14,7 @@ card_routes = Blueprint("card_routes", __name__)
 @card_routes.route("/cards", methods=["GET"])
 def get_cards():
     try:
-        cards = CardManager.get_user_buylist_cards()
+        cards = CardService.get_user_buylist_cards()
         return jsonify([card.to_dict() for card in cards])
     except Exception as e:
         current_app.logger.error(f"Error fetching user cards: {str(e)}")
@@ -29,7 +29,7 @@ def update_card(card_id):
         data = request.json
 
         # Delegate update to CardManager
-        updated_card = CardManager.update_user_buylist_card(card_id, data)
+        updated_card = CardService.update_user_buylist_card(card_id, data)
         if not updated_card:
             return jsonify({"error": "Card not found in user's buylist"}), 404
 
@@ -65,7 +65,7 @@ def save_card():
             "foil": data.get("foil", False)
         }
 
-        saved_card = CardManager.save_card(**card_data)
+        saved_card = CardService.save_card(**card_data)
         return jsonify(saved_card.to_dict()), 200
     except Exception as e:
         current_app.logger.error(f"Error saving card: {str(e)}")
@@ -81,7 +81,7 @@ def fetch_card():
     if not card_name:
         return jsonify({"error": "Card name is required"}), 400
 
-    card_data = CardManager.fetch_card_data(card_name, set_code, language, version)
+    card_data = CardService.fetch_card_data(card_name, set_code, language, version)
     if card_data is None:
         return jsonify({
             "scryfall": {
@@ -182,7 +182,7 @@ def start_scraping():
 @card_routes.route("/sets", methods=["GET"])
 def get_sets():
     try:
-        sets = CardManager.fetch_all_sets()
+        sets = CardService.fetch_all_sets()
         return jsonify(sets)
     except Exception as e:
         current_app.logger.error(f"Error fetching sets: {str(e)}")
@@ -192,7 +192,7 @@ def get_sets():
 @card_routes.route("/scans/<int:scan_id>", methods=["GET"])
 def get_scan_results(scan_id):
     try:
-        scan = CardManager.get_scan_results(scan_id)
+        scan = CardService.get_scan_results(scan_id)
         return jsonify(scan.to_dict())
     except Exception as e:
         current_app.logger.error(f"Error fetching scan results: {str(e)}")
@@ -202,7 +202,7 @@ def get_scan_results(scan_id):
 def get_all_scans():
     limit = request.args.get("limit", 5, type=int)
     try:
-        scans = CardManager.get_all_scan_results(limit)
+        scans = CardService.get_all_scan_results(limit)
         return jsonify([scan.to_dict() for scan in scans])
     except Exception as e:
         current_app.logger.error(f"Error fetching scans: {str(e)}")

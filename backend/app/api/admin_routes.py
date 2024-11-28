@@ -2,7 +2,7 @@ import logging
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import create_access_token, jwt_required
 from sqlalchemy.exc import IntegrityError
-from app.services.card_manager import CardManager
+from app.services.card_service import CardService
 from app.models.user import User
 from app.utils.create_user import create_user
 from app.utils.load_initial_data import load_all_data, truncate_tables
@@ -16,14 +16,14 @@ admin_routes = Blueprint("admin_routes", __name__)
 # Site Operations
 @admin_routes.route("/sites", methods=["GET"])
 def get_sites():
-    sites = CardManager.get_all_sites()
+    sites = CardService.get_all_sites()
     return jsonify([site.to_dict() for site in sites])
 
 @admin_routes.route("/sites", methods=["POST"])
 def add_site():
     try:
         data = request.json
-        new_site = CardManager.add_site(data)
+        new_site = CardService.add_site(data)
         return jsonify(new_site.to_dict()), 201
     except IntegrityError as ie:
         current_app.logger.error(f"Database integrity error: {str(ie)}")
@@ -39,7 +39,7 @@ def update_site(site_id):
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
-        updated_site = CardManager.update_site(site_id, data)
+        updated_site = CardService.update_site(site_id, data)
         return jsonify({
             "message": "Site updated successfully",
             "site": updated_site.to_dict(),
@@ -58,7 +58,7 @@ def update_site(site_id):
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required()
 def get_settings():
-    settings = CardManager.get_all_settings()
+    settings = CardService.get_all_settings()
     return jsonify([setting.to_dict() for setting in settings])
 
 @admin_routes.route("/settings", methods=["POST"])
@@ -73,7 +73,7 @@ def update_settings():
         if not validate_setting_key(key) or not validate_setting_value(value):
             return jsonify({"error": f"Invalid setting key or value: {key}"}), 400
 
-        setting = CardManager.update_setting(key, value)
+        setting = CardService.update_setting(key, value)
         updated_settings.append(setting.to_dict())
         current_app.logger.info(f"Setting updated: {key}")
 

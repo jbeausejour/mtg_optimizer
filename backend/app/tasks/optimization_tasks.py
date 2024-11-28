@@ -1,10 +1,8 @@
 import logging
-import datetime
-from pytz import timezone
-from sqlalchemy.orm import Query
+from datetime import datetime, timezone
 import pandas as pd
+from sqlalchemy.orm import Query
 from flask import current_app
-from mtgsdk import Card  # Importing mtgsdk to dynamically fetch card data
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
 from app.models.site import Site
@@ -15,15 +13,12 @@ from .celery_app import celery_app
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 import asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text  # Add this import
+from app.services.scan_service import ScanService
+from app.dto.optimization_dto import OptimizationConfigDTO, OptimizationResultDTO, ScanResultDTO
 
-# Configure a logger specifically for Celery tasks
-logger = logging.getLogger("celery_task_logger")
-logger.setLevel(logging.INFO)
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]"))
-    logger.addHandler(handler)
+
+logger = logging.getLogger(__name__)
 
 def is_data_fresh(card_name):
     """Check if the card data is fresh (less than 24 hours old)"""
@@ -32,184 +27,212 @@ def is_data_fresh(card_name):
     if not scan_result:
         return False
         
-    now = datetime.now(timezone.utc)
-    age = now - scan_result.updated_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
     return age.total_seconds() < 24 * 3600
 
 
-@celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
-def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min_store):
-    logger = logging.getLogger("celery_task_logger")
-    logger.info(f"Task {self.request.id} - start_scraping_task is running")
-    self.update_state(state="PROCESSING", meta={"status": "Initializing scraping task"})
+class OptimizationTaskManager:
+    def __init__(self, site_ids, card_list, strategy, min_store, find_min_store):
+        self.site_ids = site_ids
+        self.card_list = card_list
+        self.strategy = strategy
+        self.min_store = min_store
+        self.find_min_store = find_min_store
+        self.sites = Site.query.filter(Site.id.in_(site_ids)).all()
+        self.card_names = [card['name'] for card in card_list if 'name' in card]
+        self.logger = logger  # Use the global logger instead of creating a new one
 
-    try:
-        # Update initial state
-        self.update_state(
-            state="PROCESSING",
-            meta={
-                "status": "Task initialized",
-                "progress": 0
-            }
-        )
+    def handle_scraping(self):
+        outdated_cards = [card for card in self.card_list if not is_data_fresh(card['name'])]
+        if not outdated_cards:
+            return None
 
-        # Fetch the list of sites to scrape
-        sites = Site.query.filter(Site.id.in_(site_ids)).all()
-        logger.info(f"Starting scraping task for {len(sites)} sites with {len(card_list)} cards")
-        
-        # Extract card names from card_list
-        card_names = [card['name'] for card in card_list if 'name' in card]
-        
-        # Check for outdated cards using names only
-        outdated_cards = [card for card in card_list if not is_data_fresh(card['name'])]
-        logger.info(f"Found {len(outdated_cards)} outdated cards that need updating")
-        
-        # If any cards are outdated, initiate scraping
-        if outdated_cards:
-            logger.info(f"Starting scraping process with strategy: {strategy}")
-            scraper = ExternalDataSynchronizer()
-            
-            # Run the async scraping in the sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                logger.info("Initializing scraping loop")
-                # Pass only the names to the scraper
-                results = loop.run_until_complete(
-                    scraper.scrape_multiple_sites(sites, card_names, strategy=strategy)
-                )
-                logger.info(f"Scraping completed. Retrieved {len(results) if results else 0} results")
-            except Exception as e:
-                logger.error(f"Error during scraping loop: {str(e)}")
-                raise
-            finally:
-                logger.info("Closing scraping loop")
-                loop.close()
-
-            # Update progress during scraping
-            self.update_state(
-                state="PROCESSING",
-                meta={
-                    "status": "Scraping card data",
-                    "progress": 25,
-                    "cards_total": len(outdated_cards)
-                }
-            )
-
-        # Safely handle empty datasets
+        scraper = ExternalDataSynchronizer()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            BATCH_SIZE = 1000
-            card_details = []
-            total_records = ScanResult.query.count()
+            results = loop.run_until_complete(
+                scraper.scrape_multiple_sites(self.sites, self.card_names, strategy=self.strategy)
+            )
+            return results
+        finally:
+            loop.close()
+
+    def prepare_optimization_data(self):
+        try:
+            latest_scan = Scan.query.order_by(Scan.id.desc()).first()
+            if not latest_scan:
+                logger.error("No latest scan found")
+                return None, None
+
+            # Get scan results and convert to card_listings_df
+            results = db.session.query(ScanResult).filter(
+                ScanResult.scan_id == latest_scan.id
+            ).all()
+
+            if not results:
+                logger.error("No scan results found")
+                return None, None
+
+            # Create a site_id to site_name mapping
+            site_mapping = {site.id: site.name for site in self.sites}
+
+            # Create card_listings_df with standardized structure
+            card_listings_df = pd.DataFrame([{
+                'name': r.name,
+                'site': site_mapping.get(r.site_id, ''),  # Changed from site_name to site to match mapping
+                'price': float(r.price),
+                'quality': r.quality,
+                'quantity': int(r.quantity),
+                # Optional columns
+                'set_name': r.set_name,
+                'version': r.version,
+                'foil': bool(r.foil),
+                'language': r.language,
+                'site_id': r.site_id,
+                'weighted_price': float(r.price)
+            } for r in results])
+
+            # Validate required columns are present
+            required_columns = ['name', 'site', 'price', 'quality', 'quantity']
+            missing_columns = [col for col in required_columns if col not in card_listings_df.columns]
+            if missing_columns:
+                logger.error(f"Missing required columns: {missing_columns}")
+                return None, None
+
+            # Create quality weights mapping
+            quality_weights = {
+                "NM": 1.0,
+                "LP": 1.3,
+                "MP": 1.7,
+                "HP": 2.5,
+                "DMG": 999999
+            }
+
+            # Normalize quality strings before applying weights
+            card_listings_df['quality'] = card_listings_df['quality'].str.upper()
             
-            if total_records == 0:
-                logger.warning("No scan results found in database")
-                card_details_df = pd.DataFrame()
-            else:
-                # Get the latest scan
-                latest_scan = Scan.query.order_by(Scan.id.desc()).first()
-                if not latest_scan:
-                    logger.error("No scan found in database")
-                    return {
-                        "status": "Failed",
-                        "message": "No scan data available"
-                    }
-
-                for offset in range(0, total_records, BATCH_SIZE):
-                    query = db.session.query(ScanResult).filter(
-                        ScanResult.scan_id == latest_scan.id  # Use latest_scan.id instead of scan.id
-                    ).statement
-                    batch = pd.read_sql(
-                        query,
-                        db.session.bind,
-                    )
-                    if not batch.empty:
-                        card_details.append(batch)
-                
-                if card_details:
-                    card_details_df = pd.concat(card_details, ignore_index=True)
-                else:
-                    card_details_df = pd.DataFrame()
-
-            # Fix the SQLAlchemy query
-            try:
-                # Use SQLAlchemy properly with pandas
-                query = select(UserBuylistCard)
-                buylist_df = pd.read_sql_query(
-                    query, 
-                    db.session.bind,
-                    index_col=None
-                )
-                
-                if buylist_df.empty:
-                    logger.warning("No buylist data found")
-                    return {
-                        "status": "Completed",
-                        "message": "No buylist data to process",
-                        "results": []
-                    }
-                    
-                # ...rest of the optimization code...
-                
-            except Exception as e:
-                logger.error(f"Database error: {str(e)}")
-                raise
-
-            optimizer = PurchaseOptimizer(card_details_df, buylist_df, config={
-                "milp_strat": strategy == "milp",
-                "nsga_algo_strat": strategy == "nsga-ii",
-                "hybrid_strat": strategy == "hybrid",
-                "min_store": min_store,
-                "find_min_store": find_min_store,
-            })
-            
-            # Update progress during optimization
-            self.update_state(
-                state="PROCESSING",
-                meta={
-                    "status": "Running optimization",
-                    "progress": 75
-                }
+            # Apply quality weights with case-insensitive matching
+            card_listings_df['weighted_price'] = card_listings_df.apply(
+                lambda row: row['price'] * quality_weights.get(row['quality'].upper(), 1.0), 
+                axis=1
             )
 
-            optimization_results = optimizer.run_optimization(card_list, sites, optimizer.config)
+            # Create user_wishlist_df from card_list
+            user_wishlist_df = pd.DataFrame(self.card_list)
 
-            return {
-                "status": "Completed",
-                "progress": 100,
-                "sites_scraped": len(sites),
-                "cards_scraped": len(card_list),
-                "optimization": optimization_results,
-            }
+            # Filter out cards with zero quantity
+            card_listings_df = card_listings_df[card_listings_df['quantity'] > 0]
+
+            # Verify data availability
+            if card_listings_df.empty:
+                logger.error("No valid card data after filtering")
+                return None, None
+
+            # Match format expected by optimizer
+            filtered_listings_df = card_listings_df.copy()
+            filtered_listings_df = filtered_listings_df.sort_values(['name', 'weighted_price'])
+
+            logger.info(f"Prepared data: {len(filtered_listings_df)} card variants across {filtered_listings_df['site_id'].nunique()} sites")
+            return filtered_listings_df, user_wishlist_df
 
         except Exception as e:
-            logger.error(f"Error processing data: {str(e)}")
-            raise
+            logger.exception(f"Error in prepare_optimization_data: {str(e)}")
+            return None, None
 
-    except (SoftTimeLimitExceeded, TimeLimitExceeded) as e:
-        logger.error("Task timed out: %s", str(e))
-        self.update_state(state=states.FAILURE, meta={"error": "Task timed out"})
-        raise
+    def run_optimization(self, filtered_listings_df, user_wishlist_df):
+        """Run optimization with the prepared data"""
+        try:
+            if filtered_listings_df is None or user_wishlist_df is None:
+                self.logger.error("Invalid input data for optimization")
+                return None
+            
+            config = {
+                "milp_strat": self.strategy == "milp",
+                "nsga_algo_strat": self.strategy == "nsga-ii",
+                "hybrid_strat": self.strategy == "hybrid",
+                "min_store": self.min_store,
+                "find_min_store": self.find_min_store,
+            }
+            
+            optimizer = PurchaseOptimizer(
+                filtered_listings_df, 
+                user_wishlist_df,
+                config=config
+            )
+            
+            # Pass the required parameters to run_optimization
+            return optimizer.run_optimization(self.card_names, self.sites, config)
+            
+        except Exception as e:
+            self.logger.error(f"Error in run_optimization: {str(e)}")
+            return None
+
+@celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
+def start_scraping_task(self, site_ids, card_list, strategy, min_store, find_min_store):
+    # Create config DTO for validation
+    config = OptimizationConfigDTO(strategy=strategy, min_store=min_store, find_min_store=find_min_store)
+    task_manager = OptimizationTaskManager(site_ids, card_list, config.strategy, 
+                                         config.min_store, config.find_min_store)
+    logger = task_manager.logger
+
+    try:
+        self.update_state(state="PROCESSING", meta={"status": "Task initialized", "progress": 0})
+
+        # Handle scraping
+        scraping_results = task_manager.handle_scraping()
+        self.update_state(state="PROCESSING", meta={"status": "Scraping complete", "progress": 25})
+
+        # Prepare optimization data
+        filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data()
+        
+        # Check if DataFrame is empty using the proper pandas method
+        if filtered_listings_df is None or filtered_listings_df.empty:
+            logger.error("No card details available for optimization")
+            return {"status": "Failed", "message": "No card details available for optimization"}
+        
+        logger.info(f"Starting optimization with {len(filtered_listings_df)} cards")
+        self.update_state(state="PROCESSING", meta={"status": "Running optimization", "progress": 75})
+
+        # Run optimization with empty buylist if none provided
+        optimization_results = task_manager.run_optimization(
+            filtered_listings_df, 
+            user_wishlist_df if user_wishlist_df is not None else pd.DataFrame()
+        )
+        
+        if optimization_results is None:
+            return OptimizationResultDTO(
+                status="Completed",
+                message="No optimization results found",
+                sites_scraped=len(task_manager.sites),
+                cards_scraped=len(card_list),
+                optimization={},
+                progress=100
+            ).__dict__
+
+        return OptimizationResultDTO(
+            status="Completed",
+            sites_scraped=len(task_manager.sites),
+            cards_scraped=len(card_list),
+            optimization=optimization_results,
+            progress=100
+        ).__dict__
+
     except Exception as e:
-        logger.exception("Error during scraping task")
+        logger.exception("Error during task execution")
         self.update_state(state=states.FAILURE, 
-                         meta={
-                             "exc_type": type(e).__name__, 
-                             "exc_message": str(e),
-                             "step": "scraping"
-                         })
-        db.session.rollback()
-        raise e  # Raising the exception again so Celery knows it failed
+                         meta={"exc_type": type(e).__name__, 
+                              "exc_message": str(e)})
+        raise
 
 
 # Remove async from optimize_cards task
 @celery_app.task(bind=True)
 def optimize_cards(self, card_list_dicts, site_ids):
     try:
-        # Create a new scan
-        new_scan = Scan()
-        db.session.add(new_scan)
-        db.session.commit()
+        # Create a new scan using the service
+        new_scan = ScanService.create_scan()
 
         # Fetch full card objects and sites
         cards = UserBuylistCard.query.filter(
@@ -238,22 +261,9 @@ def optimize_cards(self, card_list_dicts, site_ids):
 
         self.update_state(state="PROGRESS", meta={"status": "Saving results"})
 
-        # Save the scraped results to the database
+        # Save the scraped results using the service
         for result in all_results:
-            scan_result = ScanResult(
-                scan_id=new_scan.id,
-                name=result["name"],  # Changed from card_name
-                site_id=result["site_id"],
-                price=result["price"],
-                set_name=result["set_name"],  # Changed from edition
-                version=result.get("version", "Standard"),
-                foil=result.get("foil", False),
-                quality=result.get("quality"),
-                language=result.get("language", "English"),
-                quantity=result.get("quantity", 0),
-                updated_at=datetime.datetime.utcnow()
-            )
-            db.session.add(scan_result)
+            ScanService.save_scan_result(new_scan.id, result)
 
         db.session.commit()
 

@@ -10,10 +10,10 @@ from deap import algorithms, base, creator, tools
 from app.extensions import db
 from app.models.scan import ScanResult
 from mtgsdk import card
-from app.utils.logging_utils import get_logger
+from app.dto.optimization_dto import CardQuality
 
 
-logger = get_logger("optimization_logger")
+logger = logging.getLogger(__name__)
 
 # DEAP Setup
 creator.create("FitnessMulti", base.Fitness, weights=(-1.0, 1.0, 1.0, -1.0))
@@ -22,10 +22,85 @@ creator.create("Individual", list, fitness=creator.FitnessMulti)
 
 class PurchaseOptimizer:
     def __init__(self, card_details_df, buylist_df, config):
-        self.card_details_df = card_details_df
-        self.buylist_df = buylist_df
+        # Initialize with standardized column names using lowercase
+        self.column_mapping = {
+            'name': 'name',
+            'site_name': 'site',
+            'price': 'price',
+            'quality': 'quality', 
+            'quantity': 'quantity'
+        }
+        
+        # Convert input data to DataFrames with standardized column names
+        self.card_details_df = self._standardize_dataframe(pd.DataFrame(card_details_df))
+        self.buylist_df = pd.DataFrame(buylist_df)
         self.config = config
+        
         logger.info("PurchaseOptimizer initialized with config: %s", self.config)
+        self.quality_weights = {
+            "NM": 1.0,
+            "LP": 1.2,
+            "MP": 1.5,
+            "HP": 2.0,
+            "DMG": 3.0
+        }
+        
+        self._validate_input_data()
+
+    def _standardize_dataframe(self, df):
+        """Standardize DataFrame column names and validate quality values"""
+        df = df.copy()
+        
+        # Rename columns based on mapping
+        df = df.rename(columns=self.column_mapping)
+        
+        # Ensure all required columns exist
+        for required_col in self.column_mapping.values():
+            if (required_col not in df.columns):
+                logger.warning(f"Missing column {required_col}, creating with default values")
+                if required_col in ['price', 'quantity']:
+                    df[required_col] = 0
+                elif required_col == 'quality':
+                    df[required_col] = 'NM'
+                elif required_col == 'site':
+                    df[required_col] = df['site_id'].astype(str)
+                else:
+                    df[required_col] = ''
+        
+        # Validate and normalize quality values
+        if 'quality' in df.columns:
+            try:
+                df = CardQuality.validate_and_update_qualities(
+                    df, 
+                    quality_column='quality',
+                    interactive=False  # Set to True if you want interactive prompts
+                )
+            except Exception as e:
+                logger.warning(f"Error normalizing qualities: {e}")
+
+        return df
+
+    def _validate_input_data(self):
+        """Validate input data structure and content"""
+        required_columns = {
+            'card_details': ['name', 'site', 'price', 'quality', 'quantity'],
+            'buylist': ['name', 'quantity']
+        }
+
+        for df_name, columns in required_columns.items():
+            df = getattr(self, f"{df_name}_df")
+            missing_cols = [col for col in columns if col not in df.columns]
+            if missing_cols:
+                logger.error(f"DataFrame {df_name} columns: {df.columns.tolist()}")
+                logger.error(f"Missing columns in {df_name}: {missing_cols}")
+                raise ValueError(f"Missing required columns in {df_name}: {missing_cols}")
+            
+            # Validate data types
+            if df_name == 'card_details':
+                if not pd.to_numeric(df['price'], errors='coerce').notnull().all():
+                    raise ValueError("Price column contains non-numeric values")
+                if not pd.to_numeric(df['quantity'], errors='coerce').notnull().all():
+                    raise ValueError("Quantity column contains non-numeric values")
 
     def run_milp_optimization(self):
         return self._run_pulp(
@@ -39,45 +114,48 @@ class PurchaseOptimizer:
         return self._run_nsga_ii(self.card_details_df, self.buylist_df, milp_solution)
 
     def run_optimization(self, card_names, sites, config):
-        # Fetch card details and buylist from the database
-        card_details_df = pd.read_sql(
-            ScanResult.query.statement, db.session.bind)
+        """Run the optimization algorithm based on configuration"""
+        try:
+            # Filter card_details_df to only include cards in the buylist
+            self.card_details_df = self.card_details_df[
+                self.card_details_df["name"].isin(card_names)
+            ]
 
-        # Filter card_details_df to only include cards in the buylist
-        card_details_df = card_details_df[card_details_df["Name"].isin(card_names)]
+            # Run the optimization strategy
+            if config["milp_strat"]:
+                results, iterations = self.run_milp_optimization()
+            elif config["nsga_algo_strat"]:
+                results = self.run_nsga_ii_optimization()
+            elif config["hybrid_strat"]:
+                milp_solution, _ = self.run_milp_optimization()
+                results = self.run_nsga_ii_optimization(milp_solution)
+            else:
+                raise ValueError("No valid optimization strategy specified in config")
 
-        # Run the optimization
-        if config["milp_strat"]:
-            results, iterations = self.run_milp_optimization()
-        elif config["nsga_algo_strat"]:
-            results = self.run_nsga_ii_optimization()
-        elif config["hybrid_strat"]:
-            milp_solution, _ = self.run_milp_optimization()
-            results = self.run_nsga_ii_optimization(milp_solution)
-        else:
-            raise ValueError("No valid optimization strategy specified in config")
+            # Process results
+            if isinstance(results, pd.DataFrame):
+                sites_results = results.to_dict("records")
+            else:
+                sites_results = [self.get_purchasing_plan(solution) for solution in results]
 
-        # Process results
-        if isinstance(results, pd.DataFrame):
-            sites_results = results.to_dict("records")
-        else:
-            sites_results = [self.get_purchasing_plan(solution) for solution in results]
+            return {
+                "sites_results": sites_results,
+                "iterations": iterations if "iterations" in locals() else None,
+            }
 
-        return {
-            "sites_results": sites_results,
-            "iterations": iterations if "iterations" in locals() else None,
-        }
+        except Exception as e:
+            logger.error("Optimization failed: %s", str(e))
+            raise
 
     def get_purchasing_plan(self, solution):
         return self._extract_purchasing_plan(
             solution, self.card_details_df, self.buylist_df
         )
 
-    @staticmethod
     def _run_pulp(
-        standardized_cards_df, available_cards_to_buy_df, min_store, find_min_store
+        self, standardized_cards_df, available_cards_to_buy_df, min_store, find_min_store
     ):
-        unique_cards = available_cards_to_buy_df["Name"].unique()
+        unique_cards = available_cards_to_buy_df["name"].unique()
         unique_stores = standardized_cards_df["Site"].unique()
         total_qty = len(available_cards_to_buy_df)
 
@@ -87,11 +165,19 @@ class PurchaseOptimizer:
         for card in unique_cards:
             costs[card] = {}
             for store in unique_stores:
-                price = standardized_cards_df[
-                    (standardized_cards_df["Name"] == card)
-                    & (standardized_cards_df["Site"] == store)
-                ]["Weighted_Price"].min()
-                costs[card][store] = high_cost if pd.isna(price) else price
+                card_data = standardized_cards_df[
+                    (standardized_cards_df["name"] == card) &
+                    (standardized_cards_df["Site"] == store)
+                ]
+                
+                if not card_data.empty:
+                    base_price = card_data["Weighted_Price"].min()
+                    quality = card_data["quality"].iloc[0] if not pd.isna(card_data["quality"].iloc[0]) else "NM"
+                    quality_multiplier = self.quality_weights.get(quality, self.quality_weights["NM"])
+                    adjusted_price = base_price * quality_multiplier
+                    costs[card][store] = adjusted_price if not pd.isna(adjusted_price) else high_cost
+                else:
+                    costs[card][store] = high_cost
 
         all_iterations_results = []
         no_optimal_found = False
@@ -175,8 +261,8 @@ class PurchaseOptimizer:
         )
 
         for card in unique_cards:
-            required_quantity = buylist[buylist["Name"]
-                                        == card]["Quantity"].iloc[0]
+            required_quantity = buylist[buylist["name"]
+                                        == card]["quantity"].iloc[0]
             prob += (
                 pulp.lpSum([buy_vars[card][store] for store in unique_stores])
                 == required_quantity
@@ -210,20 +296,20 @@ class PurchaseOptimizer:
                         Total_price += card_store_total_price
                         total_card_nbr += quantity
                         original_index = card_details_df[
-                            (card_details_df["Name"] == card)
-                            & (card_details_df["Site"] == store)
+                            (card_details_df["name"] == card)
+                            & (card_details_df["site"] == store)
                         ].index[0]
                         original_card = card_details_df.loc[original_index]
 
                         results.append(
                             {
-                                "Original_Index": original_index,
-                                "Original_Card": original_card,
-                                "Card": card,
-                                "Store": store,
-                                "Quantity": quantity,
-                                "Price": price_per_unit,
-                                "Total Price": card_store_total_price,
+                                "original_Index": original_index,
+                                "original_Card": original_card,
+                                "card": card,
+                                "store": store,
+                                "quantity": quantity,
+                                "price": price_per_unit,
+                                "total price": card_store_total_price,
                             }
                         )
 
@@ -233,12 +319,12 @@ class PurchaseOptimizer:
                         )
 
         results_df = pd.DataFrame(results)
-        sorted_results_df = results_df.sort_values(by=["Store", "Card"])
+        sorted_results_df = results_df.sort_values(by=["store", "card"])
         sorted_results_df.reset_index(drop=True, inplace=True)
 
-        num_stores_used = results_df["Store"].nunique()
-        store_usage_counts = sorted_results_df[sorted_results_df["Price"] != 10000][
-            "Store"
+        num_stores_used = results_df["store"].nunique()
+        store_usage_counts = sorted_results_df[sorted_results_df["price"] != 10000][
+            "store"
         ].value_counts()
         store_usage_str = ", ".join(
             [f"{store}: {count}" for store, count in store_usage_counts.items()]
@@ -325,7 +411,7 @@ class PurchaseOptimizer:
             tools.initRepeat,
             creator.Individual,
             toolbox.attr_idx,
-            n=sum(buylist["Quantity"]),
+            n=sum(buylist["quantity"]),
         )
         toolbox.register("population", tools.initRepeat,
                          list, toolbox.individual)
@@ -358,9 +444,9 @@ class PurchaseOptimizer:
         for i in range(len(individual)):
             if random.random() < indpb:
                 mutation_index = random.randrange(len(individual))
-                card_name = buylist.iloc[mutation_index]["Name"]
+                card_name = buylist.iloc[mutation_index]["name"]
                 available_options = card_details_df[
-                    card_details_df["Name"] == card_name
+                    card_details_df["name"] == card_name
                 ]
                 if not available_options.empty:
                     selected_option = available_options.sample(n=1)
@@ -374,9 +460,9 @@ class PurchaseOptimizer:
             total_quality_score = 0
             stores = set()
             card_counters = {
-                row["Name"]: row["Quantity"] for _, row in buylist.iterrows()
+                row["name"]: row["quantity"] for _, row in buylist.iterrows()
             }
-            card_availability = {row["Name"]                                 : 0 for _, row in buylist.iterrows()}
+            card_availability = {row["name"]                                 : 0 for _, row in buylist.iterrows()}
             language_penalty = 999
             quality_weights = {"NM": 9, "LP": 7, "MP": 3, "HP": 1, "DMG": 0}
 
@@ -392,19 +478,28 @@ class PurchaseOptimizer:
                     logger.warning(f"Invalid index: {idx}")
                     continue
                 card_row = card_details_df.loc[idx]
-                card_name = card_row["Name"]
+                card_name = card_row["name"]
+                buylist_card = buylist[buylist["name"] == card_name].iloc[0]
+                
+                # Add quality matching penalty
+                requested_quality = buylist_card.get("quality", "NM")
+                actual_quality = card_row.get("Quality", "NM")
+                quality_mismatch_penalty = (
+                    quality_weights[requested_quality] - 
+                    quality_weights.get(actual_quality, quality_weights["DMG"])
+                ) * 10  # Adjust penalty weight as needed
 
                 if card_counters[card_name] > 0:
                     card_counters[card_name] -= 1
-                    card_availability[card_name] += card_row["Quantity"]
+                    card_availability[card_name] += card_row["quantity"]
 
                     card_price = card_row["Price"]
                     if card_row["Language"] != "English":
                         card_price *= language_penalty
-                    total_cost += card_price
+                    total_cost += card_price + quality_mismatch_penalty
 
                     total_quality_score += quality_weights.get(
-                        card_row["Quality"], 0)
+                        card_row["quality"], 0)
                     stores.add(card_row["Site"])
 
             missing_cards_penalty = 10000 * sum(
@@ -437,32 +532,40 @@ class PurchaseOptimizer:
                 logger.warning("Invalid index: %d", idx)
                 continue
             card_row = card_details_df.loc[idx]
-            card_name = card_row["Name"]
+            card_name = card_row["name"]
 
-            if card_name in buylist["Name"].values:
-                buylist_row = buylist[buylist["Name"] == card_name].iloc[0]
-                required_quantity = buylist_row["Quantity"]
+            if card_name in buylist["name"].values:
+                buylist_row = buylist[buylist["name"] == card_name].iloc[0]
+                required_quality = buylist_row.get("quality", "NM")
+                card_quality = card_row.get("quality", "NM")
+                
+                # Only include cards that meet or exceed the required quality
+                if (required_quality == card_quality or 
+                    PurchaseOptimizer.quality_weights[card_quality] <= 
+                    PurchaseOptimizer.quality_weights[required_quality]):
+                    required_quantity = buylist_row["quantity"]
 
-                if required_quantity > 0:
-                    available_quantity = min(
-                        card_row["Quantity"], required_quantity)
-                    purchase_details = {
-                        "Name": card_name,
-                        "Quantity": available_quantity,
-                        "Site": card_row["Site"],
-                        "Quality": card_row["Quality"],
-                        "Price": card_row["Price"],
-                        "Total Price": card_row["Price"] * available_quantity,
-                    }
-                    purchasing_plan.append(purchase_details)
+                    if required_quantity > 0:
+                        available_quantity = min(
+                            card_row["quantity"], required_quantity)
+                        purchase_details = {
+                            "name": card_name,
+                            "quantity": available_quantity,
+                            "site": card_row["site"],
+                            "quality": card_row["quality"],
+                            "price": card_row["price"],
+                            "total price": card_row["price"] * available_quantity,
+                        }
+                        purchase_details["quality_match"] = required_quality == card_quality
+                        purchasing_plan.append(purchase_details)
 
-                    # Update buylist
-                    buylist.loc[
-                        buylist["Name"] == card_name, "Quantity"
-                    ] -= available_quantity
+                        # Update buylist
+                        buylist.loc[
+                            buylist["name"] == card_name, "quantity"
+                        ] -= available_quantity
 
         # Remove entries with zero quantity left
-        buylist = buylist[buylist["Quantity"] > 0]
+        buylist = buylist[buylist["quantity"] > 0]
 
         return purchasing_plan
 
@@ -481,14 +584,14 @@ class PurchaseOptimizer:
     def _initialize_individual(card_details_df, buylist):
         individual = []
         for _, card in buylist.iterrows():
-            available_options = card_details_df[card_details_df["Name"]
-                                                == card["Name"]]
+            available_options = card_details_df[card_details_df["name"]
+                                                == card["name"]]
             if not available_options.empty:
                 selected_option = available_options.sample(n=1)
                 individual.append(selected_option.index.item())
             else:
                 logger.warning(
-                    "Card %s not available in any store!", card["Name"])
+                    "Card %s not available in any store!", card["name"])
         return creator.Individual(individual)
 
     @staticmethod

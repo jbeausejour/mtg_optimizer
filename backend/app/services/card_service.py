@@ -19,7 +19,7 @@ SCRYFALL_API_NAMED_URL = f"{SCRYFALL_API_BASE}/cards/named"
 SCRYFALL_API_SEARCH_URL = f"{SCRYFALL_API_BASE}/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
-class CardManager:
+class CardService:
     
     @contextmanager
     def transaction_context():
@@ -63,7 +63,7 @@ class CardManager:
                 pass
                 return None
             
-            data = CardManager.fetch_scryfall_data(card_name, set_code, language, version)
+            data = CardService.fetch_scryfall_data(card_name, set_code, language, version)
             return data
         except Exception as e:
             current_app.logger.debug(f"Error fetching card data for '{card_name}': {str(e)}")
@@ -73,7 +73,7 @@ class CardManager:
     def save_card(card_id=None, name=None, set=None, language="English", quantity=1, version="Standard", foil=False):
         """Save a new card or update an existing card with proper validation and error handling"""
         try:
-            with CardManager.transaction_context():
+            with CardService.transaction_context():
                 if not name:
                     raise ValueError("Card name is required")
                 
@@ -184,7 +184,7 @@ class CardManager:
         # Fetch all printings
         all_printings = []
         if 'prints_search_uri' in card_data:
-            all_printings = CardManager.fetch_all_printings(card_data['prints_search_uri'])
+            all_printings = CardService.fetch_all_printings(card_data['prints_search_uri'])
 
         # Return the card data including all printings
         return {
