@@ -11,7 +11,8 @@ logging.basicConfig(
     force=True
 )
 
-logger = logging.getLogger('celery_worker_logger')
+# logger = logging.getLogger('celery_worker_logger')
+logger = logging.getLogger(__name__)
 
 # Create Flask app and push context
 app = create_app()

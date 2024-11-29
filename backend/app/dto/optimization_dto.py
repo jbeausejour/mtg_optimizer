@@ -250,13 +250,52 @@ class OptimizationConfigDTO(BaseModel):
             raise ValueError('Cannot optimize for more than 20 stores')
         return v
 
-class OptimizationResultDTO(BaseModel):
-    status: str = Field(..., pattern='^(Completed|Failed|Processing)$')
-    sites_scraped: int = Field(..., ge=0)
-    cards_scraped: int = Field(..., ge=0)
-    optimization: Dict
-    progress: int = Field(100, ge=0, le=100)
-    message: Optional[str] = None
+class OptimizationResultDTO:
+    def __init__(self, status, sites_scraped=0, cards_scraped=0, optimization=None, progress=0, message=None):
+        self.status = status
+        self.sites_scraped = sites_scraped
+        self.cards_scraped = cards_scraped
+        self.progress = progress
+        self.message = message
+        
+        # Convert optimization results to serializable format
+        if isinstance(optimization, dict):
+            self.optimization = self._convert_to_serializable(optimization)
+        else:
+            self.optimization = optimization or {}
+
+    def _convert_to_serializable(self, data):
+        """Convert pandas and numpy types to basic Python types"""
+        if isinstance(data, dict):
+            return {k: self._convert_to_serializable(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._convert_to_serializable(item) for item in data]
+        elif hasattr(data, 'to_dict'):  # Handle pandas Series/DataFrame
+            try:
+                return data.to_dict()
+            except:
+                return str(data)  # Fallback to string representation
+        elif hasattr(data, 'item'):     # Handle numpy types
+            return data.item()
+        elif hasattr(data, '__dict__'): # Handle custom objects
+            # Filter out methods and private attributes
+            filtered_dict = {k: v for k, v in data.__dict__.items() 
+                           if not (k.startswith('_') or callable(v))}
+            return self._convert_to_serializable(filtered_dict)
+        elif callable(data):  # Handle methods/functions
+            return str(data)  # Convert methods to string representation
+        return data
+
+    def __dict__(self):
+        # Filter and convert data before returning
+        return {
+            'status': str(self.status),  # Ensure status is string
+            'sites_scraped': int(self.sites_scraped),
+            'cards_scraped': int(self.cards_scraped),
+            'optimization': self._convert_to_serializable(self.optimization),
+            'progress': int(self.progress),
+            'message': str(self.message) if self.message else None
+        }
 
 class ScanResultDTO(CardValidation):
     scan_id: int = Field(..., gt=0) 

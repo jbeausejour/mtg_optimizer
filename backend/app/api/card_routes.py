@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, jsonify, request, current_app
 from app.services.card_service import CardService
 from app.tasks.optimization_tasks import start_scraping_task
+from app.tasks.optimization_tasks import celery_app
 from celery.result import AsyncResult
 from celery.backends.base import DisabledBackend
 
@@ -105,47 +106,31 @@ def fetch_card():
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
     try:
-        result = AsyncResult(task_id)
+        task = AsyncResult(task_id, app=celery_app)
+        logger.info(f"Task {task_id} task: {task}")  
         
-        # Check if backend is disabled
-        if isinstance(result.backend, DisabledBackend):
-            return jsonify({
-                'state': 'ERROR',
-                'status': 'Task status checking is not available',
-                'error': 'Celery backend is not configured'
-            }), 503
-        
-        try:
-            state = result.state
-        except AttributeError:
-            return jsonify({
-                'state': 'ERROR',
-                'status': 'Could not retrieve task status',
-                'error': 'Backend configuration error'
-            }), 503
-
-        # Handle different task states
-        if state == 'PENDING':
+        if task.state == 'PENDING':
             response = {
-                'state': state,
-                'status': 'Task is waiting for execution'
+                'state': task.state,
+                'status': 'Task is pending...'
             }
-        elif state == 'FAILURE':
+        elif task.state == 'FAILURE':
             response = {
-                'state': state,
+                'state': task.state,
                 'status': 'Task failed',
-                'error': str(result.info) if result.info else 'Unknown error occurred'
+                'error': str(task.info)  # Get error info
             }
-        elif state in ['PROGRESS', 'PROCESSING']:
+        elif task.state == 'SUCCESS':
             response = {
-                'state': state,
-                'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info)
+                'state': task.state,
+                'result': task.get()  # Safely get the result
             }
         else:
+            # Handle PROGRESS or other states
             response = {
-                'state': state,
-                'status': result.info.get('status', '') if isinstance(result.info, dict) else str(result.info),
-                'result': result.get() if result.successful() else None
+                'state': task.state,
+                'status': task.info.get('status', ''),
+                'progress': task.info.get('progress', 0)
             }
         
         return jsonify(response), 200
@@ -165,16 +150,16 @@ def start_scraping():
     #current_app.logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
-    card_list = data.get("card_list", [])
+    card_list_from_frontend = data.get("card_list", [])
     strategy = data.get("strategy", "milp")
     min_store = data.get("min_store", 1)
     find_min_store = data.get("find_min_store", False)
 
-    if not site_ids or not card_list:
+    if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
 
     task = start_scraping_task.apply_async(
-        args=[site_ids, card_list, strategy, min_store, find_min_store]
+        args=[site_ids, card_list_from_frontend, strategy, min_store, find_min_store]
     )
     return jsonify({"task_id": task.id}), 202
 

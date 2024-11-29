@@ -3,7 +3,7 @@ import os
 from celery import Celery
 from .celery_config import CeleryConfig
 
-logger = logging.getLogger("celery_task_logger")
+logger = logging.getLogger(__name__)
 # logger.setLevel(logging.INFO)
 
 # if not logger.hasHandlers():
@@ -31,7 +31,7 @@ def make_celery(app=None):
         backend=CeleryConfig.result_backend,
         include=["app.tasks.optimization_tasks"],
     )
-    
+
     # Get Celery's internal logger and attach the same handlers
     # celery_logger = logging.getLogger("celery")
     # if not celery_logger.hasHandlers():
@@ -43,7 +43,6 @@ def make_celery(app=None):
 
 
 celery_app = make_celery()
-
 
 def init_celery(app):
     celery_app.conf.update(app.config)

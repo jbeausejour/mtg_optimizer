@@ -12,6 +12,23 @@ from .extensions import init_extensions
 from .tasks.celery_app import celery_app
 
 
+def setup_logging(app):
+    """Configure logging to prevent duplication"""
+    # Remove any existing handlers to prevent duplication
+    app.logger.handlers.clear()
+    
+    # Configure handler
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+    
+    # Prevent propagation to root logger
+    app.logger.propagate = False
+    
+    return app.logger
+
+
 def create_app(config_class=get_config()):
     """App creation func"""
     app = Flask(
@@ -33,11 +50,8 @@ def create_app(config_class=get_config()):
         app.register_blueprint(admin_routes, url_prefix='/api/v1')
         app.register_blueprint(card_routes, url_prefix='/api/v1')
 
-    # Simple console logging
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
-    app.logger.addHandler(handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.info("MTG Optimizer startup")
+    # Setup logging with duplicate prevention
+    logger = setup_logging(app)
+    logger.info("MTG Optimizer startup")
 
     return app
