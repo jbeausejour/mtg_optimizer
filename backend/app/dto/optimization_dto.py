@@ -7,42 +7,53 @@ from enum import Enum
 
 # Quality mapping for standardization across the application
 QUALITY_MAPPING = {
-    # Existing mappings
+    # NM variants
     "NM-Mint": "NM", 
+    "NM-MINT": "NM",
+    "MINT/NEAR-MINT": "NM",  # Add this line
+    "Mint/Near-Mint": "NM",
+    "Near-Mint": "NM",
+    "NEAR-MINT": "NM",
     "NM": "NM",
     "Brand New": "NM",
     "HERO DEAL": "NM",
     "New": "NM", 
     "Mint/Near-Mint": "NM",
+    "MINT/NEAR-MINT": "NM",
     "Near Mint": "NM",
     "M/NM": "NM",
     "Mint": "NM",
-    # More specific LP mappings
+    # LP variants
     "LP": "LP", 
     "Light Play": "LP",
     "LIGHT PLAY": "LP",
     "Lightly Played": "LP",
-    "EX": "LP",  # Excellent condition
-    "VG": "LP",  # Very Good condition
-    "SP": "LP",  # Slightly Played
-    # More specific MP mappings
+    "EX": "LP",  
+    "VG": "LP",  
+    "SP": "LP",  
+    "SLIGHTLY PLAYED": "LP",  
+    # MP variants
     "MP": "MP",
     "Moderate Play": "MP", 
     "MODERATE PLAY": "MP", 
+    "MODERATLY PLAYED": "MP", 
     "Moderately Played": "MP",
-    "GD": "MP",  # Good condition
-    "PL": "MP",  # Played condition
-    # More specific HP mappings
+    "GD": "MP",  
+    "PL": "MP",  
+    # HP variants
     "HP": "HP",
     "Heavy Play": "HP",
+    "HEAVY PLAY": "HP",
+    "Heavy Played": "HP",
     "Heavily Played": "HP",
     "HEAVILY PLAYED": "HP",
-    "PR": "HP",  # Poor condition
-    # More specific DMG mappings
+    "PR": "HP",  
+    # DMG variants
     "DMG": "DMG",
     "Damaged": "DMG",
-    # Default case for unknown qualities
-    "": "NM"  # Default to NM if empty
+    "DAMAGED": "DMG",
+    # Default case
+    "": "NM"  
 }
 
 # Quality weights for price adjustments
@@ -53,6 +64,67 @@ QUALITY_WEIGHTS = {
     "HP": 2.5,
     "DMG": 999999
 }
+
+LANGUAGE_MAPPING = {
+    # English variants
+    'en': 'English',
+    'eng': 'English',
+    'english': 'English',
+    'en-us': 'English',
+    'anglais': 'English',  # French word for English
+    # Japanese variants
+    'jp': 'Japanese',
+    'ja': 'Japanese',
+    'jpn': 'Japanese',
+    'japanese': 'Japanese',
+    'japonais': 'Japanese',  # French word for Japanese
+    # Chinese variants
+    'cn': 'Chinese',
+    'zh': 'Chinese',
+    'chi': 'Chinese',
+    'chinese': 'Chinese',
+    'chinois': 'Chinese',  # French word for Chinese
+    # Korean variants
+    'kr': 'Korean',
+    'ko': 'Korean',
+    'kor': 'Korean',
+    'korean': 'Korean',
+    'coréen': 'Korean',  # French word for Korean
+    # Russian variants
+    'ru': 'Russian',
+    'rus': 'Russian',
+    'russian': 'Russian',
+    'russe': 'Russian',  # French word for Russian
+    # German variants
+    'de': 'German',
+    'deu': 'German',
+    'ger': 'German',
+    'german': 'German',
+    'allemand': 'German',  # French word for German
+    # Spanish variants
+    'es': 'Spanish',
+    'esp': 'Spanish',
+    'spa': 'Spanish',
+    'spanish': 'Spanish',
+    'espagnol': 'Spanish',  # French word for Spanish
+    # French variants
+    'fr': 'French',
+    'fra': 'French',
+    'fre': 'French',
+    'french': 'French',
+    'français': 'French',
+    # Italian variants
+    'it': 'Italian',
+    'ita': 'Italian',
+    'italian': 'Italian',
+    'italien': 'Italian',  # French word for Italian
+    # Portuguese variants
+    'pt': 'Portuguese',
+    'por': 'Portuguese',
+    'portuguese': 'Portuguese',
+    'portugais': 'Portuguese',  # French word for Portuguese
+}
+
 logger = logging.getLogger(__name__)
 
 class CardQuality(str, Enum):
@@ -74,26 +146,23 @@ class CardQuality(str, Enum):
         """Normalize quality string to standard enum value"""
         
         if not quality:
-            logger.info("Empty quality value, defaulting to NM")
+            logger.debug("Empty quality value, defaulting to NM")
             return "NM"
             
-        # Convert to uppercase for case-insensitive comparison
-        quality_upper = str(quality).upper()
+        # Convert input quality to string and uppercase
+        quality_str = str(quality).strip().upper()
         
-        # First try direct mapping
-        if quality in QUALITY_MAPPING:
-            normalized = QUALITY_MAPPING[quality]
-            # logger.info(f"Direct mapping found: '{quality}' -> '{normalized}'")
+        # Create uppercase version of mapping for case-insensitive comparison
+        upper_mapping = {k.upper(): v for k, v in QUALITY_MAPPING.items()}
+        
+        # Try to find direct match in uppercase mapping
+        if quality_str in upper_mapping:
+            normalized = upper_mapping[quality_str]
+            logger.debug(f"Found quality mapping: '{quality}' -> '{normalized}'")
             return normalized
-            
-        # Then try case-insensitive mapping
-        for k, v in QUALITY_MAPPING.items():
-            if k.upper() == quality_upper:
-                # logger.info(f"Case-insensitive mapping found: '{quality}' -> '{v}'")
-                return v
                 
-        # Log unknown quality values
-        logger.warning(f"Unknown quality value: '{quality}', defaulting to DMG")
+        # If no match found, log warning and return DMG
+        logger.warning(f"No quality mapping found for '{quality}', defaulting to DMG")
         return "DMG"
 
     @classmethod

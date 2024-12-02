@@ -10,7 +10,7 @@ from deap import algorithms, base, creator, tools
 from app.extensions import db
 from app.models.scan import ScanResult
 from mtgsdk import card
-from app.dto.optimization_dto import CardQuality
+from app.dto.optimization_dto import CardQuality, QUALITY_MAPPING, QUALITY_WEIGHTS
 
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,10 @@ creator.create("Individual", list, fitness=creator.FitnessMulti)
 
 class PurchaseOptimizer:
     def __init__(self, filtered_listings_df, user_wishlist_df, config):
-        # Initialize with standardized column names using lowercase
+        # Update column mapping to match actual DataFrame columns
         self.column_mapping = {
             'name': 'name',
-            'site_name': 'site',
+            'site_name': 'site_name',  # Changed from site_name to site
             'price': 'price',
             'quality': 'quality', 
             'quantity': 'quantity'
@@ -37,15 +37,19 @@ class PurchaseOptimizer:
         self.config = config
         
         logger.info("PurchaseOptimizer initialized with config: %s", self.config)
-        self.quality_weights = {
-            "NM": 1.0,
-            "LP": 1.2,
-            "MP": 1.5,
-            "HP": 2.0,
-            "DMG": 3.0
-        }
+        # Use centralized quality weights
+        self.quality_weights = QUALITY_WEIGHTS
         
         self._validate_input_data()
+
+        # Add validation for sites
+        unique_sites = filtered_listings_df['site_name'].nunique()
+        if unique_sites < config.get('min_store', 1):
+            logger.warning(f"Found only {unique_sites} sites, but minimum {config.get('min_store')} required")
+            # Adjust min_store if needed
+            config['min_store'] = min(unique_sites, config.get('min_store', 1))
+            
+        logger.info(f"Initializing optimizer with {unique_sites} unique sites")
 
     def _standardize_dataframe(self, df):
         """Standardize DataFrame column names and validate quality values"""
@@ -62,7 +66,7 @@ class PurchaseOptimizer:
                     df[required_col] = 0
                 elif required_col == 'quality':
                     df[required_col] = 'NM'
-                elif required_col == 'site':
+                elif required_col == 'site_name':
                     df[required_col] = df['site_id'].astype(str)
                 else:
                     df[required_col] = ''
@@ -83,7 +87,7 @@ class PurchaseOptimizer:
     def _validate_input_data(self):
         """Validate input data structure and content"""
         required_columns = {
-            'filtered_listings': ['name', 'site', 'price', 'quality', 'quantity'],
+            'filtered_listings': ['name', 'site_name', 'price', 'quality', 'quantity'],
             'user_wishlist': ['name', 'quantity']
         }
 
@@ -116,42 +120,74 @@ class PurchaseOptimizer:
     def run_optimization(self, card_names, config):
         """Run the optimization algorithm based on configuration"""
         try:
-            # Filter filtered_listings_df to only include cards in the user wishlist
+            # Debug incoming data
+            logger.debug(f"Input DataFrame columns: {self.filtered_listings_df.columns.tolist()}")
+            
+            # Ensure site column is string type and properly formatted
+            self.filtered_listings_df['site_name'] = (
+                self.filtered_listings_df['site_name'].astype(str)
+            )
+            
+            # Filter and validate data
             filtered_df = self.filtered_listings_df[
                 self.filtered_listings_df["name"].isin(card_names)
             ]
+            
+            # Debug site data
+            logger.info(f"Unique sites: {filtered_df['site_name'].nunique()}")
+            logger.debug(f"Site values: {filtered_df['site_name'].unique().tolist()}")
+
+            if filtered_df.empty:
+                logger.error("No matching cards found in listings")
+                return {"sites_results": [], "iterations": None}
+
+            logger.info(f"Starting optimization with {len(card_names)} cards")
+            logger.info(f"Found {filtered_df['site_name'].nunique()} unique sites")
+            logger.debug(f"Unique sites: {filtered_df['site_name'].unique().tolist()}")
 
             # Run the optimization strategy
-            if config["milp_strat"]:
-                results, iterations = self.run_milp_optimization()
-            elif config["nsga_algo_strat"]:
-                results = self.run_nsga_ii_optimization()
-            elif config["hybrid_strat"]:
-                milp_solution, _ = self.run_milp_optimization()
-                results = self.run_nsga_ii_optimization(milp_solution)
-            else:
-                raise ValueError("No valid optimization strategy specified in config")
+            try:
+                if config["milp_strat"]:
+                    logger.info("Running MILP optimization...")
+                    results, iterations = self.run_milp_optimization()
+                    
+                    if results is None:
+                        logger.warning("MILP optimization returned no results")
+                        return {"sites_results": [], "iterations": None}
+                    
+                    # Convert results to serializable format
+                    if isinstance(results, pd.DataFrame):
+                        logger.debug("Converting DataFrame results to records")
+                        results = results.to_dict("records")
+                    elif isinstance(results, dict):
+                        logger.debug("Converting dict results to list")
+                        results = [results]
+                    elif isinstance(results, list):
+                        logger.debug("Processing list results")
+                        results = [r.to_dict() if hasattr(r, 'to_dict') else r for r in results]
+                    else:
+                        logger.error(f"Unexpected results type: {type(results)}")
+                        return {"sites_results": [], "iterations": None}
 
-            # Process results
-            if isinstance(results, pd.DataFrame):
-                sites_results = results.to_dict("records")
-            elif isinstance(results, tuple):
-                # Handle case where results is (DataFrame, iterations)
-                df, iterations = results
-                sites_results = df.to_dict("records") if df is not None else []
-                iterations = [iter.to_dict('records') if isinstance(iter, pd.DataFrame) else iter 
-                             for iter in (iterations or [])]
-            else:
-                sites_results = [self.get_purchasing_plan(solution) for solution in results]
+                    final_result = {
+                        "sites_results": results,
+                        "iterations": iterations if iterations is not None else None
+                    }
+                    
+                    # Validate final result
+                    logger.info(f"Final optimization results:")
+                    logger.info(f"Number of site results: {len(results)}")
+                    if iterations:
+                        logger.info(f"Number of iterations: {len(iterations)}")
+                    
+                    return final_result
 
-            # Ensure all data is JSON serializable
-            return {
-                "sites_results": sites_results,
-                "iterations": iterations if "iterations" in locals() else None,
-            }
+            except Exception as e:
+                logger.error(f"Optimization strategy error: {str(e)}", exc_info=True)
+                raise
 
         except Exception as e:
-            logger.error("Optimization failed: %s", str(e))
+            logger.error(f"Optimization failed: {str(e)}", exc_info=True)
             raise
 
     def get_purchasing_plan(self, solution):
@@ -162,26 +198,44 @@ class PurchaseOptimizer:
         )]
 
     def _run_pulp(self, filtered_listings_df, user_wishlist_df, min_store, find_min_store):
+        """Run MILP optimization"""
         try:
-            # Validate input DataFrames
+            # Validate and clean input data
+            filtered_listings_df = filtered_listings_df.copy()
+            
+            # Ensure site column is string and properly formatted
+            filtered_listings_df['site_name'] = filtered_listings_df['site_name'].fillna(
+                filtered_listings_df['site_name']
+            ).astype(str)
+            
+            # Debug site data
+            logger.debug(f"Site column unique values: {filtered_listings_df['site_name'].unique().tolist()}")
+            logger.debug(f"Site column data type: {filtered_listings_df['site_name'].dtype}")
+
+            # Validate input data
             if user_wishlist_df is None or user_wishlist_df.empty:
                 logger.error("user_wishlist_df is None or empty")
-                return None
+                return None, None
                 
             if filtered_listings_df is None or filtered_listings_df.empty:
                 logger.error("filtered_listings_df is None or empty")
-                return None
+                return None, None
 
-            # Ensure DataFrame columns are correct
+            # Ensure unique site IDs are being used
+            filtered_listings_df = filtered_listings_df.copy()
+            filtered_listings_df['site_name'] = filtered_listings_df['site_name'].combine_first(filtered_listings_df['site_name'])
+            
+            # Remove duplicates and validate columns
             filtered_listings_df = filtered_listings_df.loc[:, ~filtered_listings_df.columns.duplicated()]
             
             logger.info(f"DataFrame columns after deduplication: {filtered_listings_df.columns.tolist()}")
             logger.info(f"User wishlist columns: {user_wishlist_df.columns.tolist()}")
+            logger.info(f"Unique sites before optimization: {filtered_listings_df['site_name'].nunique()}")
 
             # Get unique values from DataFrame columns correctly
             try:
                 unique_cards = user_wishlist_df["name"].unique()
-                unique_stores = filtered_listings_df["site"].unique()
+                unique_stores = filtered_listings_df["site_name"].unique()
             except AttributeError as e:
                 logger.error(f"Error accessing columns: {e}")
                 logger.error(f"user_wishlist_df info: {user_wishlist_df.info()}")
@@ -200,7 +254,7 @@ class PurchaseOptimizer:
                 for store in unique_stores:
                     card_data = filtered_listings_df[
                         (filtered_listings_df["name"] == card) &
-                        (filtered_listings_df["site"] == store)
+                        (filtered_listings_df["site_name"] == store)
                     ]
                     
                     if not card_data.empty:
@@ -215,6 +269,14 @@ class PurchaseOptimizer:
 
             all_iterations_results = []
             no_optimal_found = False
+
+            # Validate minimum store requirement
+            unique_stores = filtered_listings_df["site_name"].unique()
+            if len(unique_stores) < min_store:
+                logger.warning(f"Not enough stores available ({len(unique_stores)}) for minimum requirement ({min_store})")
+                min_store = len(unique_stores)  # Adjust min_store to available stores
+                
+            logger.info(f"Running optimization with {len(unique_stores)} stores and minimum requirement of {min_store}")
 
             if not find_min_store:
                 prob, buy_vars = PurchaseOptimizer._setup_prob(
@@ -253,7 +315,7 @@ class PurchaseOptimizer:
                     all_iterations_results.append(iteration_results)
 
                     logger.info(
-                        f"Iteration [{iteration}]: Total price {iteration_results['Total_price']:.2f}$ {int(iteration_results['nbr_card_in_solution'])}/{total_qty}"
+                        f"Iteration [{iteration}]: Total price {iteration_results['total_price']:.2f}$ {int(iteration_results['nbr_card_in_solution'])}/{total_qty}"
                     )
 
                     iteration += 1
@@ -263,13 +325,13 @@ class PurchaseOptimizer:
                     return None
 
                 least_expensive_iteration = min(
-                    all_iterations_results, key=lambda x: x["Total_price"]
+                    all_iterations_results, key=lambda x: x["total_price"]
                 )
                 logger.info(
                     f"Best Iteration is with {least_expensive_iteration['Number_store']} stores with a total price of: {least_expensive_iteration['Total_price']:.2f}$"
                 )
                 logger.info(
-                    f"Using these 'stores: #cards': {least_expensive_iteration['List_stores']}"
+                    f"Using these 'stores: #cards': {least_expensive_iteration['list_stores']}"
                 )
 
                 return (
@@ -284,6 +346,11 @@ class PurchaseOptimizer:
 
     @staticmethod
     def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store):
+        # Add validation for store count
+        if len(unique_stores) < min_store:
+            logger.warning(f"Adjusting min_store from {min_store} to {len(unique_stores)} due to available stores")
+            min_store = len(unique_stores)
+            
         prob = pulp.LpProblem("MTGCardOptimization", pulp.LpMinimize)
         buy_vars = pulp.LpVariable.dicts(
             "Buy", (unique_cards, unique_stores), 0, 1, pulp.LpBinary
@@ -336,7 +403,7 @@ class PurchaseOptimizer:
                         total_card_nbr += quantity
                         original_index = filtered_listings_df[
                             (filtered_listings_df["name"] == card)
-                            & (filtered_listings_df["site"] == store)
+                            & (filtered_listings_df["site_name"] == store)
                         ].index[0]
                         original_card = filtered_listings_df.loc[original_index]
 
@@ -344,7 +411,7 @@ class PurchaseOptimizer:
                             {
                                 "original_Index": original_index,
                                 "original_Card": original_card,
-                                "card": card,
+                                "name": card,
                                 "store": store,
                                 "quantity": quantity,
                                 "price": price_per_unit,
@@ -358,7 +425,7 @@ class PurchaseOptimizer:
                         )
 
         results_df = pd.DataFrame(results)
-        sorted_results_df = results_df.sort_values(by=["store", "card"])
+        sorted_results_df = results_df.sort_values(by=["store", "name"])
         sorted_results_df.reset_index(drop=True, inplace=True)
 
         num_stores_used = results_df["store"].nunique()
@@ -380,15 +447,15 @@ class PurchaseOptimizer:
             )
 
         # Convert DataFrame to dict before returning
-        results = {
+        return_value = {
             "nbr_card_in_solution": total_card_nbr,
-            "Total_price": float(Total_price),  # Ensure float
-            "Number_store": int(num_stores_used),  # Ensure int
-            "List_stores": store_usage_str,
-            "sorted_results_df": sorted_results_df.to_dict('records')  # Convert DataFrame to list of dicts
+            "total_price": float(Total_price),  # Ensure float
+            "number_store": int(num_stores_used),  # Ensure int
+            "list_stores": store_usage_str,
+            "sorted_results_df": sorted_results_df
         }
 
-        return results
+        return return_value
 
     @staticmethod
     def _run_nsga_ii(filtered_listings_df, user_wishlist_df, milp_solution=None):
@@ -504,9 +571,10 @@ class PurchaseOptimizer:
             card_counters = {
                 row["name"]: row["quantity"] for _, row in user_wishlist_df.iterrows()
             }
-            card_availability = {row["name"]                                 : 0 for _, row in user_wishlist_df.iterrows()}
+            card_availability = {row["name"]: 0 for _, row in user_wishlist_df.iterrows()}
             language_penalty = 999
-            quality_weights = {"NM": 9, "LP": 7, "MP": 3, "HP": 1, "DMG": 0}
+            # Use centralized quality weights
+            quality_weights = QUALITY_WEIGHTS
 
             all_cards_present = all(
                 card_counters[getattr(card_row, "Name")] > 0
@@ -542,7 +610,7 @@ class PurchaseOptimizer:
 
                     total_quality_score += quality_weights.get(
                         card_row["quality"], 0)
-                    stores.add(card_row["site"])
+                    stores.add(card_row["site_name"])
 
             missing_cards_penalty = 10000 * sum(
                 count for count in card_counters.values() if count > 0
@@ -569,42 +637,76 @@ class PurchaseOptimizer:
     @staticmethod
     def _extract_purchasing_plan(solution, filtered_listings_df, user_wishlist_df):
         purchasing_plan = []
-        for idx in solution:
-            if idx not in filtered_listings_df.index:
-                logger.warning("Invalid index: %d", idx)
-                continue
-            card_row = filtered_listings_df.loc[idx]
-            card_name = card_row["name"]
+        
+        # Handle different solution formats
+        if isinstance(solution, dict):
+            solutions_to_process = [solution]
+        elif isinstance(solution, (list, tuple)):
+            # Convert indices to actual card data
+            solutions_to_process = []
+            for idx in solution:
+                if isinstance(idx, int) and idx in filtered_listings_df.index:
+                    solutions_to_process.append(filtered_listings_df.loc[idx].to_dict())
+                elif isinstance(idx, (pd.Series, dict)):
+                    solutions_to_process.append(idx)
+        else:
+            logger.warning(f"Unexpected solution type: {type(solution)}")
+            return []
 
-            if card_name in user_wishlist_df["name"].values:
-                user_wishlist_row = user_wishlist_df[user_wishlist_df["name"] == card_name].iloc[0]
-                required_quality = user_wishlist_row.get("quality", "NM")
-                card_quality = card_row.get("quality", "NM")
+        for item in solutions_to_process:
+            try:
+                # Ensure we have a dictionary to work with
+                card_row = item if isinstance(item, dict) else (
+                    item.to_dict() if isinstance(item, pd.Series) else None
+                )
                 
-                # Only include cards that meet or exceed the required quality
-                if (required_quality == card_quality or 
-                    PurchaseOptimizer.quality_weights[card_quality] <= 
-                    PurchaseOptimizer.quality_weights[required_quality]):
-                    required_quantity = user_wishlist_row["quantity"]
+                if not card_row:
+                    logger.warning(f"Invalid card data format: {type(item)}")
+                    continue
 
-                    if required_quantity > 0:
+                card_name = card_row.get("name")
+                if not card_name:
+                    logger.warning(f"Missing card name in data: {card_row}")
+                    continue
+
+                if card_name in user_wishlist_df["name"].values:
+                    user_wishlist_row = user_wishlist_df[user_wishlist_df["name"] == card_name].iloc[0]
+                    required_quality = user_wishlist_row.get("quality", "NM")
+                    card_quality = card_row.get("quality", "NM")
+                    
+                    # Only include cards that meet or exceed the required quality
+                    quality_weights = QUALITY_WEIGHTS  # Use the imported quality weights
+                    quality_check = (required_quality == card_quality or 
+                                   quality_weights[card_quality] <= 
+                                   quality_weights[required_quality])
+                    
+                    if quality_check:
+                        required_quantity = user_wishlist_row["quantity"]
                         available_quantity = min(
-                            card_row["quantity"], required_quantity)
-                        purchase_details = {
-                            "name": card_name,
-                            "quantity": available_quantity,
-                            "site": card_row["site"],
-                            "quality": card_row["quality"],
-                            "price": card_row["price"],
-                            "total price": card_row["price"] * available_quantity,
-                        }
-                        purchase_details["quality_match"] = required_quality == card_quality
-                        purchasing_plan.append(purchase_details)
+                            int(card_row.get("quantity", 0)), 
+                            int(required_quantity)
+                        )
 
-                        # Update user wishlist
-                        user_wishlist_df.loc[
-                            user_wishlist_df["name"] == card_name, "quantity"
-                        ] -= available_quantity
+                        if available_quantity > 0:
+                            price = float(card_row.get("price", 0))
+                            purchase_details = {
+                                "name": card_name,
+                                "quantity": available_quantity,
+                                "site": card_row.get("site"),
+                                "quality": card_quality,
+                                "price": price,
+                                "total_price": price * available_quantity,
+                                "quality_match": required_quality == card_quality
+                            }
+                            purchasing_plan.append(purchase_details)
+
+                            # Update user wishlist
+                            mask = user_wishlist_df["name"] == card_name
+                            user_wishlist_df.loc[mask, "quantity"] -= available_quantity
+
+            except Exception as e:
+                logger.warning(f"Error processing card {card_row if 'card_row' in locals() else 'unknown'}: {str(e)}")
+                continue
 
         # Remove entries with zero quantity left
         user_wishlist_df = user_wishlist_df[user_wishlist_df["quantity"] > 0]

@@ -14,6 +14,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from aiohttp import ClientTimeout
 
 from app.extensions import db
+from app.dto.optimization_dto import QUALITY_MAPPING, LANGUAGE_MAPPING
 from app.models.card import UserBuylistCard
 from app.models.scan import Scan, ScanResult
 from app.models.site import Site
@@ -200,7 +201,15 @@ class ExternalDataSynchronizer:
             
         return token
 
-    async def scrape_multiple_sites(self, sites, card_names, strategy):
+    async def scrape_multiple_sites(self, sites, card_names, strategy='nsga-ii', scan_id=None):
+        """
+        Scrape multiple sites for card data
+        Args:
+            sites: List of Site objects to scrape
+            card_names: List of card names to search for
+            strategy: Optimization strategy to use
+            scan_id: Optional ID of the current scan
+        """
         results = []
         logger.info(f"Starting scrape for {len(sites)} sites, {len(card_names)} cards")
         
@@ -278,6 +287,7 @@ class ExternalDataSynchronizer:
             return None
 
     async def process_site(self, site, card_names, strategy):
+        """Process a single site and return results without saving to DB"""
         logger.info(f"Processing site {site.name} for {len(card_names)} cards using strategy {strategy}")
         try:
             soup = await self.search_crystalcommerce(site, card_names)
@@ -294,16 +304,31 @@ class ExternalDataSynchronizer:
                     'quantity': 'sum'
                 }).round(2)
                 
-                logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}:")
+                logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}")
                 for (set_name, foil), row in summary.iterrows():
                     logger.info(f"  {set_name} ({'Foil' if foil else 'Regular'}): "
                               f"{int(row[('name', 'count')])} cards, "
                               f"Price range: ${row[('price', 'min')]} - ${row[('price', 'max')]}, "
                               f"Avg: ${row[('price', 'mean')]}, "
                               f"Total qty: {int(row[('quantity', 'sum')])}")
-                
-                self.save_results_to_db(site, cards_df)
-                return cards_df.to_dict('records')
+
+                # Convert DataFrame rows to results
+                results = []
+                for _, row in cards_df.iterrows():
+                    result = {
+                        'site_id': site.id,
+                        'name': row['name'],
+                        'set_name': row['set_name'],
+                        'price': float(row.get('price', 0.0)),
+                        'version': row.get('version', 'Standard'),
+                        'foil': bool(row.get('foil', False)),
+                        'quality': row['quality'],
+                        'language': row['language'],
+                        'quantity': int(row.get('quantity', 0))
+                    }
+                    results.append(result)
+
+                return results
             else:
                 logger.warning(f"No valid cards found for {site.name}")
                 return None
@@ -322,85 +347,6 @@ class ExternalDataSynchronizer:
         return False
 
     @staticmethod
-    def save_results_to_db(site, cards_df):
-        logger.info(f"=== Starting database save for site: {site.name} ===")
-        try:
-            # Normalize all qualities and languages before any DB operations
-            for idx, row in cards_df.iterrows():
-                
-                # Get current values
-                current_quality = row.get('quality', 'NM')
-                current_lang = row.get('language', 'English')
-                
-                # Normalize values
-                normalized_quality = ExternalDataSynchronizer.normalize_quality(current_quality)
-                normalized_lang = ExternalDataSynchronizer.normalize_language(current_lang)
-                
-                # Update DataFrame
-                cards_df.at[idx, 'quality'] = normalized_quality
-                cards_df.at[idx, 'language'] = normalized_lang
-
-            # Verify all qualities are valid
-            valid_qualities = {'NM', 'LP', 'MP', 'HP', 'DMG'}
-            invalid_qualities = cards_df[~cards_df['quality'].isin(valid_qualities)]
-            if not invalid_qualities.empty:
-                logger.error(f"Found invalid qualities in data for {site.name}:")
-                for _, row in invalid_qualities.iterrows():
-                    logger.error(f"Card '{row['name']}' has invalid quality: '{row['quality']}'")
-                    # Force to NM as last resort
-                    cards_df.loc[cards_df['name'] == row['name'], 'quality'] = 'NM'
-
-            # Verify all languages are valid
-            valid_languages = {
-                'English', 'Japanese', 'Chinese', 'Korean', 'Russian',
-                'German', 'Spanish', 'French', 'Italian', 'Portuguese'
-            }
-            invalid_langs = cards_df[~cards_df['language'].isin(valid_languages)]
-            if not invalid_langs.empty:
-                logger.error(f"Found invalid languages in data for {site.name}:")
-                for _, row in invalid_langs.iterrows():
-                    logger.error(f"Card '{row['name']}' has invalid language: '{row['language']}'")
-                    # Force to English as last resort
-                    cards_df.loc[cards_df['name'] == row['name'], 'language'] = 'English'
-
-            # Create scan and save results
-            scan = Scan()
-            db.session.add(scan)
-            db.session.commit()
-
-            # Create and save scan results
-            scan_results = []
-            for _, row in cards_df.iterrows():
-                scan_result = ScanResult(
-                    scan_id=scan.id,
-                    site_id=site.id,
-                    name=row['name'],
-                    set_name=row['set_name'],
-                    price=float(row.get('price', 0.0)),
-                    updated_at=datetime.datetime.utcnow(),
-                    version=row.get('version', 'Standard'),
-                    foil=ExternalDataSynchronizer.convert_foil_to_bool(row.get('foil', False)),
-                    quality=row['quality'],  # Already normalized
-                    language=row['language'],  # Already normalized
-                    quantity=int(row.get('quantity', 0))
-                )
-                scan_results.append(scan_result)
-
-            try:
-                db.session.bulk_save_objects(scan_results)
-                db.session.commit()
-                logger.info(f"Successfully saved {len(scan_results)} scan results for {site.name}")
-            except Exception as e:
-                db.session.rollback()
-                logger.error(f"Bulk insert failed for {site.name}: {str(e)}")
-                raise
-
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error saving cards to database for site {site.name}: {str(e)}")
-            raise
-
-    @staticmethod
     def normalize_quality(quality):
         """Normalize quality to standard values"""
         logger.debug(f"=== Starting quality normalization for: {quality} ===")
@@ -410,54 +356,26 @@ class ExternalDataSynchronizer:
             return 'NM'
             
         try:
-            quality = str(quality).upper().strip()
+            # Strip whitespace and convert to uppercase for consistent comparison
+            quality_str = str(quality).strip().upper()
             
-            # Mapping of various quality terms to standardized values
-            quality_map = {
-                'MINT': 'NM',
-                'NEAR MINT': 'NM',
-                'NM/M': 'NM',
-                'M/NM': 'NM',
-                'NM-MINT': 'NM',
-                'MINT/NEAR-MINT': 'NM',
-                'NEAR-MINT': 'NM',
-                'NM': 'NM',
-                'NEAR MINT/MINT': 'NM',
-                'MINT/NM': 'NM',
-                
-                'LIGHT PLAYED': 'LP',
-                'LIGHTLY PLAYED': 'LP',
-                'LP': 'LP',
-                'EX': 'LP',
-                'EXCELLENT': 'LP',
-                'SLIGHTLY PLAYED': 'LP',
-                'SP': 'LP',
-                
-                'MODERATE PLAYED': 'MP',
-                'MODERATELY PLAYED': 'MP',
-                'MP': 'MP',
-                'PLAYED': 'MP',
-                'PL': 'MP',
-                'GOOD': 'MP',
-                'GD': 'MP',
-                
-                'HEAVY PLAYED': 'HP',
-                'HEAVILY PLAYED': 'HP',
-                'HP': 'HP',
-                'POOR': 'HP',
-                'PR': 'HP',
-                
-                'DAMAGED': 'DMG',
-                'DMG': 'DMG',
-            }
+            # Create uppercase version of mapping for case-insensitive comparison
+            upper_mapping = {k.upper(): v for k, v in QUALITY_MAPPING.items()}
             
-            normalized = quality_map.get(quality)
-            if normalized:
-                logger.debug(f"Successfully normalized quality from '{quality}' to '{normalized}'")
+            # Try to find direct match in uppercase mapping
+            if quality_str in upper_mapping:
+                normalized = upper_mapping[quality_str]
+                logger.debug(f"Found quality mapping: '{quality}' -> '{normalized}'")
                 return normalized
-            else:
-                logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
+                
+            # Handle special case for "MINT/NEAR-MINT" -> "NM"
+            if any(x in quality_str for x in ['MINT', 'NEAR-MINT', 'NM']):
+                logger.debug(f"Found mint-related quality: '{quality}', mapping to NM")
                 return 'NM'
+                
+            # If no match found, log warning and return NM (being optimistic here)
+            logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
+            return 'NM'
                 
         except Exception as e:
             logger.error(f"Error normalizing quality '{quality}': {str(e)}")
@@ -731,69 +649,6 @@ class ExternalDataSynchronizer:
         return a_tag and "yugioh" in a_tag["href"]
 
     @staticmethod
-    def normalize_quality(quality):
-        """Normalize quality to standard values"""
-        logger.debug(f"=== Starting quality normalization for: {quality} ===")
-        
-        if not quality:
-            logger.debug("Empty quality value, defaulting to NM")
-            return 'NM'
-            
-        try:
-            quality = str(quality).upper().strip()
-            
-            # Mapping of various quality terms to standardized values
-            quality_map = {
-                'MINT': 'NM',
-                'NEAR MINT': 'NM',
-                'NM/M': 'NM',
-                'M/NM': 'NM',
-                'NM-MINT': 'NM',
-                'MINT/NEAR-MINT': 'NM',
-                'NEAR-MINT': 'NM',
-                'NM': 'NM',
-                'NEAR MINT/MINT': 'NM',
-                'MINT/NM': 'NM',
-                
-                'LIGHT PLAYED': 'LP',
-                'LIGHTLY PLAYED': 'LP',
-                'LP': 'LP',
-                'EX': 'LP',
-                'EXCELLENT': 'LP',
-                'SLIGHTLY PLAYED': 'LP',
-                'SP': 'LP',
-                
-                'MODERATE PLAYED': 'MP',
-                'MODERATELY PLAYED': 'MP',
-                'MP': 'MP',
-                'PLAYED': 'MP',
-                'PL': 'MP',
-                'GOOD': 'MP',
-                'GD': 'MP',
-                
-                'HEAVY PLAYED': 'HP',
-                'HEAVILY PLAYED': 'HP',
-                'HP': 'HP',
-                'POOR': 'HP',
-                'PR': 'HP',
-                
-                'DAMAGED': 'DMG',
-                'DMG': 'DMG',
-            }
-            
-            normalized = quality_map.get(quality)
-            if normalized:
-                logger.debug(f"Successfully normalized quality from '{quality}' to '{normalized}'")
-                return normalized
-            else:
-                logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
-                return 'NM'
-                
-        except Exception as e:
-            logger.error(f"Error normalizing quality '{quality}': {str(e)}")
-            return 'NM'
-
-    @staticmethod
     def normalize_language(language):
         """Normalize language to standard values"""
 
@@ -801,70 +656,12 @@ class ExternalDataSynchronizer:
             logger.info("Empty language value, defaulting to English")
             return 'English'
 
-        language_map = {
-            # English variants
-            'en': 'English',
-            'eng': 'English',
-            'english': 'English',
-            'en-us': 'English',
-            'anglais': 'English',  # French word for English
-            # Japanese variants
-            'jp': 'Japanese',
-            'ja': 'Japanese',
-            'jpn': 'Japanese',
-            'japanese': 'Japanese',
-            'japonais': 'Japanese',  # French word for Japanese
-            # Chinese variants
-            'cn': 'Chinese',
-            'zh': 'Chinese',
-            'chi': 'Chinese',
-            'chinese': 'Chinese',
-            'chinois': 'Chinese',  # French word for Chinese
-            # Korean variants
-            'kr': 'Korean',
-            'ko': 'Korean',
-            'kor': 'Korean',
-            'korean': 'Korean',
-            'coréen': 'Korean',  # French word for Korean
-            # Russian variants
-            'ru': 'Russian',
-            'rus': 'Russian',
-            'russian': 'Russian',
-            'russe': 'Russian',  # French word for Russian
-            # German variants
-            'de': 'German',
-            'deu': 'German',
-            'ger': 'German',
-            'german': 'German',
-            'allemand': 'German',  # French word for German
-            # Spanish variants
-            'es': 'Spanish',
-            'esp': 'Spanish',
-            'spa': 'Spanish',
-            'spanish': 'Spanish',
-            'espagnol': 'Spanish',  # French word for Spanish
-            # French variants
-            'fr': 'French',
-            'fra': 'French',
-            'fre': 'French',
-            'french': 'French',
-            'français': 'French',
-            # Italian variants
-            'it': 'Italian',
-            'ita': 'Italian',
-            'italian': 'Italian',
-            'italien': 'Italian',  # French word for Italian
-            # Portuguese variants
-            'pt': 'Portuguese',
-            'por': 'Portuguese',
-            'portuguese': 'Portuguese',
-            'portugais': 'Portuguese',  # French word for Portuguese
-        }
+        
             
         cleaned_language = language.lower().strip()
-        normalized = language_map.get(cleaned_language, 'English')
+        normalized = LANGUAGE_MAPPING.get(cleaned_language, 'English')
         
-        if normalized == 'English' and cleaned_language not in language_map:
+        if normalized == 'English' and cleaned_language not in LANGUAGE_MAPPING:
             logger.warning(f"Unknown language value defaulting to English: '{language}' (cleaned: '{cleaned_language}')")
         # else:
         #     logger.info(f"Normalized language from '{language}' to '{normalized}'")

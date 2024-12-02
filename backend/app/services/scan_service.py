@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import SQLAlchemyError
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
-from app.models.site import Site
+from app.services.site_service import SiteService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,14 +34,33 @@ class ScanService:
 
     @staticmethod
     def create_scan():
-        with ScanService.transaction_context():
-            scan = Scan(created_at=ScanService._get_current_time())
+        """Create and persist a new scan"""
+        try:
+            scan = Scan()
             db.session.add(scan)
-            return scan
+            db.session.flush()  # Get the ID without committing
+            scan_id = scan.id   # Store the ID
+            db.session.commit() # Now commit
+            return scan_id  # Return just the ID instead of the scan object
+        except Exception as e:
+            logger.error(f"Error creating scan: {str(e)}")
+            db.session.rollback()
+            raise
+
+    @staticmethod
+    def get_scan_by_id(scan_id):
+        """Get a scan by ID, ensuring it's attached to the current session"""
+        return db.session.get(Scan, scan_id)
 
     @staticmethod
     def save_scan_result(scan_id, result):
+        """Save a single scan result"""
         with ScanService.transaction_context():
+            # Verify scan exists and is attached to session
+            scan = db.session.get(Scan, scan_id)
+            if not scan:
+                raise ValueError(f"No scan found with id {scan_id}")
+
             scan_result = ScanResult(
                 scan_id=scan_id,
                 name=result["name"],
@@ -64,7 +83,7 @@ class ScanService:
         if not latest_scan:
             return None, None
 
-        # Updated to use new relationship name
+        # Use SiteService to get site names
         results = db.session.query(
             ScanResult.name,
             ScanResult.price,
@@ -73,32 +92,21 @@ class ScanService:
             ScanResult.quality,
             ScanResult.foil,
             ScanResult.language,
-            ScanResult.quantity,
-            Site.name.label('site_name')
-        ).join(
-            Site, ScanResult.site_id == Site.id
+            ScanResult.quantity
         ).filter(
             ScanResult.scan_id == latest_scan.id
         ).all()
 
-        return latest_scan, results
+        # Convert results to include site names
+        if results:
+            sites = SiteService.get_sites_by_ids([r.site_id for r in results])
+            site_map = {site.id: site.name for site in sites}
+            results_with_sites = [
+                (*r[:-1], site_map.get(r.site_id, 'Unknown Site'))
+                for r in results
+            ]
+            return latest_scan, results_with_sites
 
-    @staticmethod
-    def update_scan_results(scan_id, results):
-        """Update multiple scan results in a single transaction"""
-        with ScanService.transaction_context():
-            for result in results:
-                existing_result = ScanResult.query.filter_by(
-                    scan_id=scan_id,
-                    name=result["name"],
-                    site_id=result["site_id"]
-                ).first()
+        return latest_scan, []
 
-                if existing_result:
-                    # Update existing result
-                    for key, value in result.items():
-                        if hasattr(existing_result, key):
-                            setattr(existing_result, key, value)
-                else:
-                    # Create new result
-                    ScanService.save_scan_result(scan_id, result)
+    # ...rest of existing code...
