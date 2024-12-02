@@ -12,6 +12,31 @@ from .extensions import init_extensions
 from .tasks.celery_app import celery_app
 
 
+# Color codes
+RESET = "\033[0m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+WHITE = "\033[37m"
+BLUE = "\033[34m"
+
+
+# Formatter for logs with color
+class ColoredFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        'DEBUG': BLUE,
+        'INFO': WHITE,
+        'WARNING': YELLOW,
+        'ERROR': RED,
+        'CRITICAL': RED,
+    }
+
+    def format(self, record):
+        color = self.LEVEL_COLORS.get(record.levelname, WHITE)
+        levelname = f"{color}{record.levelname}{RESET}"
+        record.levelname = levelname  # Overwrite the levelname with colored version
+        return super().format(record)
+
+
 def setup_logging(app):
     """Configure logging to prevent duplication"""
     # Remove any existing handlers to prevent duplication
@@ -19,7 +44,7 @@ def setup_logging(app):
     
     # Configure handler
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
+    handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(message)s'))
     app.logger.addHandler(handler)
     app.logger.setLevel(logging.INFO)
     

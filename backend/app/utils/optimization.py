@@ -157,13 +157,13 @@ class PurchaseOptimizer:
                     
                     # Convert results to serializable format
                     if isinstance(results, pd.DataFrame):
-                        logger.debug("Converting DataFrame results to records")
+                        logger.info("Converting DataFrame results to records")
                         results = results.to_dict("records")
                     elif isinstance(results, dict):
-                        logger.debug("Converting dict results to list")
+                        logger.info("Converting dict results to list")
                         results = [results]
                     elif isinstance(results, list):
-                        logger.debug("Processing list results")
+                        logger.info("Processing list results")
                         results = [r.to_dict() if hasattr(r, 'to_dict') else r for r in results]
                     else:
                         logger.error(f"Unexpected results type: {type(results)}")
@@ -197,7 +197,8 @@ class PurchaseOptimizer:
             solution, self.filtered_listings_df, self.user_wishlist_df
         )]
 
-    def _run_pulp(self, filtered_listings_df, user_wishlist_df, min_store, find_min_store):
+    @staticmethod
+    def _run_pulp(filtered_listings_df, user_wishlist_df, min_store, find_min_store):
         """Run MILP optimization"""
         try:
             # Validate and clean input data
@@ -221,16 +222,14 @@ class PurchaseOptimizer:
                 logger.error("filtered_listings_df is None or empty")
                 return None, None
 
-            # Ensure unique site IDs are being used
-            filtered_listings_df = filtered_listings_df.copy()
             filtered_listings_df['site_name'] = filtered_listings_df['site_name'].combine_first(filtered_listings_df['site_name'])
             
             # Remove duplicates and validate columns
             filtered_listings_df = filtered_listings_df.loc[:, ~filtered_listings_df.columns.duplicated()]
             
-            logger.info(f"DataFrame columns after deduplication: {filtered_listings_df.columns.tolist()}")
-            logger.info(f"User wishlist columns: {user_wishlist_df.columns.tolist()}")
-            logger.info(f"Unique sites before optimization: {filtered_listings_df['site_name'].nunique()}")
+            # logger.info(f"DataFrame columns after deduplication: {filtered_listings_df.columns.tolist()}")
+            # logger.info(f"User wishlist columns: {user_wishlist_df.columns.tolist()}")
+            # logger.info(f"Unique sites before optimization: {filtered_listings_df['site_name'].nunique()}")
 
             # Get unique values from DataFrame columns correctly
             try:
@@ -248,27 +247,23 @@ class PurchaseOptimizer:
             total_qty = len(user_wishlist_df)
             high_cost = 10000  # High cost for unavailable card-store combinations
 
+            # Add weighted price calculation before costs dictionary creation
+            filtered_listings_df['weighted_price'] = filtered_listings_df.apply(
+                lambda row: row['price'] * QUALITY_WEIGHTS.get(row['quality'], QUALITY_WEIGHTS['DMG']), 
+                axis=1
+            )
+
             costs = {}
             for card in unique_cards:
                 costs[card] = {}
                 for store in unique_stores:
-                    card_data = filtered_listings_df[
+                    price = filtered_listings_df[
                         (filtered_listings_df["name"] == card) &
                         (filtered_listings_df["site_name"] == store)
-                    ]
-                    
-                    if not card_data.empty:
-                        # Use correct column name for weighted price
-                        base_price = card_data["weighted_price"].min()
-                        quality = card_data["quality"].iloc[0] if not pd.isna(card_data["quality"].iloc[0]) else "NM"
-                        quality_multiplier = self.quality_weights.get(quality, self.quality_weights["NM"])
-                        adjusted_price = base_price * quality_multiplier
-                        costs[card][store] = adjusted_price if not pd.isna(adjusted_price) else high_cost
-                    else:
-                        costs[card][store] = high_cost
+                    ]["weighted_price"].min()
+                    costs[card][store] = price if not pd.isna(price) else high_cost
 
             all_iterations_results = []
-            no_optimal_found = False
 
             # Validate minimum store requirement
             unique_stores = filtered_listings_df["site_name"].unique()
@@ -284,16 +279,19 @@ class PurchaseOptimizer:
                 )
                 if pulp.LpStatus[prob.status] != "Optimal":
                     logger.warning("Solver did not find an optimal solution.")
-                    return None
+                    return None, None  # Changed to match mtg_milp.py return value
+
                 all_iterations_results = PurchaseOptimizer._process_result(
                     buy_vars, costs, False, total_qty, filtered_listings_df
                 )
                 return all_iterations_results["sorted_results_df"], None
             else:
                 logger.info("Starting iterative algorithm")
-                current_min = min_store
                 iteration = 1
-                while current_min >= 1:
+                current_min = min_store
+                all_iterations_results = []
+
+                while current_min >= 1:  # Modified loop condition
                     logger.info(
                         f"Iteration [{iteration}]: Current number of diff. stores: {current_min}"
                     )
@@ -308,35 +306,46 @@ class PurchaseOptimizer:
                     if pulp.LpStatus[prob.status] != "Optimal":
                         logger.warning("Solver did not find an optimal solution.")
                         break
-
+                    
                     iteration_results = PurchaseOptimizer._process_result(
                         buy_vars, costs, True, total_qty, filtered_listings_df
                     )
                     all_iterations_results.append(iteration_results)
 
-                    logger.info(
-                        f"Iteration [{iteration}]: Total price {iteration_results['total_price']:.2f}$ {int(iteration_results['nbr_card_in_solution'])}/{total_qty}"
-                    )
-
                     iteration += 1
                     current_min -= 1
 
                 if not all_iterations_results:
-                    return None
+                    return None, None
 
-                least_expensive_iteration = min(
-                    all_iterations_results, key=lambda x: x["total_price"]
-                )
+                # Modified to match main_v10.py logic - prioritize complete solutions
+                complete_solutions = [
+                    result for result in all_iterations_results 
+                    if result["nbr_card_in_solution"] == total_qty
+                ]
+
+                if complete_solutions:
+                    # Among complete solutions, find the cheapest
+                    least_expensive_iteration = min(
+                        complete_solutions,
+                        key=lambda x: x["total_price"]
+                    )
+                else:
+                    # If no complete solutions exist, take the most complete one
+                    least_expensive_iteration = max(
+                        all_iterations_results,
+                        key=lambda x: (x["nbr_card_in_solution"], -x["total_price"])
+                    )
+
                 logger.info(
-                    f"Best Iteration is with {least_expensive_iteration['Number_store']} stores with a total price of: {least_expensive_iteration['Total_price']:.2f}$"
-                )
-                logger.info(
-                    f"Using these 'stores: #cards': {least_expensive_iteration['list_stores']}"
+                    f"Best Iteration is with {least_expensive_iteration['number_store']} "
+                    f"stores with a total price of: {least_expensive_iteration['total_price']:.2f}$ "
+                    f"({least_expensive_iteration['nbr_card_in_solution']}/{total_qty} cards)"
                 )
 
                 return (
                     least_expensive_iteration["sorted_results_df"],
-                    all_iterations_results,
+                    all_iterations_results
                 )
         except Exception as e:
             logger.error("_run_pulp: %s", str(e))
