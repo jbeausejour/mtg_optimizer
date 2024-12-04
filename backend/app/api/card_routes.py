@@ -7,6 +7,7 @@ from app.tasks.optimization_tasks import start_scraping_task
 from app.tasks.optimization_tasks import celery_app
 from celery.result import AsyncResult
 from celery.backends.base import DisabledBackend
+from app.services.optimization_service import OptimizationService
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +186,7 @@ def get_sets():
         return jsonify({"error": "Failed to fetch sets"}), 500
 
 # Scan Operations
-@card_routes.route("/results/<int:scan_id>", methods=["GET"])
+@card_routes.route("/scans/<int:scan_id>", methods=["GET"])
 def get_scan_results(scan_id):
     try:
         scan = ScanService.get_scan_results(scan_id)
@@ -197,7 +198,7 @@ def get_scan_results(scan_id):
         current_app.logger.error(f"Error fetching scan results: {str(e)}")
         return jsonify({"error": "Failed to fetch scan results"}), 500
 
-@card_routes.route("/results", methods=["GET"])
+@card_routes.route("/scans", methods=["GET"])
 def get_all_scans():
     limit = request.args.get("limit", 5, type=int)
     try:
@@ -206,6 +207,21 @@ def get_all_scans():
     except Exception as e:
         current_app.logger.error(f"Error fetching scans: {str(e)}")
         return jsonify({"error": "Failed to fetch scans"}), 500
+
+@card_routes.route("/scans/", methods=["GET"])
+def get_scan_history():
+    """Get scan history without optimization results"""
+    scans = ScanService.get_all_scan_results()
+    return jsonify([
+        {
+            'id': scan.id,
+            'created_at': scan.created_at.isoformat(),
+            'cards_scraped': len(scan.scan_results),
+            'sites_scraped': len(set(r.site_id for r in scan.scan_results)),
+            'scan_results': [r.to_dict() for r in scan.scan_results]
+        }
+        for scan in scans
+    ])
 
 # Site Operations
 @card_routes.route("/sites", methods=["GET"])
@@ -241,3 +257,39 @@ def update_site(site_id):
     except Exception as e:
         current_app.logger.error(f"Unexpected error: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+# Optimization Operations
+@card_routes.route('/results', methods=['GET'])
+def get_optimization_results():
+    """Get recent optimization results"""
+    limit = request.args.get('limit', 5, type=int)
+    results = OptimizationService.get_optimization_results(limit)
+    
+    response = []
+    for scan, opt_result in results:
+        scan_dict = {
+            'id': scan.id,
+            'created_at': scan.created_at.isoformat(),
+            'optimization': opt_result.to_dict() if opt_result else None
+        }
+        response.append(scan_dict)
+    
+    return jsonify(response)
+
+@card_routes.route('/results/<int:scan_id>', methods=['GET'])
+def get_scan_result(scan_id):
+    """Get specific scan result with its optimization results"""
+    scan = ScanService.get_scan_by_id(scan_id)
+    if not scan:
+        return jsonify({'error': 'Scan not found'}), 404
+        
+    opt_result = ScanService.get_latest_optimization_result(scan_id)
+    
+    response = {
+        'id': scan.id,
+        'created_at': scan.created_at.isoformat(),
+        'optimization': opt_result.to_dict() if opt_result else None
+    }
+    
+    return jsonify(response)

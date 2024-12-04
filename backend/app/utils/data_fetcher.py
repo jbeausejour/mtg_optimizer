@@ -27,6 +27,32 @@ from app.utils.helpers import (
 
 logger = logging.getLogger(__name__)
 
+from threading import Lock
+
+class ErrorCollector:
+    _instance = None
+    _lock = Lock()
+    
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance.unknown_languages = set()
+                cls._instance.unknown_qualities = set()
+                cls._instance.unreachable_stores = set()
+            return cls._instance
+    
+    def reset(self):
+        """Reset all error collections"""
+        with self._lock:
+            self.unknown_languages.clear()
+            self.unknown_qualities.clear()
+            self.unreachable_stores.clear()
+    
+    @classmethod
+    def get_instance(cls):
+        return cls()
+
 class ExternalDataSynchronizer:
 
     STRATEGY_ADD_TO_CART = 1
@@ -40,6 +66,12 @@ class ExternalDataSynchronizer:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
         }
         self.max_retries = 3
+        self.errors = {
+            'unknown_languages': set(),
+            'unknown_qualities': set()
+        }
+        self.error_collector = ErrorCollector.get_instance()
+        self.error_collector.reset()  # Reset for new scraping session
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(headers=self.headers)
@@ -292,6 +324,7 @@ class ExternalDataSynchronizer:
         try:
             soup = await self.search_crystalcommerce(site, card_names)
             if not soup:
+                self.error_collector.unreachable_stores.add(site.name)
                 logger.warning(f"No data received from {site.name}")
                 return None
 
@@ -306,7 +339,7 @@ class ExternalDataSynchronizer:
                 
                 logger.info(f"Successfully extracted {len(cards_df)} cards from {site.name}")
                 for (set_name, foil), row in summary.iterrows():
-                    logger.info(f"  {set_name} ({'Foil' if foil else 'Regular'}): "
+                    logger.info(f"{site.name}:  {set_name} ({'Foil' if foil else 'Regular'}): "
                               f"{int(row[('name', 'count')])} cards, "
                               f"Price range: ${row[('price', 'min')]} - ${row[('price', 'max')]}, "
                               f"Avg: ${row[('price', 'mean')]}, "
@@ -374,7 +407,8 @@ class ExternalDataSynchronizer:
                 return 'NM'
                 
             # If no match found, log warning and return NM (being optimistic here)
-            logger.warning(f"Unknown quality value '{quality}', defaulting to NM")
+            ErrorCollector.get_instance().unknown_qualities.add(quality)
+            logger.warning(f"Unknown quality value: '{quality}'")
             return 'NM'
                 
         except Exception as e:
@@ -447,15 +481,15 @@ class ExternalDataSynchronizer:
             return pd.DataFrame()
 
         required_fields = {
-        'name',
-        'set_name',
-        'quality',
-        'language',
-        'quantity',
-        'price',
-        'version',
-        'foil'
-    }
+            'name',
+            'set_name',
+            'quality',
+            'language',
+            'quantity',
+            'price',
+            'version',
+            'foil'
+        }
 
         logger.info(f"Processing container for {site.name}")
         for container in products_containers:
@@ -487,7 +521,7 @@ class ExternalDataSynchronizer:
                     continue
 
         if not cards:
-            logger.warning(f"No valid cards found for {site.name}")
+            logger.warning(f"No valid cards found in container for {site.name}")
             return pd.DataFrame()
 
         try:
@@ -508,7 +542,7 @@ class ExternalDataSynchronizer:
             for col, dtype in standard_columns.items():
                 if col not in df.columns:
                     df[col] = dtype()
-                df[col] = df[col].astype(dtype)
+                df[col].astype(dtype)
             
             # Normalize quality and language values
             df['quality'] = df['quality'].apply(ExternalDataSynchronizer.normalize_quality)
@@ -606,7 +640,7 @@ class ExternalDataSynchronizer:
                 
             if (card_info['name'] not in card_names and  
                 card_info['name'].split(" // ")[0].strip() not in card_names):
-                logger.warning(f"Card '{card_info['name']}' not in requested list for {site.name}")
+                logger.debug(f"Card '{card_info['name']}' not in requested list for {site.name}")
                 logger.debug(f"Available card names: {card_names}")
                 return None
 
@@ -659,10 +693,11 @@ class ExternalDataSynchronizer:
         
             
         cleaned_language = language.lower().strip()
-        normalized = LANGUAGE_MAPPING.get(cleaned_language, 'English')
+        normalized = LANGUAGE_MAPPING.get(cleaned_language, 'Unknown')
         
-        if normalized == 'English' and cleaned_language not in LANGUAGE_MAPPING:
-            logger.warning(f"Unknown language value defaulting to English: '{language}' (cleaned: '{cleaned_language}')")
+        if normalized == 'Unknown' and cleaned_language not in LANGUAGE_MAPPING:
+            ErrorCollector.get_instance().unknown_languages.add(language)
+            logger.warning(f"Unknown language value: '{language}' (cleaned: '{cleaned_language}')")
         # else:
         #     logger.info(f"Normalized language from '{language}' to '{normalized}'")
             

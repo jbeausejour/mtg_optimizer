@@ -1,59 +1,106 @@
-// File: src/components/Results.js
-import React, { useState, useEffect, useContext } from 'react';
-import { useParams } from 'react-router-dom';
-import { Card, Table } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Table, Spin, Card, Tag, Typography, Button } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
+import { OptimizationSummary } from '../components/OptimizationDisplay';
 import api from '../utils/api';
 
+const { Title } = Typography;
+
 const Results = () => {
-  const { scanId } = useParams();
-  const [scan, setScan] = useState(null);
+  const [opt_results, setScans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedOptimizationResult, setSelectedOptimizationResult] = useState(null);
   const { theme } = useTheme();
+  const navigate = useNavigate();
 
   useEffect(() => {
-    api.get(`/results/${scanId}`)
-      .then(response => setScan(response.data))
-      .catch(error => console.error('Error fetching results:', error));
-  }, [scanId]);
+    fetchScans();
+  }, []);
+
+  const fetchScans = async () => {
+    try {
+      const response = await api.get('/results');
+      setScans(response.data);
+    } catch (error) {
+      console.error('Error fetching optmization results:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const columns = [
     {
-      title: 'Card Name',
-      dataIndex: ['Original_Card', 'name'], // Changed from 'Name'
-      key: 'card_name',
+      title: 'Scan ID',
+      dataIndex: 'id',
+      key: 'id',
     },
     {
-      title: 'Quantity',
-      dataIndex: 'quantity', // Changed from 'Quantity'
-      key: 'quantity',
+      title: 'Date',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (text) => new Date(text).toLocaleString(),
     },
     {
-      title: 'Price',
-      dataIndex: 'price', // Changed from 'Price'
-      key: 'price',
-      render: (price) => `$${price.toFixed(2)}`,
+      title: 'Best Solution',
+      key: 'best_solution',
+      render: (_, record) => {
+        const solution = record.optimization?.optimization?.solutions?.[0];
+        if (!solution) return 'No solution found';
+        
+        return (
+          <span>
+            {solution.number_store} stores at ${solution.total_price.toFixed(2)} ({solution.nbr_card_in_solution}/{solution.total_qty || solution.nbr_card_in_solution} cards)
+          </span>
+        );
+      },
     },
     {
-      title: 'Total Price',
-      dataIndex: 'Total Price',
-      key: 'total_price',
-      render: (price) => `$${price.toFixed(2)}`,
-    },
-    {
-      title: 'Site',
-      dataIndex: 'Store',
-      key: 'site',
-    },
+      title: 'Status',
+      key: 'status',
+      render: (_, record) => {
+        const solution = record.optimization?.optimization?.solutions?.[0];
+        if (!solution) return <Tag color="red">Failed</Tag>;
+        
+        const completeness = solution.nbr_card_in_solution === (solution.total_qty || solution.nbr_card_in_solution);
+        const percentage = ((solution.nbr_card_in_solution / (solution.total_qty || solution.nbr_card_in_solution)) * 100).toFixed(2);
+        
+        return (
+          <Tag color={completeness ? 'green' : 'orange'}>
+            {completeness ? 'COMPLETE' : `${percentage}%`}
+          </Tag>
+        );
+      },
+    }
   ];
 
-  if (!scan) return <div>Loading...</div>;
+  if (loading) return <Spin size="large" />;
 
   return (
     <div className={`results section ${theme}`}>
-      <h1>Optimization Results</h1>
-      <Card title={`Scan Date: ${new Date(scan.date).toLocaleString()}`}>
-        <Table dataSource={scan.sorted_results_df} columns={columns} />
-      </Card>
+      <Title level={2}>Optimization History</Title>
+      {selectedOptimizationResult ? (
+        <>
+          <div className="mb-4">
+            <Button onClick={() => setSelectedOptimizationResult(null)} type="link">
+              ← Back to History
+            </Button>
+          </div>
+          <OptimizationSummary result={selectedOptimizationResult.optimization?.optimization} />
+        </>
+      ) : (
+        <Card>
+          <Table
+            dataSource={opt_results}
+            columns={columns}
+            rowKey="id"
+            onRow={(record) => ({
+              onClick: () => setSelectedOptimizationResult(record),
+              style: { cursor: 'pointer' }
+            })}
+          />
+        </Card>
+      )}
     </div>
   );
 };

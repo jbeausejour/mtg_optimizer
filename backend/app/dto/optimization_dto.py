@@ -53,7 +53,7 @@ QUALITY_MAPPING = {
     "Damaged": "DMG",
     "DAMAGED": "DMG",
     # Default case
-    "": "NM"  
+    "": "DMG"  
 }
 
 # Quality weights for price adjustments
@@ -83,6 +83,7 @@ LANGUAGE_MAPPING = {
     'zh': 'Chinese',
     'chi': 'Chinese',
     'chinese': 'Chinese',
+    's-chinese': 'Chinese',
     'chinois': 'Chinese',  # French word for Chinese
     # Korean variants
     'kr': 'Korean',
@@ -123,6 +124,8 @@ LANGUAGE_MAPPING = {
     'por': 'Portuguese',
     'portuguese': 'Portuguese',
     'portugais': 'Portuguese',  # French word for Portuguese
+    # Unknown variants
+    'unknown': 'Unknown',  # French word for Portuguese
 }
 
 logger = logging.getLogger(__name__)
@@ -270,6 +273,21 @@ class CardValidation(BaseModel):
         "validate_assignment": True
     }
 
+class CardInSolution(BaseModel):
+    name: str
+    site_name: str
+    price: float
+    quality: str
+    quantity: int
+    set_name: str
+    version: str = Field(default="Standard")
+    foil: bool = False
+    language: str = "English"
+    site_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
 class CardOptimizationDTO(CardValidation):
     """DTO for card optimization data"""
     name: str = Field(..., min_length=1)
@@ -299,6 +317,20 @@ class CardOptimizationDTO(CardValidation):
             raise ValueError("Cards with price must have quantity")
         return self
 
+class OptimizationSolution(BaseModel):
+    total_price: float
+    number_store: int
+    nbr_card_in_solution: int
+    total_qty: Optional[int] = None
+    list_stores: str
+    missing_cards: List[str]
+    missing_cards_count: int
+    cards: Dict[str, CardInSolution]
+    is_best_solution: bool = False
+
+    class Config:
+        from_attributes = True
+
 class OptimizationConfigDTO(BaseModel):
     strategy: str = Field(..., pattern='^(milp|nsga-ii|hybrid)$')
     min_store: int = Field(..., gt=0)
@@ -319,51 +351,126 @@ class OptimizationConfigDTO(BaseModel):
             raise ValueError('Cannot optimize for more than 20 stores')
         return v
 
-class OptimizationResultDTO:
-    def __init__(self, status, sites_scraped=0, cards_scraped=0, optimization=None, progress=0, message=None):
-        self.status = status
-        self.sites_scraped = sites_scraped
-        self.cards_scraped = cards_scraped
-        self.progress = progress
-        self.message = message
-        
-        # Convert optimization results to serializable format
-        if isinstance(optimization, dict):
-            self.optimization = self._convert_to_serializable(optimization)
-        else:
-            self.optimization = optimization or {}
+class OptimizationResultDTO(BaseModel):
+    status: str
+    message: str
+    sites_scraped: int
+    cards_scraped: int
+    solutions: List[OptimizationSolution]
+    errors: Dict[str, List[str]] = Field(
+        default_factory=lambda: {
+            'unreachable_stores': [],
+            'unknown_languages': [],
+            'unknown_qualities': []
+        }
+    )
+    progress: int = 100
 
-    def _convert_to_serializable(self, data):
-        """Convert pandas and numpy types to basic Python types"""
-        if isinstance(data, dict):
-            return {k: self._convert_to_serializable(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._convert_to_serializable(item) for item in data]
-        elif hasattr(data, 'to_dict'):  # Handle pandas Series/DataFrame
+    def format_from_milp(self, best_solution, all_iterations) -> None:
+        """Format MILP optimization results into DTO structure"""
+        logger.info(f"Formatting MILP results:")
+        logger.info(f"Best solution type: {type(best_solution)}")
+        logger.info(f"Best solution length: {len(best_solution) if best_solution else 0}")
+        logger.info(f"Iterations length: {len(all_iterations) if all_iterations else 0}")
+
+        self.solutions = []
+
+        def create_card_dict(card_data):
+            """Helper to create standardized card dictionary with defaults"""
+            # Ensure version is never None
+            version = card_data.get('version')
+            if version is None or version == "":
+                version = 'Standard'
+                
+            return {
+                'name': card_data['name'],
+                'site_name': card_data['site_name'],
+                'price': float(card_data['price']),
+                'quality': card_data['quality'],
+                'quantity': int(card_data['quantity']),
+                'set_name': card_data['set_name'],
+                'version': version,
+                'foil': bool(card_data.get('foil', False)),
+                'language': card_data.get('language', 'English'),
+                'site_id': card_data.get('site_id')
+            }
+
+        if best_solution:
+            # Debug the card data structure
+            logger.info("Sample card data from best solution:")
+            if best_solution:
+                logger.info(f"First card: {best_solution[0]}")
+            
             try:
-                return data.to_dict()
-            except:
-                return str(data)  # Fallback to string representation
-        elif hasattr(data, 'item'):     # Handle numpy types
-            return data.item()
-        elif hasattr(data, '__dict__'): # Handle custom objects
-            # Filter out methods and private attributes
-            filtered_dict = {k: v for k, v in data.__dict__.items() 
-                           if not (k.startswith('_') or callable(v))}
-            return self._convert_to_serializable(filtered_dict)
-        elif callable(data):  # Handle methods/functions
-            return str(data)  # Convert methods to string representation
-        return data
+                # Create cards dictionary for best solution
+                cards = {
+                    str(i): CardInSolution(**create_card_dict(card))
+                    for i, card in enumerate(best_solution)
+                }
+            except Exception as e:
+                logger.error(f"Error creating cards dictionary: {str(e)}", exc_info=True)
+                logger.info(f"all cards: {best_solution}")
 
-    def __dict__(self):
-        # Filter and convert data before returning
+            # Debug the created cards dictionary
+            logger.info(f"Created cards dictionary with {len(cards)} entries")
+            if cards:
+                logger.info(f"Sample card entry: {next(iter(cards.values())).model_dump()}")
+
+            # Get the corresponding iteration data
+            solution_index = next((i for i, solution in enumerate(all_iterations)
+                                if solution['total_price'] == best_solution[0]['price']), 0)
+            best_iteration = all_iterations[solution_index]
+
+            self.solutions.append(OptimizationSolution(
+                total_price=float(best_iteration['total_price']),
+                number_store=best_iteration['number_store'],
+                nbr_card_in_solution=best_iteration['nbr_card_in_solution'],
+                total_qty=best_iteration.get('total_qty'),
+                list_stores=best_iteration['list_stores'],
+                missing_cards=best_iteration.get('missing_cards', []),
+                missing_cards_count=len(best_iteration.get('missing_cards', [])),
+                cards=cards,
+                is_best_solution=True
+            ))
+
+        if all_iterations:
+            for iteration in all_iterations:
+                if iteration != best_solution:  # Skip the best solution as it's already added
+                    # Create cards dictionary for each iteration
+                    try:
+                        cards = {
+                            str(i): CardInSolution(**create_card_dict(card))
+                            for i, card in enumerate(iteration['sorted_results_df'])
+                        }
+                        
+                    except Exception as e:
+                        logger.error(f"Error creating cards dictionary: {str(e)}", exc_info=True)
+                        logger.info(f"all cards (iterations): {iteration['sorted_results_df']}")
+
+                    self.solutions.append(OptimizationSolution(
+                        total_price=float(iteration['total_price']),
+                        number_store=iteration['number_store'],
+                        nbr_card_in_solution=iteration['nbr_card_in_solution'],
+                        total_qty=iteration.get('total_qty'),
+                        list_stores=iteration['list_stores'],
+                        missing_cards=iteration.get('missing_cards', []),
+                        missing_cards_count=len(iteration.get('missing_cards', [])),
+                        cards=cards,
+                        is_best_solution=False
+                    ))
+        logger.debug(f"Formatted {len(self.solutions)} solutions")
+
+    def model_dump(self):
         return {
-            'status': str(self.status),  # Ensure status is string
-            'sites_scraped': int(self.sites_scraped),
-            'cards_scraped': int(self.cards_scraped),
-            'optimization': self._convert_to_serializable(self.optimization),
-            'progress': int(self.progress),
-            'message': str(self.message) if self.message else None
+            'status': self.status,
+            'message': self.message,
+            'sites_scraped': self.sites_scraped,
+            'cards_scraped': self.cards_scraped,
+            'optimization': {
+                'solutions': [solution.model_dump() for solution in self.solutions],
+                'errors': self.errors
+            },
+            'progress': self.progress
         }
 
 class ScanResultDTO(CardValidation):

@@ -4,16 +4,16 @@ import pandas as pd
 from sqlalchemy.orm import Query
 from flask import current_app
 from app.extensions import db
-from app.models.scan import Scan, ScanResult
+from app.models import Scan, ScanResult, OptimizationResult
 from app.models.site import Site
-from app.utils.data_fetcher import ExternalDataSynchronizer
+
+from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer
 from app.utils.optimization import PurchaseOptimizer
-from app.models.card import UserBuylistCard
 from .celery_app import celery_app
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 import asyncio
-from sqlalchemy import select, text  # Add this import
+from sqlalchemy import select, text 
 from app.services.scan_service import ScanService
 from app.services.site_service import SiteService
 from app.dto.optimization_dto import OptimizationConfigDTO, OptimizationResultDTO, ScanResultDTO
@@ -45,6 +45,11 @@ class OptimizationTaskManager:
         self.card_names = [card['name'] for card in card_list_from_frontend if 'name' in card]
         self.logger = logger
         self.current_scan_id = None
+        self.errors = {
+            'unreachable_stores': set(),
+            'unknown_languages': set(),
+            'unknown_qualities': set()
+        }
 
     def create_new_scan(self):
         """Create a new scan and store its ID in the instance"""
@@ -70,21 +75,44 @@ class OptimizationTaskManager:
                 else:
                     outdated_cards.append(card)
 
+            logger.info("=============================")
             logger.info(f"Found {len(fresh_cards)} cards with fresh data and {len(outdated_cards)} outdated cards")
+            logger.info("=============================")
+            # Fix: Use string join method on the list of card names
+            if fresh_cards:
+                logger.info(f"Fresh cards:\n - {'\n - '.join(fresh_cards)}")
+                logger.info("=============================")
             
             # Get fresh results first
             fresh_results = []
             if fresh_cards:
-                fresh_results = (db.session.query(ScanResult)
-                               .filter(ScanResult.name.in_(fresh_cards))
-                               .filter(ScanResult.site_id.in_(self.site_ids))
-                               .all())
+                # Convert fresh results to dictionaries immediately
+                fresh_results = [
+                    {
+                        'site_id': r.site_id,
+                        'name': r.name,
+                        'set_name': r.set_name,
+                        'price': float(r.price),
+                        'version': getattr(r, 'version', 'Standard'),
+                        'foil': bool(getattr(r, 'foil', False)),
+                        'quality': r.quality,
+                        'language': r.language,
+                        'quantity': int(r.quantity)
+                    }
+                    for r in db.session.query(ScanResult)
+                    .filter(ScanResult.name.in_(fresh_cards))
+                    .filter(ScanResult.site_id.in_(self.site_ids))
+                    .all()
+                ]
             
             if not outdated_cards:
-                logger.info("All cards have fresh data, skipping scraping")
+                logger.info("All cards have fresh data, skipping scraping :)")
+                logger.info("=============================")
                 return fresh_results
-
-            logger.info(f"Scraping outdated cards: {[card['name'] for card in outdated_cards]}")
+            
+            # Fix: Same correction for outdated cards
+            logger.info(f"Scraping outdated cards:\n - {'\n - '.join([card['name'] for card in outdated_cards])}")
+            logger.info("=============================")
 
             scraper = ExternalDataSynchronizer()
             loop = asyncio.new_event_loop()
@@ -111,8 +139,7 @@ class OptimizationTaskManager:
                 loop.close()
         except Exception as e:
             logger.exception(f"Error in handle_scraping: {str(e)}")
-            db.session.rollback()
-            raise
+            raise  # Let the outer transaction handle rollback
 
     def prepare_optimization_data(self, scraping_results=None):
         """Prepare optimization data from scraping results or database"""
@@ -145,39 +172,22 @@ class OptimizationTaskManager:
         """Process scraping results into card listings"""
         card_listings = []
         for r in scraping_results:
-            # Handle both dictionary and ScanResult objects
-            if isinstance(r, dict):
-                site_info = self.site_data.get(r['site_id'])
-                if site_info:
-                    card_listings.append({
-                        'name': r['name'],
-                        'site_name': site_info['name'],
-                        'price': float(r['price']),
-                        'quality': r['quality'],
-                        'quantity': int(r['quantity']),
-                        'set_name': r['set_name'],
-                        'version': r.get('version', 'Standard'),
-                        'foil': bool(r.get('foil', False)),
-                        'language': r.get('language', 'English'),
-                        'site_id': r['site_id'],
-                        'weighted_price': float(r['price'])
-                    })
-            else:  # ScanResult object
-                site_info = self.site_data.get(r.site_id)
-                if site_info:
-                    card_listings.append({
-                        'name': r.name,
-                        'site_name': site_info['name'],
-                        'price': float(r.price),
-                        'quality': r.quality,
-                        'quantity': int(r.quantity),
-                        'set_name': r.set_name,
-                        'version': getattr(r, 'version', 'Standard'),
-                        'foil': bool(getattr(r, 'foil', False)),
-                        'language': getattr(r, 'language', 'English'),
-                        'site_id': r.site_id,
-                        'weighted_price': float(r.price)
-                    })
+            # All results are now dictionaries, no need to check type
+            site_info = self.site_data.get(r['site_id'])
+            if site_info:
+                card_listings.append({
+                    'name': r['name'],
+                    'site_name': site_info['name'],
+                    'price': float(r['price']),
+                    'quality': r['quality'],
+                    'quantity': int(r['quantity']),
+                    'set_name': r['set_name'],
+                    'version': r.get('version', 'Standard'),
+                    'foil': bool(r.get('foil', False)),
+                    'language': r.get('language', 'English'),
+                    'site_id': r['site_id'],
+                    'weighted_price': float(r['price'])
+                })
         return card_listings
 
     def _get_scan_id(self):
@@ -240,7 +250,33 @@ class OptimizationTaskManager:
                 config=config
             )
             
-            return optimizer.run_optimization(self.card_names, config)
+            optimization_results = optimizer.run_optimization(self.card_names, config)
+            
+            # Collect errors from ErrorCollector
+            error_collector = ErrorCollector.get_instance()
+            optimization_results['errors'] = {
+                'unreachable_stores': list(error_collector.unreachable_stores),
+                'unknown_languages': list(error_collector.unknown_languages),
+                'unknown_qualities': list(error_collector.unknown_qualities)
+            }
+            
+            # Log collected errors
+            if error_collector.unreachable_stores:
+                logger.warning("Unreachable stores:")
+                for store in sorted(error_collector.unreachable_stores):
+                    logger.warning(f"  - {store}")
+                    
+            if error_collector.unknown_languages:
+                logger.warning("Unknown languages found:")
+                for lang in sorted(error_collector.unknown_languages):
+                    logger.warning(f"  - {lang}")
+                    
+            if error_collector.unknown_qualities:
+                logger.warning("Unknown qualities found:")
+                for quality in sorted(error_collector.unknown_qualities):
+                    logger.warning(f"  - {quality}")
+
+            return optimization_results
                 
         except Exception as e:
             self.logger.error(f"Error in run_optimization: {str(e)}")
@@ -274,37 +310,91 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
         task_manager = OptimizationTaskManager(site_ids, card_list_from_frontend, config.strategy, 
                                              config.min_store, config.find_min_store)
         logger = task_manager.logger
-
         try:
             self.update_state(state="PROCESSING", meta={"status": "Task initialized", "progress": 0})
-            
             scraping_results = task_manager.handle_scraping()
-            self.update_state(state="PROCESSING", meta={"status": "Scraping complete", "progress": 25})
             
+            if not scraping_results:
+                return OptimizationResultDTO(
+                    status="Failed",
+                    message="No scraping results found",
+                    sites_scraped=len(task_manager.sites),
+                    cards_scraped=len(card_list_from_frontend),
+                    solutions=[],
+                    progress=100
+                ).model_dump()
+            
+            self.update_state(state="PROCESSING", meta={"status": "Scraping complete", "progress": 25})
             filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
             
             if filtered_listings_df is None or filtered_listings_df.empty:
-                logger.error("No card details available for optimization")
-                return {"status": "Failed", "message": "No card details available for optimization"}
+                return OptimizationResultDTO(
+                    status="Failed",
+                    message="No valid card listings found",
+                    sites_scraped=len(task_manager.sites),
+                    cards_scraped=len(card_list_from_frontend),
+                    solutions=[],
+                    progress=100
+                ).model_dump()
             
-            self.update_state(state="PROCESSING", meta={"status": "Running optimization", "progress": 75})
+            self.update_state(state="PROCESSING", meta={"status": "Running optimization", "progress": 50})
+            optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
+            self.update_state(state="PROCESSING", meta={"status": "Otimization complete", "progress": 75})
             
-            optimization_results = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
-            
-            result_dto = OptimizationResultDTO(
-                status="Completed",
-                message="Optimization completed successfully" if optimization_results else "No optimization results found",
+            if optimization_result:
+                # logger.info("Optimization Result received:")
+                # logger.info(f"Sites Results: {len(optimization_result['best_solution']) if optimization_result.get('best_solution') else 0} items")
+                # logger.info(f"Iterations: {len(optimization_result['iterations']) if optimization_result.get('iterations') else 0} items")
+
+                result_dto = OptimizationResultDTO(
+                    status="Completed",
+                    message="Optimization completed successfully",
+                    sites_scraped=len(task_manager.sites),
+                    cards_scraped=len(card_list_from_frontend),
+                    solutions=[],
+                    progress=100
+                )
+                
+                result_dto.format_from_milp(optimization_result["best_solution"], optimization_result["iterations"])
+                
+                dumped_result = result_dto.model_dump()
+                # logger.info("Final DTO dump:")
+                # logger.info(f"Status: {dumped_result['status']}")
+                # logger.info(f"Solutions count: {len(dumped_result['optimization']['solutions'])}")
+                # logger.info(f"First solution cards: {len(dumped_result['optimization']['solutions'][0]['cards']) if dumped_result['optimization']['solutions'] else 0} cards")
+                
+                # Save optimization result to database
+                optimization_result_db = OptimizationResult(
+                    scan_id=task_manager.current_scan_id,
+                    status=dumped_result['status'],
+                    message=dumped_result['message'],
+                    sites_scraped=dumped_result['sites_scraped'],
+                    cards_scraped=dumped_result['cards_scraped'],
+                    solutions=dumped_result['optimization']['solutions'],
+                    errors=dumped_result['optimization']['errors']
+                )
+                db.session.add(optimization_result_db)
+                db.session.commit()
+                
+                return dumped_result
+
+                
+            error_collector = ErrorCollector.get_instance()
+            failed_optimization = OptimizationResultDTO(
+                status="Failed",
+                message="Optimization failed",
                 sites_scraped=len(task_manager.sites),
                 cards_scraped=len(card_list_from_frontend),
-                optimization=serialize_results(optimization_results) if optimization_results else {},
+                solutions=[],
+                errors=error_collector.__dict__,
                 progress=100
-            )
-
-            return result_dto.__dict__()
+            ).model_dump()
+            
+            db.session.add(failed_optimization)
+            db.session.commit()
+            return failed_optimization
 
         except Exception as e:
             logger.exception("Error during task execution")
-            self.update_state(state=states.FAILURE, 
-                            meta={"exc_type": type(e).__name__, 
-                                 "exc_message": str(e)})
+            self.update_state(state=states.FAILURE, meta={"exc_type": type(e).__name__, "exc_message": str(e)})
             raise
