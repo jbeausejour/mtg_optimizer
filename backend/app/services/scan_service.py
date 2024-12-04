@@ -109,4 +109,14 @@ class ScanService:
 
         return latest_scan, []
 
-    # ...rest of existing code...
+    # Scan Operations
+    @staticmethod
+    def get_scan_results(scan_id):
+        scan = db.session.get(Scan, scan_id)
+        if not scan:
+            return None
+        return scan
+
+    @staticmethod
+    def get_all_scan_results(limit=5):
+        return Scan.query.order_by(Scan.created_at.desc()).limit(limit).all()

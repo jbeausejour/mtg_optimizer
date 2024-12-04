@@ -1,6 +1,7 @@
 from datetime import datetime
 from app.extensions import db
 from sqlalchemy.orm import validates
+from app.dto.optimization_dto import LANGUAGE_MAPPING  # Import the centralized mapping
 
 class BaseCard(db.Model):
     """Abstract base class for card-related models"""
@@ -22,12 +23,17 @@ class BaseCard(db.Model):
         return name.strip()
 
     @validates('language')
-    def validate_language(self, key, language):
-        """Validate language"""
-        valid_languages = ["English", "Japanese", "Chinese", "Korean", "Russian", "German", "Spanish", "French", "Italian", "Portuguese"]
-        if language and language not in valid_languages:
+    def validate_language(self, key, value):
+        """Validate card language"""
+        if not value:
+            return 'Unknown'  # Default to English
+
+        normalized_language = LANGUAGE_MAPPING.get(value.lower().strip())
+        if not normalized_language:
+            valid_languages = sorted(set(LANGUAGE_MAPPING.values()))
             raise ValueError(f"Invalid language. Must be one of: {', '.join(valid_languages)}")
-        return language or "English"
+            
+        return normalized_language
 
     @validates('quality')
     def validate_quality(self, key, quality):

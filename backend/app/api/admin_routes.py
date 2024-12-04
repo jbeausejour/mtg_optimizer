@@ -13,47 +13,6 @@ logger = logging.getLogger(__name__)
 # Admin Routes
 admin_routes = Blueprint("admin_routes", __name__)
 
-# Site Operations
-@admin_routes.route("/sites", methods=["GET"])
-def get_sites():
-    sites = CardService.get_all_sites()
-    return jsonify([site.to_dict() for site in sites])
-
-@admin_routes.route("/sites", methods=["POST"])
-def add_site():
-    try:
-        data = request.json
-        new_site = CardService.add_site(data)
-        return jsonify(new_site.to_dict()), 201
-    except IntegrityError as ie:
-        current_app.logger.error(f"Database integrity error: {str(ie)}")
-        return jsonify({"error": "Database integrity error"}), 409
-    except Exception as e:
-        current_app.logger.error(f"Error adding site: {str(e)}")
-        return jsonify({"error": "Failed to add site"}), 500
-
-@admin_routes.route("/sites/<int:site_id>", methods=["PUT"])
-def update_site(site_id):
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-
-        updated_site = CardService.update_site(site_id, data)
-        return jsonify({
-            "message": "Site updated successfully",
-            "site": updated_site.to_dict(),
-        }), 200
-    except ValueError as ve:
-        current_app.logger.warning(f"Validation error updating site: {str(ve)}")
-        return jsonify({"error": str(ve)}), 400
-    except IntegrityError as ie:
-        current_app.logger.error(f"Integrity error updating site: {str(ie)}")
-        return jsonify({"error": "Database integrity error"}), 409
-    except Exception as e:
-        current_app.logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({"error": "An unexpected error occurred"}), 500
-
 # Settings Operations
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required()

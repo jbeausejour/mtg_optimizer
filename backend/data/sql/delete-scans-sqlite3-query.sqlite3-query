@@ -1,0 +1,8 @@
+-- database: ../../instance/site_data.db
+
+BEGIN TRANSACTION;
+DELETE FROM scan_result;
+DELETE FROM scan;
+DELETE FROM sqlite_sequence WHERE name='scan_result';
+DELETE FROM sqlite_sequence WHERE name='scan';
+COMMIT;

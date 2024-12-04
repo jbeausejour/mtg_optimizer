@@ -226,51 +226,24 @@ class CardService:
             next_page = data.get('next_page')
 
         return all_printings
-
-    # Marketplace Site Operations
+    
     @staticmethod
-    def get_all_sites():
-        return Site.query.all()
-
-    @staticmethod
-    def add_site(data):
-        new_site = Site(**data)
-        db.session.add(new_site)
-        db.session.commit()
-        return new_site
-
-    @staticmethod
-    def update_site(site_id, data):
-        site = Site.query.get(site_id)
-        if not site:
-            raise ValueError("Site not found")
-
-        changes_made = False
-        for key, value in data.items():
-            if hasattr(site, key) and getattr(site, key) != value:
-                setattr(site, key, value)
-                changes_made = True
-
-        if changes_made:
-            try:
-                db.session.commit()
-            except IntegrityError:
-                db.session.rollback()
-                raise ValueError("Update failed due to integrity constraint")
-        else:
-            raise ValueError("No changes detected")
-
-        return site
-
-    # Scan Operations
-    @staticmethod
-    def get_scan_results(scan_id):
-        return Scan.query.get_or_404(scan_id)
-
-    @staticmethod
-    def get_all_scan_results(limit=5):
-        return Scan.query.order_by(Scan.created_at.desc()).limit(limit).all()
-
+    def get_card_suggestions(query, limit=20):
+        scryfall_api_url = f"{SCRYFALL_API_BASE}/catalog/card-names"
+        try:
+            response = requests.get(scryfall_api_url)
+            response.raise_for_status()
+            all_card_names = response.json()["data"]
+            # Filter card names based on the query
+            suggestions = [
+                name for name in all_card_names if query.lower() in name.lower()
+            ]
+            return suggestions[:limit]  # Return only up to the limit
+        except requests.RequestException as e:
+            logger.error(
+                "Error fetching card suggestions from Scryfall: %s", str(e))
+            return []
+    
     # Settings Operations
     @staticmethod
     def get_setting(key):

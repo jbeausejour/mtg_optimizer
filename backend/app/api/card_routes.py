@@ -1,6 +1,8 @@
 import logging
 from flask import Blueprint, jsonify, request, current_app
 from app.services.card_service import CardService
+from app.services.scan_service import ScanService
+from app.services.site_service import SiteService
 from app.tasks.optimization_tasks import start_scraping_task
 from app.tasks.optimization_tasks import celery_app
 from celery.result import AsyncResult
@@ -11,9 +13,12 @@ logger = logging.getLogger(__name__)
 # Defining Blueprint for Card Routes
 card_routes = Blueprint("card_routes", __name__)
 
-# Buylist Operations
+# Card Operations
 @card_routes.route("/cards", methods=["GET"])
 def get_cards():
+    """
+    Get all the cards in the user's buylist.
+    """
     try:
         cards = CardService.get_user_buylist_cards()
         return jsonify([card.to_dict() for card in cards])
@@ -41,7 +46,6 @@ def update_card(card_id):
         current_app.logger.error(f"Error updating card: {str(e)}")
         return jsonify({"error": "Failed to update card"}), 500
 
-    
 @card_routes.route("/cards", methods=["POST"])
 def save_card():
     """
@@ -102,12 +106,17 @@ def fetch_card():
 
     return jsonify(card_data)
  
-# Optimization Operations (Merged from optimization_routes)
+@card_routes.route("/card_suggestions", methods=["GET"])
+def get_card_suggestions():
+    query = request.args.get("query", "")
+    suggestions = CardService.get_card_suggestions(query)
+    return jsonify(suggestions)
+
+# Task Operations
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
     try:
         task = AsyncResult(task_id, app=celery_app)
-        logger.info(f"Task {task_id} task: {task}")  
         
         if task.state == 'PENDING':
             response = {
@@ -133,6 +142,7 @@ def task_status(task_id):
                 'progress': task.info.get('progress', 0)
             }
         
+        logger.info(f"Task {task_id} response: {response}")  
         return jsonify(response), 200
         
     except Exception as e:
@@ -143,6 +153,7 @@ def task_status(task_id):
             'error': str(e)
         }), 500
 
+# Optimization Operations
 @card_routes.route("/start_scraping", methods=["POST"])
 def start_scraping():
     """Starts the scraping task."""
@@ -174,21 +185,59 @@ def get_sets():
         return jsonify({"error": "Failed to fetch sets"}), 500
 
 # Scan Operations
-@card_routes.route("/scans/<int:scan_id>", methods=["GET"])
+@card_routes.route("/results/<int:scan_id>", methods=["GET"])
 def get_scan_results(scan_id):
     try:
-        scan = CardService.get_scan_results(scan_id)
+        scan = ScanService.get_scan_results(scan_id)
+        if not scan:
+            return jsonify({"error": "Scan not found"}), 404
+            
         return jsonify(scan.to_dict())
     except Exception as e:
         current_app.logger.error(f"Error fetching scan results: {str(e)}")
         return jsonify({"error": "Failed to fetch scan results"}), 500
 
-@card_routes.route("/scans", methods=["GET"])
+@card_routes.route("/results", methods=["GET"])
 def get_all_scans():
     limit = request.args.get("limit", 5, type=int)
     try:
-        scans = CardService.get_all_scan_results(limit)
+        scans = ScanService.get_all_scan_results(limit)
         return jsonify([scan.to_dict() for scan in scans])
     except Exception as e:
         current_app.logger.error(f"Error fetching scans: {str(e)}")
         return jsonify({"error": "Failed to fetch scans"}), 500
+
+# Site Operations
+@card_routes.route("/sites", methods=["GET"])
+def get_sites():
+    sites = SiteService.get_all_sites()
+    return jsonify([site.to_dict() for site in sites])
+
+@card_routes.route("/sites", methods=["POST"])
+def add_site():
+    try:
+        data = request.json
+        new_site = SiteService.add_site(data)
+        return jsonify(new_site.to_dict()), 201
+    except Exception as e:
+        current_app.logger.error(f"Error adding site: {str(e)}")
+        return jsonify({"error": "Failed to add site"}), 500
+
+@card_routes.route("/sites/<int:site_id>", methods=["PUT"])
+def update_site(site_id):
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        updated_site = SiteService.update_site(site_id, data)
+        return jsonify({
+            "message": "Site updated successfully",
+            "site": updated_site.to_dict(),
+        }), 200
+    except ValueError as ve:
+        current_app.logger.warning(f"Validation error updating site: {str(ve)}")
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Unexpected error: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500

@@ -43,3 +43,11 @@ npm start
 
 #SQL
 SELECT sql FROM sqlite_master WHERE type='table' AND name='scan_result';
+
+BEGIN TRANSACTION;
+DELETE FROM scan_result;
+DELETE FROM scan;
+DELETE FROM sqlite_sequence WHERE name='scan_result';
+DELETE FROM sqlite_sequence WHERE name='scan';
+COMMIT;
+
