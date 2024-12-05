@@ -24,9 +24,7 @@ class OptimizationResult(db.Model):
             'message': self.message,
             'sites_scraped': self.sites_scraped,
             'cards_scraped': self.cards_scraped,
-            'optimization': {
-                'solutions': self.solutions,
-                'errors': self.errors
-            },
+            'solutions': self.solutions,  # Remove the unnecessary nesting
+            'errors': self.errors,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

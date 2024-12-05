@@ -203,7 +203,12 @@ def get_all_scans():
     limit = request.args.get("limit", 5, type=int)
     try:
         scans = ScanService.get_all_scan_results(limit)
-        return jsonify([scan.to_dict() for scan in scans])
+        return jsonify([{
+            'id': scan.id,
+            'created_at': scan.created_at.isoformat(),
+            'cards_scraped': len(scan.scan_results) if scan.scan_results else 0,
+            'sites_scraped': len(set(r.site_id for r in scan.scan_results)) if scan.scan_results else 0
+        } for scan in scans])
     except Exception as e:
         current_app.logger.error(f"Error fetching scans: {str(e)}")
         return jsonify({"error": "Failed to fetch scans"}), 500
@@ -268,28 +273,54 @@ def get_optimization_results():
     
     response = []
     for scan, opt_result in results:
-        scan_dict = {
-            'id': scan.id,
-            'created_at': scan.created_at.isoformat(),
-            'optimization': opt_result.to_dict() if opt_result else None
-        }
-        response.append(scan_dict)
+        if opt_result:  # Only include results that have optimization data
+            response.append({
+                'id': scan.id,
+                'created_at': opt_result.created_at.isoformat(),
+                'solutions': opt_result.solutions,
+                'status': opt_result.status,
+                'message': opt_result.message,
+                'sites_scraped': opt_result.sites_scraped,
+                'cards_scraped': opt_result.cards_scraped,
+                'errors': opt_result.errors
+            })
     
     return jsonify(response)
 
+# Fix duplicate function name
 @card_routes.route('/results/<int:scan_id>', methods=['GET'])
-def get_scan_result(scan_id):
-    """Get specific scan result with its optimization results"""
-    scan = ScanService.get_scan_by_id(scan_id)
-    if not scan:
-        return jsonify({'error': 'Scan not found'}), 404
-        
-    opt_result = ScanService.get_latest_optimization_result(scan_id)
+def get_scan_optimization_result(scan_id):
+    """Get optimization results for a specific scan"""    
+    opt_results = OptimizationService.get_optimization_results_by_scan(scan_id)
+    if not opt_results or len(opt_results) == 0:
+        return jsonify({'error': 'No optimization results found'}), 404
+    
+    opt_result = opt_results[0]  # Get the first/latest result
     
     response = {
-        'id': scan.id,
-        'created_at': scan.created_at.isoformat(),
-        'optimization': opt_result.to_dict() if opt_result else None
+        'id': scan_id,
+        'created_at': opt_result.created_at.isoformat(),
+        'solutions': opt_result.solutions,
+        'status': opt_result.status,
+        'message': opt_result.message,
+        'sites_scraped': opt_result.sites_scraped,
+        'cards_scraped': opt_result.cards_scraped,
+        'errors': opt_result.errors
+    }
+    
+    return jsonify(response)
+
+@card_routes.route('/results/latest', methods=['GET'])
+def get_latest_optimization_results():
+        
+    opt_result = OptimizationService.get_latest_optimization()
+    if not opt_result:
+        return jsonify({'error': 'No optimization results found'}), 404
+    
+    response = {
+        'id': opt_result.scan_id,
+        'created_at': opt_result.created_at.isoformat(),
+        'optimization': opt_result.to_dict()
     }
     
     return jsonify(response)

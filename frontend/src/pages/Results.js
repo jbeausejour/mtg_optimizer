@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Table, Spin, Card, Tag, Typography, Button } from 'antd';
+import { Table, Spin, Card, Tag, Typography, Button, Space } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
-import { OptimizationSummary } from '../components/OptimizationDisplay';
+import { OptimizationSummary } from '../components/OptimizationDisplay';  // Changed from OptimizationSummary
 import api from '../utils/api';
 
 const { Title } = Typography;
@@ -21,6 +21,7 @@ const Results = () => {
   const fetchScans = async () => {
     try {
       const response = await api.get('/results');
+      console.log('Optimization results:', response.data);
       setScans(response.data);
     } catch (error) {
       console.error('Error fetching optmization results:', error);
@@ -45,7 +46,7 @@ const Results = () => {
       title: 'Best Solution',
       key: 'best_solution',
       render: (_, record) => {
-        const solution = record.optimization?.optimization?.solutions?.[0];
+        const solution = record.solutions?.[0];
         if (!solution) return 'No solution found';
         
         return (
@@ -59,16 +60,32 @@ const Results = () => {
       title: 'Status',
       key: 'status',
       render: (_, record) => {
-        const solution = record.optimization?.optimization?.solutions?.[0];
+        const solution = record.solutions?.[0];
         if (!solution) return <Tag color="red">Failed</Tag>;
         
         const completeness = solution.nbr_card_in_solution === (solution.total_qty || solution.nbr_card_in_solution);
         const percentage = ((solution.nbr_card_in_solution / (solution.total_qty || solution.nbr_card_in_solution)) * 100).toFixed(2);
         
+        let color = 'green';
+        let status = 'COMPLETE';
+
+        if (record.status === 'failed') {
+          color = 'red';
+          status = 'FAILED';
+        } else if (!completeness) {
+          color = 'orange';
+          status = `${percentage}% (${solution.nbr_card_in_solution}/${solution.total_qty || solution.nbr_card_in_solution})`;
+        }
+        
         return (
-          <Tag color={completeness ? 'green' : 'orange'}>
-            {completeness ? 'COMPLETE' : `${percentage}%`}
-          </Tag>
+          <Space>
+            <Tag color={color}>{status}</Tag>
+            {record.message && (
+              <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                {record.message}
+              </Typography.Text>
+            )}
+          </Space>
         );
       },
     }
@@ -86,7 +103,7 @@ const Results = () => {
               ← Back to History
             </Button>
           </div>
-          <OptimizationSummary result={selectedOptimizationResult.optimization?.optimization} />
+          <OptimizationSummary result={selectedOptimizationResult} />  {/* Changed component and simplified props */}
         </>
       ) : (
         <Card>

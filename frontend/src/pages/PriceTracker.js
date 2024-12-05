@@ -10,10 +10,17 @@ const PriceTracker = () => {
   const [loading, setLoading] = useState(true);
   const [selectedScan, setSelectedScan] = useState(null);
   const { theme } = useTheme();
+  const [selectedScanDetails, setSelectedScanDetails] = useState(null);
 
   useEffect(() => {
     fetchScans();
   }, []);
+
+  useEffect(() => {
+    if (selectedScan) {
+      fetchScanDetails(selectedScan.id);
+    }
+  }, [selectedScan]);
 
   const fetchScans = async () => {
     try {
@@ -23,6 +30,16 @@ const PriceTracker = () => {
       console.error('Error fetching scans:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchScanDetails = async (scanId) => {
+    try {
+      const response = await api.get(`/scans/${scanId}`);
+      console.log('Scan details:', response.data);
+      setSelectedScanDetails(response.data);
+    } catch (error) {
+      console.error('Error fetching scan details:', error);
     }
   };
 
@@ -245,7 +262,7 @@ const PriceTracker = () => {
           </Button>
           <Card>
             <Table
-              dataSource={selectedScan.scan_results}
+              dataSource={selectedScanDetails?.scan_results || []}
               columns={getColumnFilters}
               rowKey="id"
             />

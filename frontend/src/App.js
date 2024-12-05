@@ -12,7 +12,6 @@ import Results from './pages/Results';
 import PriceTracker from './pages/PriceTracker';
 import Settings from './pages/Settings';
 import ProtectedRoute from './components/ProtectedRoute';
-import ScanResult from './components/ScanResult';
 
 // Custom Hook to conditionally render navigation based on route
 const Layout = ({ children }) => {
@@ -43,7 +42,7 @@ function App() {
               <Route path="/site-management" element={<SiteManagement />} />
               <Route path="/optimize" element={<Optimize />} />
               <Route path="/results" element={<Results />} />
-              <Route path="/results/:scanId" element={<ScanResult />} /> {/* Update this line */}
+              <Route path="/results/:scanId" element={<Results />} /> {/* Update this line */}
               <Route path="/price-tracker" element={<PriceTracker />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
