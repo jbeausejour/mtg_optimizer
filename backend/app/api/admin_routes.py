@@ -2,7 +2,7 @@ import logging
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import create_access_token, jwt_required
 from sqlalchemy.exc import IntegrityError
-from app.services.card_service import CardService
+from app.services.admin_service import AdminService
 from app.models.user import User
 from app.utils.create_user import create_user
 from app.utils.load_initial_data import load_all_data, truncate_tables
@@ -17,7 +17,7 @@ admin_routes = Blueprint("admin_routes", __name__)
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required()
 def get_settings():
-    settings = CardService.get_all_settings()
+    settings = AdminService.get_all_settings()
     return jsonify([setting.to_dict() for setting in settings])
 
 @admin_routes.route("/settings", methods=["POST"])
@@ -32,7 +32,7 @@ def update_settings():
         if not validate_setting_key(key) or not validate_setting_value(value):
             return jsonify({"error": f"Invalid setting key or value: {key}"}), 400
 
-        setting = CardService.update_setting(key, value)
+        setting = AdminService.update_setting(key, value)
         updated_settings.append(setting.to_dict())
         current_app.logger.info(f"Setting updated: {key}")
 

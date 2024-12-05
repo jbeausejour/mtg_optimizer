@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Image, List, Space, Divider, Tag, Typography } from 'antd';
+import { Card, Row, Col, Image, List, Space, Divider, Tag, Typography, message } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
+import api from '../../utils/api';  // Add this import
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -99,119 +100,197 @@ const LegalityTag = ({ format, legality }) => {
 };
 
 //Displays detailed information of a card from Scryfall API. (Result of user clicking on a card)
-const ScryfallCard = ({ data, onPrintingSelect }) => {
-  const [selectedPrinting, setSelectedPrinting] = useState(null); // Track selected printing
-  const [hoveredPrinting, setHoveredPrinting] = useState(null); // Track hovered printing
-  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
+const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
+  console.group('ScryfallCard Component');
+  console.log('Component mounted with props:', { 
+    hasData: Boolean(data), 
+    dataKeys: data ? Object.keys(data) : [],
+    name: data?.name,
+    printingsCount: data?.all_printings?.length 
+  });
 
-  // Initialize the selected printing when data changes
+  if (!data || !data.name) {
+    console.error('Invalid card data received:', data);
+    console.groupEnd();
+    return <div>Error: Invalid card data received</div>;
+  }
+
+  const [availablePrints, setAvailablePrints] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedPrinting, setSelectedPrinting] = useState(null);
+  const [hoveredPrinting, setHoveredPrinting] = useState(null);
+
+  // Add component state logging
   useEffect(() => {
-    if (data && data.all_printings) {
-      setSelectedPrinting(data.all_printings[0]); // Default to the first printing
-    }
+    console.log('Component State:', {
+      availablePrintsCount: availablePrints.length,
+      isLoading,
+      selectedPrinting: selectedPrinting?.name
+    });
+  }, [availablePrints, isLoading, selectedPrinting]);
+
+  // Fetch all printings when component mounts or data changes
+  useEffect(() => {
+    const fetchPrints = async () => {
+      console.group('Prints Fetching');
+      if (!data?.name) {
+        console.warn('No card name available');
+        console.groupEnd();
+        return;
+      }
+      
+      try {
+        // All printings should already be in the data from backend
+        if (data.all_printings && Array.isArray(data.all_printings)) {
+          console.log('3. Using provided printings:', data.all_printings);
+          const prints = data.all_printings.filter(print => !print.digital);
+          console.log('4. Filtered prints:', prints);
+          setAvailablePrints(prints);
+          setSelectedPrinting(prints.find(p => p.id === data.id) || prints[0]);
+        } else {
+          console.warn('5. No printings found in data, falling back to API');
+          // Fallback to fetching from backend
+          const response = await api.get('/fetch_card', {
+            params: {
+              name: data.name,
+              include_prints: true
+            }
+          });
+          if (response.data.scryfall?.all_printings) {
+            const prints = response.data.scryfall.all_printings;
+            setAvailablePrints(prints);
+            setSelectedPrinting(prints.find(p => p.id === data.id) || prints[0]);
+          }
+        }
+      } catch (error) {
+        console.error('6. Error processing prints:', error);
+        message.error('Failed to load card printings');
+      }
+      console.groupEnd();
+    };
+
+    fetchPrints();
+    return () => {
+      console.log('7. ScryfallCard unmounting');
+    };
   }, [data]);
+
+  // Log when prints or selection changes
+  useEffect(() => {
+    console.log('8. Available prints updated:', availablePrints);
+    console.log('9. Selected printing:', selectedPrinting);
+  }, [availablePrints, selectedPrinting]);
+
+  const handleSetChange = async (print) => {
+    setIsLoading(true);
+    try {
+      setSelectedPrinting(print);
+      if (onSetClick) onSetClick(print.set);
+      if (onPrintingSelect) onPrintingSelect(print);
+    } catch (error) {
+      message.error('Failed to update card printing');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle hover effect for card image
+  const handleHover = (e) => {
+    e.target.style.transform = 'scale(1.1)';
+    e.target.style.transition = 'transform 0.3s ease';
+  };
+
+  const handleMouseOut = (e) => {
+    e.target.style.transform = 'scale(1)';
+  };
+
+  // Add new styles
+  const printingItemStyle = {
+    display: 'inline-block',
+    margin: '0 8px 8px 0',
+    padding: '4px 8px',
+    border: '1px solid #d9d9d9',
+    borderRadius: '4px',
+    cursor: isEditable ? 'pointer' : 'default',
+    transition: 'all 0.3s',
+    opacity: isEditable ? 1 : 0.7,
+  };
+
+  const selectedPrintingStyle = {
+    ...printingItemStyle,
+    backgroundColor: '#f0f0f0',
+    borderColor: '#1890ff'
+  };
+
+  const handlePrintClick = (print) => {
+    setSelectedPrinting(print); // Always update the selected printing
+    if (isEditable) { // Only trigger save actions if in edit mode
+      handleSetChange(print);
+    }
+  };
 
   if (!data) return <div>No card data available</div>;
 
-  const allPrintings = data.all_printings || [];
-  
-  const handleMouseEnter = (item, e) => {
-    setHoveredPrinting(item);
-    setHoverPosition({ x: e.clientX + 20, y: e.clientY + 20 }); // Slight offset to avoid overlapping with the cursor
-  };
-
-  const handleMouseLeave = () => {
-    setHoveredPrinting(null);
-  };
-
-  const handleMouseMove = (e) => {
-    if (hoveredPrinting) {
-      setHoverPosition({ x: e.clientX + 20, y: e.clientY + 20 });
-    }
-  };
-
-  const handlePrintingSelect = (printing) => {
-    setSelectedPrinting(printing);
-    if (onPrintingSelect) {
-      onPrintingSelect(printing); // Call parent handler if provided
-    }
-  };
-
+  console.log('Rendering card display');
   return (
-    <Card className="scryfall-card">
+    <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
+      {console.log('Card render started')}
       <Row gutter={16}>
         <Col span={8}>
-          {/* Display the card image, either hovered printing or the default image */}
-          {hoveredPrinting?.image_uris?.normal ? (
-            <Image src={hoveredPrinting.image_uris.normal} alt={hoveredPrinting.name} />
-          ) : selectedPrinting?.image_uris?.normal ? (
-            <Image src={selectedPrinting.image_uris.normal} alt={selectedPrinting.name} />
-          ) : data.image_uris?.normal ? (
-            <Image src={data.image_uris.normal} alt={data.name} />
+          {isLoading ? (
+            <div>Loading...</div>
           ) : (
-            <div>No image available</div>
-          )}
-          <Divider />
-          <Space direction="vertical" size="small">
-            <Text><strong>Mana Value:</strong> {data.cmc || 'N/A'}</Text>
-            <Text><strong>Types:</strong> {data.type_line || 'N/A'}</Text>
-            <Text><strong>Rarity:</strong> {data.rarity || 'N/A'}</Text>
-            <Text>
-              <strong>Expansion:</strong>
-              {data.set ? (
-                <>
-                  <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name || 'N/A'}
-                </>
-              ) : 'N/A'}
-            </Text>
-            <Text><strong>Card Number:</strong> {data.collector_number || 'N/A'}</Text>
-            <Text><strong>Artist:</strong> {data.artist || 'N/A'}</Text>
-          </Space>
-          <Divider />
-          <Title level={5}>All Printings</Title>
-          <List
-            dataSource={allPrintings}
-            renderItem={(item) => (
-              <List.Item
-                onMouseEnter={(e) => handleMouseEnter(item, e)}
-                onMouseMove={handleMouseMove}
-                onMouseLeave={handleMouseLeave}
-                onClick={() => {
-                  if (typeof onPrintingSelect === 'function') {
-                    console.log('onPrintingSelect called with:', item); // Log only when the function exists and is called
-                    onPrintingSelect(item); // Call only if defined
-                  } else if (!onPrintingSelect && process.env.NODE_ENV === 'development') {
-                    console.warn('onPrintingSelect is not defined'); // Log warning only in development mode
-                  }
-                }}
-              >
-                <SetSymbol setCode={item.set} rarity={item.rarity} />
-                {item.set_code} {formatSetCode(item.set)} - ${item.prices?.usd || 'N/A'}
-              </List.Item>
-            )}
-          />
-          {/* Hover Image Preview */}
-          {hoveredPrinting && hoveredPrinting.image_uris && (
-            <div
-              style={{
-                position: 'fixed',
-                top: hoverPosition.y,
-                left: hoverPosition.x,
-                zIndex: 1000,
-                backgroundColor: 'white',
-                border: '1px solid #ccc',
-                padding: '5px',
-              }}
-            >
-              <Image
-                src={hoveredPrinting.image_uris.normal}
-                alt={hoveredPrinting.name}
-                width={150}
+            <>
+              <Image 
+                src={(hoveredPrinting || selectedPrinting)?.image_uris?.normal || data.image_uris?.normal} 
+                alt={data.name}
+                onMouseEnter={handleHover}
+                onMouseLeave={handleMouseOut}
+                style={{ transition: "transform 0.3s", borderRadius: "8px" }}
               />
-            </div>
+              <Divider />
+              <Space direction="vertical" size="small">
+                <Text><strong>Mana Value:</strong> {data.cmc || 'N/A'}</Text>
+                <Text><strong>Types:</strong> {data.type_line || 'N/A'}</Text>
+                <Text><strong>Rarity:</strong> {data.rarity || 'N/A'}</Text>
+                <Text>
+                  <strong>Expansion:</strong>
+                  {data.set ? (
+                    <>
+                      <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name || 'N/A'}
+                    </>
+                  ) : 'N/A'}
+                </Text>
+                <Text><strong>Card Number:</strong> {data.collector_number || 'N/A'}</Text>
+                <Text><strong>Artist:</strong> {data.artist || 'N/A'}</Text>
+              </Space>
+            </>
           )}
+          <Divider orientation="left">Available Printings</Divider>
+          <div style={{ marginBottom: '16px' }}>
+            {availablePrints.map(print => (
+              <div
+                key={`${print.set}-${print.collector_number}`}
+                style={selectedPrinting?.id === print.id ? selectedPrintingStyle : printingItemStyle}
+                onClick={() => handlePrintClick(print)}
+                onMouseEnter={() => setHoveredPrinting(print)} // Allow hover in both modes
+                onMouseLeave={() => setHoveredPrinting(null)} // Allow hover in both modes
+              >
+                <Space>
+                  <SetSymbol setCode={print.set} rarity={print.rarity} />
+                  <span>{print.set.toUpperCase()}</span>
+                  {print.prices?.usd && <span>${print.prices.usd}</span>}
+                </Space>
+              </div>
+            ))}
+          </div>
           <Divider />
           <Space direction="vertical">
+            {data.scryfall_uri && (
+              <a href={data.scryfall_uri} target="_blank" rel="noopener noreferrer">
+                <LinkOutlined /> View on Scryfall
+              </a>
+            )}
             {data.multiverse_ids?.[0] && (
               <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
                 <LinkOutlined /> View on Gatherer
@@ -231,15 +310,18 @@ const ScryfallCard = ({ data, onPrintingSelect }) => {
               )}
             </span>
           </Title>
-          <Text strong>{data.set_name ? `${data.set_name} (${data.set?.toUpperCase()})` : 'N/A'}</Text>
+          <Text strong>
+            {(selectedPrinting || data).set_name} ({(selectedPrinting || data).set?.toUpperCase() || 'N/A'})
+          </Text>
           <Divider />
           <Text>{data.type_line || 'N/A'}</Text>
           {data.oracle_text && formatOracleText(data.oracle_text)}
           {data.flavor_text && <Text italic>{data.flavor_text}</Text>}
           <Text>{data.power && data.toughness ? `${data.power}/${data.toughness}` : ''}</Text>
           <Divider />
+          <Title level={4}>Format Legality</Title>
           <Row gutter={[8, 8]}>
-            {data.legalities && Object.entries(data.legalities).map(([format, legality]) => (
+            {Object.entries(data.legalities || {}).map(([format, legality]) => (
               <Col key={format}>
                 <LegalityTag format={format} legality={legality} />
               </Col>
@@ -247,8 +329,9 @@ const ScryfallCard = ({ data, onPrintingSelect }) => {
           </Row>
         </Col>
       </Row>
+      {console.log('Card render completed')}
     </Card>
   );
 };
 
-export default ScryfallCard;
+export default React.memo(ScryfallCard); // Add memoization to prevent unnecessary rerenders

@@ -1,7 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
-import { Card, Modal, Descriptions, Tag, Spin } from 'antd';
+import { Card, Modal, Descriptions, Tag, Spin, Typography } from 'antd';  // Added Typography import
 import api from '../utils/api';
+
+const { Text } = Typography;  // Add destructuring for Text component
 
 const CardDetail = ({ cardName, setName, language, version, foil, isModalVisible, onClose }) => {
   const [cardData, setCardData] = useState(null);
@@ -69,14 +70,36 @@ const CardDetail = ({ cardName, setName, language, version, foil, isModalVisible
               <>
                 <h3>Card Details</h3>
                 <Descriptions column={1}>
-                  <Descriptions.Item label="Type">{cardData.scryfall.type_line}</Descriptions.Item>
+                  {cardData.scryfall.mana_cost && (
+                    <Descriptions.Item label="Mana Cost">{cardData.scryfall.mana_cost}</Descriptions.Item>
+                  )}
+                  {cardData.scryfall.type_line && (
+                    <Descriptions.Item label="Type">{cardData.scryfall.type_line}</Descriptions.Item>
+                  )}
                   {cardData.scryfall.oracle_text && (
                     <Descriptions.Item label="Text">{cardData.scryfall.oracle_text}</Descriptions.Item>
                   )}
                   {cardData.scryfall.flavor_text && (
                     <Descriptions.Item label="Flavor">{cardData.scryfall.flavor_text}</Descriptions.Item>
                   )}
+                  {(cardData.scryfall.power || cardData.scryfall.toughness) && (
+                    <Descriptions.Item label="P/T">{`${cardData.scryfall.power || '-'}/${cardData.scryfall.toughness || '-'}`}</Descriptions.Item>
+                  )}
+                  {cardData.scryfall.loyalty && (
+                    <Descriptions.Item label="Loyalty">{cardData.scryfall.loyalty}</Descriptions.Item>
+                  )}
+                  {cardData.scryfall.rarity && (
+                    <Descriptions.Item label="Rarity">{cardData.scryfall.rarity}</Descriptions.Item>
+                  )}
                 </Descriptions>
+
+                {cardData.scan_timestamp && (
+                  <div style={{ marginTop: '16px' }}>
+                    <Text type="secondary">
+                      Last scanned: {new Date(cardData.scan_timestamp).toLocaleString()}
+                    </Text>
+                  </div>
+                )}
               </>
             )}
           </div>

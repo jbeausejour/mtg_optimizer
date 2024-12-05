@@ -4,6 +4,7 @@ import { Card, Row, Col, List, Button, Typography, Statistic, Space, Badge, Tag 
 import { ScanOutlined, ShoppingOutlined, FieldTimeOutlined, DollarOutlined, ShopOutlined } from '@ant-design/icons';
 import api from '../utils/api';
 import { useTheme } from '../utils/ThemeContext';
+import CardDetail from '../components/CardDetail';
 
 const { Title } = Typography;
 
@@ -13,6 +14,8 @@ const Dashboard = () => {
   const [latestScans, setLatestScans] = useState([]);
   const [latestOptimizations, setLatestOptimizations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
   const navigate = useNavigate();
   const { theme } = useTheme();
 
@@ -59,7 +62,12 @@ const Dashboard = () => {
     fetchData();
   }, []);
 
-  const handleCardClick = (path) => {
+  const handleCardClick = (card) => {
+    setSelectedCard(card);
+    setCardDetailVisible(true);
+  };
+
+  const handleNavigation = (path) => {
     navigate(path);
   };
 
@@ -125,7 +133,14 @@ const Dashboard = () => {
         <Card 
           hoverable 
           style={{ width: '100%' }}
-          onClick={() => navigate(`/results/${optimization.id}`)}
+          onClick={(e) => {
+            if (e.target.tagName.toLowerCase() === 'a') {
+              // Don't navigate if clicking card name
+              e.stopPropagation();
+              return;
+            }
+            navigate(`/results/${optimization.id}`);
+          }}
         >
           <Space align="start">
             <Badge 
@@ -188,7 +203,7 @@ const Dashboard = () => {
           <Card 
             title="Total Sites" 
             bordered={false}
-            onClick={() => handleCardClick('/site-management')}
+            onClick={() => handleNavigation('/site-management')}
             style={{ cursor: 'pointer' }}
           >
             {totalSites}
@@ -198,7 +213,7 @@ const Dashboard = () => {
           <Card 
             title="Total Cards" 
             bordered={false}
-            onClick={() => handleCardClick('/card-management')}
+            onClick={() => handleNavigation('/card-management')}
             style={{ cursor: 'pointer' }}
           >
             {totalCards}
@@ -246,6 +261,17 @@ const Dashboard = () => {
           </Card>
         </Col>
       </Row>
+      {selectedCard && (
+        <CardDetail
+          cardName={selectedCard.name}
+          setName={selectedCard.set_name}
+          language={selectedCard.language}
+          version={selectedCard.version}
+          foil={selectedCard.foil}
+          isModalVisible={cardDetailVisible}
+          onClose={() => setCardDetailVisible(false)}
+        />
+      )}
     </div>
   );
 };

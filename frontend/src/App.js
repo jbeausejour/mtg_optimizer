@@ -21,7 +21,9 @@ const Layout = ({ children }) => {
   return (
     <div className="app-container">
       {showNavbar && <Navigation />}
-      <div className="content-container">
+      <div className="content-container" style={{ 
+        marginTop: showNavbar ? '60px' : '0' // Adjust this value based on your navigation height
+      }}>
         {children}
       </div>
     </div>

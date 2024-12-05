@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Table, Spin, Card, Tag, Typography, Button, Space } from 'antd';
+import { Table, Spin, Card, Tag, Typography, Button, Space, Modal, message } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
-import { OptimizationSummary } from '../components/OptimizationDisplay';  // Changed from OptimizationSummary
+import { OptimizationSummary } from '../components/OptimizationDisplay';
 import api from '../utils/api';
+import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title } = Typography;
 
@@ -13,6 +14,11 @@ const Results = () => {
   const [selectedOptimizationResult, setSelectedOptimizationResult] = useState(null);
   const { theme } = useTheme();
   const navigate = useNavigate();
+  const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [cardData, setCardData] = useState(null);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     fetchScans();
@@ -28,6 +34,39 @@ const Results = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCardClick = async (record) => {
+    setSelectedCard(record);
+    setIsLoading(true);
+    try {
+      const response = await api.get('/fetch_card', {
+        params: {
+          name: record.name,
+          set: record.set || record.set_code,
+          language: record.language,
+          version: record.version
+        }
+      });
+
+      if (!response.data?.scryfall) {
+        throw new Error('Invalid data structure received from backend');
+      }
+
+      setCardData(response.data.scryfall);
+      setIsModalVisible(true);
+    } catch (error) {
+      console.error('Error fetching card:', error);
+      message.error(`Failed to fetch card details: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleModalClose = () => {
+    setIsModalVisible(false);
+    setSelectedCard(null);
+    setCardData(null);
   };
 
   const columns = [
@@ -103,7 +142,10 @@ const Results = () => {
               ← Back to History
             </Button>
           </div>
-          <OptimizationSummary result={selectedOptimizationResult} />  {/* Changed component and simplified props */}
+          <OptimizationSummary 
+            result={selectedOptimizationResult} 
+            onCardClick={handleCardClick}
+          />
         </>
       ) : (
         <Card>
@@ -118,6 +160,33 @@ const Results = () => {
           />
         </Card>
       )}
+      <Modal
+        title={selectedCard?.name}
+        open={isModalVisible}
+        onCancel={handleModalClose}
+        width={800}
+        destroyOnClose={true}
+        footer={[
+          <Button key="close" onClick={handleModalClose}>
+            Close
+          </Button>
+        ]}
+      >
+        {isLoading ? (
+          <Spin size="large" />
+        ) : cardData ? (
+          <ScryfallCardView 
+            key={`${selectedCard?.id}-${cardData.id}`}
+            cardData={cardData}
+            mode="view"
+          />
+        ) : (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Spin />
+            <p>Loading card details...</p>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

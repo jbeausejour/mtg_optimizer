@@ -29,23 +29,22 @@ def get_cards():
 
 @card_routes.route("/cards/<int:card_id>", methods=["PUT"])
 def update_card(card_id):
-    """
-    Update a specific card in the user's buylist.
-    """
+    """Update a specific card in the user's buylist."""
     try:
         data = request.json
+        current_app.logger.info(f"Received update request for card {card_id}: {data}")
 
-        # Delegate update to CardManager
         updated_card = CardService.update_user_buylist_card(card_id, data)
         if not updated_card:
             return jsonify({"error": "Card not found in user's buylist"}), 404
 
-        # Return the updated card with all fields
-        return jsonify(updated_card.to_dict()), 200
+        result = updated_card.to_dict()
+        current_app.logger.info(f"Successfully updated card: {result}")
+        return jsonify(result), 200
 
     except Exception as e:
         current_app.logger.error(f"Error updating card: {str(e)}")
-        return jsonify({"error": "Failed to update card"}), 500
+        return jsonify({"error": f"Failed to update card: {str(e)}"}), 500
 
 @card_routes.route("/cards", methods=["POST"])
 def save_card():
@@ -84,11 +83,14 @@ def fetch_card():
     language = request.args.get("language")
     version = request.args.get('version')
 
+    current_app.logger.info(f"Fetching card with params: name={card_name}, set={set_code}, lang={language}, ver={version}")
+
     if not card_name:
         return jsonify({"error": "Card name is required"}), 400
 
     card_data = CardService.fetch_card_data(card_name, set_code, language, version)
     if card_data is None:
+        current_app.logger.warning(f"No data found for card: {card_name} (set: {set_code})")
         return jsonify({
             "scryfall": {
                 "name": None,
@@ -185,6 +187,22 @@ def get_sets():
         current_app.logger.error(f"Error fetching sets: {str(e)}")
         return jsonify({"error": "Failed to fetch sets"}), 500
 
+@card_routes.route("/save_set_selection", methods=["POST"])
+def save_set_selection():
+    """Save the selected set for a card"""
+    try:
+        data = request.json
+        set_code = data.get('set')
+        if not set_code:
+            return jsonify({"error": "Set code is required"}), 400
+        
+        # Store the selected set (you might want to save this to your database)
+        # For now, just return success
+        return jsonify({"message": f"Set {set_code} selected successfully"}), 200
+    except Exception as e:
+        current_app.logger.error(f"Error saving set selection: {str(e)}")
+        return jsonify({"error": "Failed to save set selection"}), 500
+
 # Scan Operations
 @card_routes.route("/scans/<int:scan_id>", methods=["GET"])
 def get_scan_results(scan_id):
@@ -249,20 +267,35 @@ def update_site(site_id):
     try:
         data = request.json
         if not data:
-            return jsonify({"error": "No data provided"}), 400
+            return jsonify({
+                "status": "warning",
+                "message": "No data provided for update"
+            }), 400
 
         updated_site = SiteService.update_site(site_id, data)
+        if not updated_site:
+            return jsonify({
+                "status": "info",
+                "message": "No changes were needed - site data is already up to date"
+            }), 200
+
         return jsonify({
+            "status": "success",
             "message": "Site updated successfully",
             "site": updated_site.to_dict(),
         }), 200
+
     except ValueError as ve:
-        current_app.logger.warning(f"Validation error updating site: {str(ve)}")
-        return jsonify({"error": str(ve)}), 400
+        return jsonify({
+            "status": "warning",
+            "message": str(ve)
+        }), 400
     except Exception as e:
         current_app.logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({"error": "An unexpected error occurred"}), 500
-
+        return jsonify({
+            "status": "error",
+            "message": "An unexpected error occurred while updating the site"
+        }), 500
 
 # Optimization Operations
 @card_routes.route('/results', methods=['GET'])

@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Table, Card, Typography, Tag, Button, Spin } from 'antd';
+import { Table, Card, Typography, Tag, Button, Spin, Modal, message } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import api from '../utils/api';
+import CardDetail from '../components/CardDetail';
+import { getStandardTableColumns } from '../utils/tableConfig';
+import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title } = Typography;
 
@@ -11,6 +14,11 @@ const PriceTracker = () => {
   const [selectedScan, setSelectedScan] = useState(null);
   const { theme } = useTheme();
   const [selectedScanDetails, setSelectedScanDetails] = useState(null);
+  const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [cardData, setCardData] = useState(null);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     fetchScans();
@@ -69,87 +77,14 @@ const PriceTracker = () => {
   };
 
   const columns = [
-    {
-      title: 'Card Name',
-      dataIndex: 'name',
-      key: 'name',
-      sorter: (a, b) => a.name.localeCompare(b.name),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <input
-            placeholder="Search card name"
-            value={selectedKeys[0] || ''}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Button 
-            onClick={() => {
-              confirm();
-            }} 
-            size="small" 
-            style={{ width: 90, marginRight: 8 }}
-          >
-            Filter
-          </Button>
-          <Button 
-            onClick={() => {
-              clearFilters();
-              confirm();
-            }} 
-            size="small" 
-            style={{ width: 90 }}
-          >
-            Reset
-          </Button>
-        </div>
-      ),
-      onFilter: (value, record) => 
-        record.name?.toLowerCase().includes(value.toLowerCase()),
-      filterIcon: filtered => (
-        <span style={{ color: filtered ? '#1890ff' : undefined }}>🔍</span>
-      ),
-    },
+    ...getStandardTableColumns((record) => {
+      handleCardClick(record);
+    }),
     {
       title: 'Site',
       dataIndex: 'site_name',
       key: 'site_name',
-      sorter: (a, b) => a.site_name.localeCompare(b.site_name),
-      onFilter: (value, record) => record.site_name === value,
-    },
-    {
-      title: 'Price',
-      dataIndex: 'price',
-      key: 'price',
-      render: (price) => `$${price.toFixed(2)}`,
-      sorter: (a, b) => a.price - b.price,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <input
-            placeholder="Min price"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ width: 100, marginRight: 8 }}
-          />
-          <Button onClick={confirm} size="small" style={{ marginRight: 8 }}>Filter</Button>
-          <Button onClick={clearFilters} size="small">Reset</Button>
-        </div>
-      ),
-      onFilter: (value, record) => record.price >= value,
-    },
-    {
-      title: 'Quality',
-      dataIndex: 'quality',
-      key: 'quality',
-      sorter: (a, b) => a.quality.localeCompare(b.quality),
-      filters: [
-        { text: 'NM', value: 'NM' },
-        { text: 'LP', value: 'LP' },
-        { text: 'MP', value: 'MP' },
-        { text: 'HP', value: 'HP' },
-      ],
-      onFilter: (value, record) => record.quality === value,
+      sorter: (a, b) => a.site_name?.localeCompare(b.site_name),
     },
     {
       title: 'Last Updated',
@@ -157,27 +92,6 @@ const PriceTracker = () => {
       key: 'updated_at',
       render: (text) => formatDate(text),
       sorter: (a, b) => new Date(a.updated_at) - new Date(b.updated_at),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <input
-            type="date"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>
-            Filter
-          </Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>
-            Reset
-          </Button>
-        </div>
-      ),
-      onFilter: (value, record) => {
-        if (!record.updated_at) return false;
-        const recordDate = new Date(record.updated_at).toISOString().split('T')[0];
-        return recordDate === value;
-      },
     }
   ];
 
@@ -250,6 +164,54 @@ const PriceTracker = () => {
     }
   ], [scans]);
 
+  const handleCardClick = async (record) => {
+    console.group('Card Click Flow');
+    console.log('1. Initial record data:', record);
+    setSelectedCard(record);
+    setIsLoading(true);
+    try {
+      // Add set_code if it exists in the record, fallback to deriving it from set_name
+      const deriveSetCode = (setName) => {
+        // This is a placeholder - you might want to implement proper set name to code mapping
+        // or fetch it from your backend/API
+        return setName?.toLowerCase().replace(/[^a-z0-9]/g, '');
+      };
+
+      const setCode = record.set_code || record.set || deriveSetCode(record.set_name);
+      console.log('2. Derived set code:', setCode);
+
+      const params = {
+        name: record.name,
+        set: setCode,
+        language: record.language || 'en',
+        version: record.version || 'Normal'
+      };
+      
+      console.log('3. Request params:', params);
+      const response = await api.get('/fetch_card', { params });
+
+      console.log('4. API response:', response.data);
+      if (!response.data?.scryfall) {
+        throw new Error('Invalid data structure received from backend');
+      }
+
+      setCardData(response.data.scryfall);
+      setIsModalVisible(true);
+    } catch (error) {
+      console.error('Error fetching card:', error);
+      message.error(`Failed to fetch card details: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+      console.groupEnd();
+    }
+  };
+
+  const handleModalClose = () => {
+    setIsModalVisible(false);
+    setSelectedCard(null);
+    setCardData(null);
+  };
+
   if (loading) return <Spin size="large" />;
 
   return (
@@ -281,6 +243,44 @@ const PriceTracker = () => {
           />
         </Card>
       )}
+      {selectedCard && (
+        <CardDetail
+          cardName={selectedCard.name}
+          setName={selectedCard.set_name}
+          language={selectedCard.language}
+          version={selectedCard.version}
+          foil={selectedCard.foil}
+          isModalVisible={cardDetailVisible}
+          onClose={() => setCardDetailVisible(false)}
+        />
+      )}
+      <Modal
+        title={selectedCard?.name}
+        open={isModalVisible}
+        onCancel={handleModalClose}
+        width={800}
+        destroyOnClose={true}
+        footer={[
+          <Button key="close" onClick={handleModalClose}>
+            Close
+          </Button>
+        ]}
+      >
+        {isLoading ? (
+          <Spin size="large" />
+        ) : cardData ? (
+          <ScryfallCardView 
+            key={`${selectedCard?.id}-${cardData.id}`}
+            cardData={cardData}
+            mode="view"
+          />
+        ) : (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Spin />
+            <p>Loading card details...</p>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

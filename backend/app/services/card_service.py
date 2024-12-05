@@ -4,7 +4,6 @@ from app.extensions import db
 from app.models.card import UserBuylistCard
 from app.models.scan import Scan
 from app.models.site import Site
-from app.models.settings import Settings
 from mtgsdk import Card, Set
 import logging
 import requests
@@ -53,24 +52,17 @@ class CardService:
     @staticmethod
     def fetch_card_data(card_name, set_code=None, language=None, version=None):
         try:
-            cards = Card.where(name=card_name).all()
-            if set_code:
-                cards = [card for card in cards if card.set.lower() == set_code.lower()]
-            if language:
-                cards = [card for card in cards if card.language.lower() == language.lower()]
-
-            if not cards:
-                pass
-                return None
-            
             data = CardService.fetch_scryfall_data(card_name, set_code, language, version)
+            if not data:
+                current_app.logger.debug(f"No data found for card '{card_name}'")
+                return None
             return data
         except Exception as e:
-            current_app.logger.debug(f"Error fetching card data for '{card_name}': {str(e)}")
+            current_app.logger.error(f"Error in fetch_card_data: {str(e)}")
             return None
 
     @staticmethod
-    def save_card(card_id=None, name=None, set=None, language="English", quantity=1, version="Standard", foil=False):
+    def save_card(card_id=None, name=None, set_code=None, language="English", quantity=1, version="Standard", foil=False):
         """Save a new card or update an existing card with proper validation and error handling"""
         try:
             with CardService.transaction_context():
@@ -86,7 +78,7 @@ class CardService:
                         raise ValueError(f"Card with ID {card_id} not found")
                     
                     card.name = name
-                    card.set = set
+                    card.set_code = set_code
                     card.language = language
                     card.quantity = quantity
                     card.version = version
@@ -94,7 +86,7 @@ class CardService:
                 else:
                     card = UserBuylistCard(
                         name=name,
-                        set=set,
+                        set_code=set_code,
                         language=language,
                         quantity=quantity,
                         version=version,
@@ -109,26 +101,32 @@ class CardService:
 
     @staticmethod
     def update_user_buylist_card(card_id, data):
-        """
-        Update a specific card in the user's buylist.
-        """
-        # Fetch the card by ID using the correct model
-        card = UserBuylistCard.query.get(card_id)
-        if not card:
-            return None
+        """Update a specific card in the user's buylist."""
+        try:
+            current_app.logger.info(f"Updating card {card_id} with data: {data}")
+            
+            card = UserBuylistCard.query.get(card_id)
+            if not card:
+                current_app.logger.error(f"Card {card_id} not found")
+                return None
 
-        # Update card attributes
-        card.name = data.get("name", card.name)
-        card.set = data.get("set", card.set)
-        card.language = data.get("language", card.language)
-        card.quantity = data.get("quantity", card.quantity)
-        card.version = data.get("version", card.version)
-        card.foil = data.get("foil", card.foil)
+            # Update card attributes
+            card.name = data.get("name", card.name)
+            card.set_code = data.get("set", card.set_code)  # Frontend still sends 'set'
+            card.set_name = data.get("set_name", card.set_name)
+            card.language = data.get("language", card.language)
+            card.quantity = data.get("quantity", card.quantity)
+            card.version = data.get("version", card.version)
+            card.foil = data.get("foil", card.foil)
 
-        # Commit changes to the database
-        db.session.commit()
+            current_app.logger.info(f"Updated card data: {card.to_dict()}")
+            db.session.commit()
 
-        return card
+            return card
+        except Exception as e:
+            current_app.logger.error(f"Error updating card: {str(e)}")
+            db.session.rollback()
+            raise
     
     # Set Operations
     @staticmethod
@@ -151,50 +149,69 @@ class CardService:
     # Scryfall section
     @staticmethod
     def fetch_scryfall_data(card_name, set_code=None, language=None, version=None):
-        params = {'exact': card_name}
-        if set_code:
-            params['set'] = set_code
-        if language:
-            params['lang'] = language
+        current_app.logger.info(f"Fetching Scryfall data for: {card_name} (set: {set_code})")
+        
+        try:
+            # First try exact match with set
+            params = {
+                'exact': card_name,
+                'set': set_code if set_code else None,
+                'lang': language if language else 'en'
+            }
+            # Remove None values
+            params = {k: v for k, v in params.items() if v is not None}
 
-        response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
-        if response.status_code == 200:
-            card_data = response.json()
-        else:
-            # If exact match fails, try fuzzy search
-            params['fuzzy'] = card_name
-            del params['exact']
+            current_app.logger.info(f"Making exact request to Scryfall with params: {params}")
             response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
+            
+            if response.status_code != 200:
+                # If exact match fails, try fuzzy search
+                current_app.logger.info("Exact match failed, trying fuzzy search")
+                params['fuzzy'] = card_name
+                del params['exact']
+                response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
+                
+                if response.status_code != 200:
+                    current_app.logger.error(f"Scryfall API error: {response.text}")
+                    return None
 
-            if response.status_code == 200:
-                card_data = response.json()
-            else:
-                # If both searches fail, return None
-                return None
+            card_data = response.json()
+            current_app.logger.info(f"Successfully retrieved card data for: {card_name} (set: {set_code})")
 
-                # If version is specified, find the matching version
-        if version and 'all_parts' in card_data:
-            for part in card_data['all_parts']:
-                if part['component'] == 'combo_piece' and fuzz.ratio(part.get('name', ''), version) > 90:
-                    response = requests.get(part['uri'])
-                    if response.status_code == 200:
-                        card_data = response.json()
-                    break
+            # Fetch all printings
+            all_printings = []
+            if prints_uri := card_data.get('prints_search_uri'):
+                prints_response = requests.get(prints_uri)
+                if prints_response.status_code == 200:
+                    prints_data = prints_response.json()
+                    all_printings = [{
+                        'id': print_data.get('id'),
+                        'name': print_data.get('name'),
+                        'set': print_data.get('set'),
+                        'set_name': print_data.get('set_name'),
+                        'collector_number': print_data.get('collector_number'),
+                        'rarity': print_data.get('rarity'),
+                        'image_uris': print_data.get('image_uris', {}),
+                        'prices': print_data.get('prices', {}),
+                        'digital': print_data.get('digital', False),
+                        'lang': print_data.get('lang', 'en')
+                    } for print_data in prints_data.get('data', [])]
 
-        # Fetch all printings
-        all_printings = []
-        if 'prints_search_uri' in card_data:
-            all_printings = CardService.fetch_all_printings(card_data['prints_search_uri'])
+            result = {
+                'scryfall': {
+                    **card_data,
+                    'all_printings': all_printings
+                },
+                'scan_timestamp': datetime.now().isoformat()
+            }
 
-        # Return the card data including all printings
-        return {
-            'scryfall': {
-                **card_data,  # Unpack the original Scryfall response
-                'all_printings': all_printings  # Add the all_printings key
-            },
-            'scan_timestamp': datetime.now().isoformat()
-        }
-    
+            current_app.logger.info(f"Returning data structure with {len(all_printings)} printings")
+            return result
+
+        except Exception as e:
+            current_app.logger.error(f"Error in fetch_scryfall_data: {str(e)}", exc_info=True)
+            return None
+
     @staticmethod
     def fetch_all_printings(prints_search_uri):
         all_printings = []
@@ -226,7 +243,7 @@ class CardService:
             next_page = data.get('next_page')
 
         return all_printings
-    
+
     @staticmethod
     def get_card_suggestions(query, limit=20):
         scryfall_api_url = f"{SCRYFALL_API_BASE}/catalog/card-names"
@@ -243,19 +260,3 @@ class CardService:
             logger.error(
                 "Error fetching card suggestions from Scryfall: %s", str(e))
             return []
-    
-    # Settings Operations
-    @staticmethod
-    def get_setting(key):
-        return Settings.query.filter_by(key=key).first()
-
-    @staticmethod
-    def update_setting(key, value):
-        setting = Settings.query.filter_by(key=key).first()
-        if setting:
-            setting.value = value
-        else:
-            setting = Settings(key=key, value=value)
-            db.session.add(setting)
-        db.session.commit()
-        return setting

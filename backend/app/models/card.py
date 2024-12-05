@@ -9,6 +9,7 @@ class UserBuylistCard(BaseCard):
     """
     __tablename__ = "user_buylist_card"
     id = db.Column(db.Integer, primary_key=True)
+    set_code = db.Column(db.String(10))  # Set code (e.g., 'RNA', 'M20')
 
     @validates('quantity')
     def validate_quantity(self, key, value):
@@ -27,6 +28,7 @@ class UserBuylistCard(BaseCard):
         return {
             "id": self.id,
             "name": self.name,  # This will use the inherited column
+            "set_code": self.set_code,  # Include set code in response
             "set_name": self.set_name,
             "language": self.language,
             "quantity": self.quantity,

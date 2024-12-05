@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Row, Col, Card, Table, Collapse, Typography, Tag, Tooltip } from 'antd';
 import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
+import CardDetail from './CardDetail';
+import { getStandardTableColumns, cardNameStyle } from '../utils/tableConfig';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
-export const OptimizationSummary = ({ result }) => {
+export const OptimizationSummary = ({ result, onCardClick }) => {
   // Filter out duplicate solutions based on their properties
   const solutions = Array.isArray(result?.solutions) 
     ? result.solutions.filter((solution, index, self) =>
@@ -74,10 +76,22 @@ export const OptimizationSummary = ({ result }) => {
                 <StoreDistribution solution={solution} />
                 {solution.missing_cards?.length > 0 && (
                   <Card title="Missing Cards" size="small" className="mb-4">
-                    <Text type="danger">{solution.missing_cards.join(', ')}</Text>
+                    <Text type="danger">
+                      {solution.missing_cards.map((card, index) => (
+                        <React.Fragment key={index}>
+                          <span style={cardNameStyle} onClick={() => onCardClick({ name: card })}>
+                            {card}
+                          </span>
+                          {index < solution.missing_cards.length - 1 ? ', ' : ''}
+                        </React.Fragment>
+                      ))}
+                    </Text>
                   </Card>
                 )}
-                <OptimizationDetails solution={solution} />
+                <OptimizationDetails 
+                  solution={solution} 
+                  onCardClick={onCardClick}
+                />
               </Panel>
             );
           })}
@@ -113,7 +127,15 @@ const StoreDistribution = ({ solution }) => {
   );
 };
 
-export const OptimizationDetails = ({ solution }) => {
+export const OptimizationDetails = ({ solution, onCardClick }) => {
+  const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
+
+  const handleCardClick = (card) => {
+    setSelectedCard(card);
+    setCardDetailVisible(true);
+  };
+
   // Transform the cards object into an array
   const dataSource = Object.values(solution.cards || {})
     .filter(card => card && card.price !== 10000)
@@ -131,42 +153,12 @@ export const OptimizationDetails = ({ solution }) => {
     }));
 
   const columns = [
-    {
-      title: 'Card Name',
-      dataIndex: 'name',
-      key: 'name',
-      sorter: (a, b) => a.name.localeCompare(b.name),
-    },
+    ...getStandardTableColumns(onCardClick),
     {
       title: 'Store',
       dataIndex: 'store',
       key: 'store',
-      sorter: (a, b) => a.store.localeCompare(b.store),
-    },
-    {
-      title: 'Price',
-      dataIndex: 'price',
-      key: 'price',
-      sorter: (a, b) => a.price - b.price,
-      render: (price) => `$${(price || 0).toFixed(2)}`,
-    },
-    {
-      title: 'Set',
-      dataIndex: 'set',
-      key: 'set',
-      sorter: (a, b) => (a.set || '').localeCompare(b.set || ''),
-    },
-    {
-      title: 'Quality',
-      dataIndex: 'quality',
-      key: 'quality',
-      sorter: (a, b) => (a.quality || '').localeCompare(b.quality || ''),
-    },
-    {
-      title: 'Quantity',
-      dataIndex: 'quantity',
-      key: 'quantity',
-      sorter: (a, b) => a.quantity - b.quantity,
+      sorter: (a, b) => a.store?.localeCompare(b.store),
     },
     {
       title: 'Details',
@@ -182,13 +174,26 @@ export const OptimizationDetails = ({ solution }) => {
   ];
 
   return (
-    <Table 
-      dataSource={dataSource} 
-      columns={columns} 
-      pagination={false}
-      scroll={{ y: 400 }}
-      size="small"
-    />
+    <>
+      <Table 
+        dataSource={dataSource} 
+        columns={columns} 
+        pagination={false}
+        scroll={{ y: 400 }}
+        size="small"
+      />
+      {selectedCard && (
+        <CardDetail
+          cardName={selectedCard.name}
+          setName={selectedCard.set}
+          language={selectedCard.language}
+          version={selectedCard.version}
+          foil={selectedCard.foil}
+          isModalVisible={cardDetailVisible}
+          onClose={() => setCardDetailVisible(false)}
+        />
+      )}
+    </>
   );
 };
 
