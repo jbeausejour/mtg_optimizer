@@ -256,7 +256,7 @@ class PurchaseOptimizer:
 
             if not find_min_store:
                 prob, buy_vars = PurchaseOptimizer._setup_prob(
-                    costs, unique_cards, unique_stores, user_wishlist_df, min_store
+                    costs, unique_cards, unique_stores, user_wishlist_df, min_store, total_qty
                 )
                 if pulp.LpStatus[prob.status] != "Optimal":
                     logger.warning("Solver did not find an optimal solution.")
@@ -282,6 +282,7 @@ class PurchaseOptimizer:
                         unique_stores,
                         user_wishlist_df,
                         current_min,
+                        total_qty
                     )
                     
                     logger.info(f"Solver solution: {pulp.LpStatus[prob.status]}")
@@ -349,7 +350,7 @@ class PurchaseOptimizer:
 
 
     @staticmethod
-    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store):
+    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store, total_qty):
         # Add validation for store count
         if len(unique_stores) < min_store:
             logger.warning(f"Adjusting min_store from {min_store} to {len(unique_stores)} due to available stores")
@@ -367,7 +368,8 @@ class PurchaseOptimizer:
                 [buy_vars[card][store] * costs[card][store]
                  for card in unique_cards
                  for store in unique_stores]) +
-            0.5 * pulp.lpSum([store_vars[store] for store in unique_stores])
+            0.5 * pulp.lpSum([store_vars[store] for store in unique_stores]) +
+            1000 * (pulp.lpSum([buy_vars[card][store] for card in unique_cards for store in unique_stores]) < total_qty)
         )
 
         for card in unique_cards:

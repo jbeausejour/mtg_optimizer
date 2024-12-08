@@ -37,7 +37,7 @@ class CeleryConfig:
     accept_content = ["json"]
     timezone = "UTC"
     enable_utc = True
-    result_expires = 3600  # Results expire after 1 hour
+    result_expires = 300 # Results expire after 1 hour
 
     worker_concurrency = 20
     worker_pool = 'solo'

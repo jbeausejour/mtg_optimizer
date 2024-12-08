@@ -123,8 +123,8 @@ class ExternalDataSynchronizer:
 
             ip = await self.resolve_dns(hostname)
             if not ip:
-                logger.error(f"DNS resolution failed completely for {hostname}")
-                return None
+                logger.error(f"DNS resolution failed completely for {hostname}, proceeding without resolved IP")
+                ip = hostname  # Fallback to using the hostname directly
 
             # Create custom connector with resolved IP
             connector = aiohttp.TCPConnector(
@@ -255,7 +255,7 @@ class ExternalDataSynchronizer:
                     tasks.append(task)
                 
                 # Process tasks in batches
-                BATCH_SIZE = 5
+                BATCH_SIZE = 5  # Adjust batch size for better performance
                 total_batches = (len(tasks) + BATCH_SIZE - 1) // BATCH_SIZE
                 
                 for batch_num, i in enumerate(range(0, len(tasks), BATCH_SIZE), 1):
@@ -325,7 +325,7 @@ class ExternalDataSynchronizer:
             soup = await self.search_crystalcommerce(site, card_names)
             if not soup:
                 self.error_collector.unreachable_stores.add(site.name)
-                logger.warning(f"No data received from {site.name}")
+                logger.warning(f"No data received from {site.name}. Possible reasons: DNS resolution failure, network issues, or site is down.")
                 return None
 
             cards_df = self.extract_info(soup, site, card_names, strategy)
