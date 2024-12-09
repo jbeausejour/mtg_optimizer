@@ -30,7 +30,7 @@ def is_data_fresh(card_name):
         
     now = datetime.now(timezone.utc).replace(microsecond=0)
     age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
-    return age.total_seconds() < 24 * 3600
+    return age.total_seconds() < 600
 
 
 class OptimizationTaskManager:
@@ -123,8 +123,7 @@ class OptimizationTaskManager:
                 new_results = loop.run_until_complete(
                     scraper.scrape_multiple_sites(
                         self.sites,
-                        [card['name'] for card in outdated_cards],
-                        strategy=self.strategy
+                        [card['name'] for card in outdated_cards]
                     )
                 )
                 if new_results:
@@ -161,6 +160,12 @@ class OptimizationTaskManager:
             card_listings_df = pd.DataFrame(card_listings)
             filtered_listings_df = self._process_listings_dataframe(card_listings_df)
             user_wishlist_df = pd.DataFrame(self.card_list_from_frontend)
+
+            # Ensure min_quality is included in user_wishlist_df
+            if 'quality' in user_wishlist_df.columns:
+                user_wishlist_df.rename(columns={'quality': 'min_quality'}, inplace=True)
+            else:
+                user_wishlist_df['min_quality'] = 'NM'  # Default to 'NM' if not provided
 
             return filtered_listings_df, user_wishlist_df
 
@@ -238,7 +243,7 @@ class OptimizationTaskManager:
             
             config = {
                 "milp_strat": self.strategy == "milp",
-                "nsga_algo_strat": self.strategy == "nsga-ii",
+                "nsga_strat": self.strategy == "nsga-ii",
                 "hybrid_strat": self.strategy == "hybrid",
                 "min_store": self.min_store,
                 "find_min_store": self.find_min_store,
@@ -392,7 +397,17 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                 progress=100
             ).model_dump()
             
-            db.session.add(failed_optimization)
+            failed_optimization_db = OptimizationResult(
+                scan_id=task_manager.current_scan_id,
+                status=failed_optimization['status'],
+                message=failed_optimization['message'],
+                sites_scraped=failed_optimization['sites_scraped'],
+                cards_scraped=failed_optimization['cards_scraped'],
+                solutions=failed_optimization['optimization']['solutions'],
+                errors=failed_optimization['optimization']['errors']
+            )
+            
+            db.session.add(failed_optimization_db)
             db.session.commit()
             return failed_optimization
 

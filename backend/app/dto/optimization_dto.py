@@ -31,6 +31,7 @@ QUALITY_MAPPING = {
     "EX": "LP",  
     "VG": "LP",  
     "SP": "LP",  
+    "Slight Play": "LP",  
     "SLIGHTLY PLAYED": "LP",  
     # MP variants
     "MP": "MP",
@@ -38,6 +39,7 @@ QUALITY_MAPPING = {
     "MODERATE PLAY": "MP", 
     "MODERATLY PLAYED": "MP", 
     "Moderately Played": "MP",
+    "Played": "MP",
     "GD": "MP",  
     "PL": "MP",  
     # HP variants

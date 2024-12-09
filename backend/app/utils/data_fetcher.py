@@ -58,6 +58,13 @@ class ExternalDataSynchronizer:
     STRATEGY_ADD_TO_CART = 1
     STRATEGY_SCRAPPER = 2
     STRATEGY_HAWK = 3
+    STRATEGY_SHOPIFY = 4
+    strats = {
+        "add_to_cart" : STRATEGY_ADD_TO_CART,
+        "scrapper" : STRATEGY_SCRAPPER,
+        "hawk" : STRATEGY_HAWK,
+        "shopify" : STRATEGY_SHOPIFY,
+    }
 
     def __init__(self):
         self.session = None
@@ -233,7 +240,7 @@ class ExternalDataSynchronizer:
             
         return token
 
-    async def scrape_multiple_sites(self, sites, card_names, strategy='nsga-ii', scan_id=None):
+    async def scrape_multiple_sites(self, sites, card_names):
         """
         Scrape multiple sites for card data
         Args:
@@ -251,7 +258,7 @@ class ExternalDataSynchronizer:
                 tasks = []
                 for site in sites:
                     logger.info(f"Creating scraping task for site: {site.name}")
-                    task = asyncio.create_task(self.process_site(site, card_names, strategy))
+                    task = asyncio.create_task(self.process_site(site, card_names))
                     tasks.append(task)
                 
                 # Process tasks in batches
@@ -318,8 +325,12 @@ class ExternalDataSynchronizer:
             logger.error(f"Error searching {site.name}: {str(e)}")
             return None
 
-    async def process_site(self, site, card_names, strategy):
+    async def process_site(self, site, card_names):
         """Process a single site and return results without saving to DB"""
+
+        
+        strategy = ExternalDataSynchronizer.strats.get(site.method.lower(), 
+                                        ExternalDataSynchronizer.STRATEGY_ADD_TO_CART)
         logger.info(f"Processing site {site.name} for {len(card_names)} cards using strategy {strategy}")
         try:
             soup = await self.search_crystalcommerce(site, card_names)
@@ -327,8 +338,21 @@ class ExternalDataSynchronizer:
                 self.error_collector.unreachable_stores.add(site.name)
                 logger.warning(f"No data received from {site.name}. Possible reasons: DNS resolution failure, network issues, or site is down.")
                 return None
-
-            cards_df = self.extract_info(soup, site, card_names, strategy)
+            if strategy == ExternalDataSynchronizer.STRATEGY_SHOPIFY:
+                cards_df = self.extract_info_shopify(soup, site, card_names)
+            elif strategy == ExternalDataSynchronizer.STRATEGY_HAWK:
+                cards_df = ExternalDataSynchronizer.strategy_hawk(soup)
+            else:
+                cards_df = self.extract_info(soup, site, card_names, strategy)
+                old_strategy = strategy
+                strategy = (
+                            ExternalDataSynchronizer.STRATEGY_SCRAPPER
+                            if strategy == ExternalDataSynchronizer.STRATEGY_ADD_TO_CART
+                            else ExternalDataSynchronizer.STRATEGY_ADD_TO_CART
+                        )
+                
+                logger.info(f"Strategy {old_strategy} for site {site.name} ffailed, switching to {strategy} ")
+                cards_df = self.extract_info(soup, site, card_names, strategy)
             if cards_df is not None and not cards_df.empty:
                 # Create summary of results
                 summary = cards_df.groupby(['set_name', 'foil']).agg({
@@ -429,10 +453,11 @@ class ExternalDataSynchronizer:
             await asyncio.gather(*tasks)
 
     @staticmethod
-    def extract_info(soup, site, card_names, strategy):
+    def extract_info(soup, site, card_names, strategy=STRATEGY_ADD_TO_CART):
         """
         Extract card info from the provided HTML soup using the given strategy.
         """
+
         if soup is None:
             logger.warning(f"Soup is None for site {site.name}")
             return pd.DataFrame()
@@ -456,14 +481,6 @@ class ExternalDataSynchronizer:
             "intro packs and planeswalker decks",
             "wall scrolls",
         }
-
-        if strategy == ExternalDataSynchronizer.STRATEGY_HAWK:
-            return pd.DataFrame(
-                [
-                    card.to_dict()
-                    for card in ExternalDataSynchronizer.strategy_hawk(soup)
-                ]
-            )
 
         content = soup.find(
             "div", {"class": ["content", "content clearfix",
@@ -521,7 +538,7 @@ class ExternalDataSynchronizer:
                     continue
 
         if not cards:
-            logger.warning(f"No valid cards found in container for {site.name}")
+            logger.warning(f"No valid cards found in container for {site.name} extract_info")
             return pd.DataFrame()
 
         try:
@@ -543,6 +560,115 @@ class ExternalDataSynchronizer:
                 if col not in df.columns:
                     df[col] = dtype()
                 df[col].astype(dtype)
+            
+            # Normalize quality and language values
+            df['quality'] = df['quality'].apply(ExternalDataSynchronizer.normalize_quality)
+            df['language'] = df['language'].apply(ExternalDataSynchronizer.normalize_language)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def extract_info_shopify(soup, site, card_names):
+        """
+        Extract card info from Shopify site HTML structure.
+        """
+        if soup is None:
+            logger.warning(f"Soup is None for site {site.name}")
+            return pd.DataFrame()
+
+        cards = []
+        seen_variants = set()
+
+        results_container = soup.find("div", {"class": "results-container"})
+        if not results_container:
+            logger.warning(f"No results container found for site {site.name}")
+            return pd.DataFrame()
+
+        result_wrappers = results_container.find_all("div", {"class": "result-found-wrapper"})
+        if not result_wrappers:
+            logger.warning(f"No result wrappers found for site {site.name}")
+            return pd.DataFrame()
+
+        for wrapper in result_wrappers:
+            try:
+                card_title = wrapper.find("p", {"class": "result-card-title"}).text.strip()
+                requested_qty = int(wrapper.find("p", {"class": "result-card-requested"}).text.split(":")[1].strip())
+                queued_qty = int(wrapper.find("p", {"class": "result-card-fulfilled"}).text.split(":")[1].strip())
+
+                item_container = wrapper.find("div", {"class": "result-item-container"})
+                if not item_container:
+                    logger.warning(f"No item container found for card {card_title} in site {site.name}")
+                    continue
+
+                item_title = item_container.find("div", {"class": "item-title"}).text.strip()
+                item_price = item_container.find("div", {"class": "item-price"}).text.strip().replace("$", "").replace("CAD", "").strip()
+                item_quantity = int(item_container.find("div", {"class": "item-quantity"}).text.split("/")[1].strip())
+
+                # Parse item title for set name and quality
+                item_parts = item_title.split("[")
+                card_name = item_parts[0].strip()
+                set_name = item_parts[1].split("]")[0].strip()
+                quality = item_parts[1].split("]")[1].strip()
+
+                # Check if card name is in the requested card names
+                if card_name not in card_names:
+                    continue
+
+                card_info = {
+                    'name': card_name,
+                    'set_name': set_name,
+                    'foil': 'Foil' in quality,
+                    'quality': quality.replace('Foil', '').strip(),
+                    'language': 'English',  # Assuming language is English
+                    'quantity': item_quantity,
+                    'price': float(item_price),
+                    'version': 'Standard'
+                }
+
+                # Create a hashable key from the variant's relevant data
+                variant_key = (
+                    card_info['name'],
+                    card_info['set_name'],
+                    card_info['quality'],
+                    card_info['language'],
+                    card_info['foil'],
+                    card_info['version']
+                )
+                if variant_key not in seen_variants:
+                    cards.append(card_info)
+                    seen_variants.add(variant_key)
+
+            except Exception as e:
+                logger.exception(f"Error processing item in {site.name}")
+                continue
+
+        if not cards:
+            logger.warning(f"No valid cards found in container for {site.name} extract_info_shopify")
+            return pd.DataFrame()
+
+        try:
+            df = pd.DataFrame(cards)
+            # Ensure standard column names and data types
+            standard_columns = {
+                'name': str,
+                'set_name': str,
+                'price': float,
+                'version': str,
+                'foil': bool,
+                'quality': str,
+                'language': str,
+                'quantity': int
+            }
+            
+            # Add missing columns with default values
+            for col, dtype in standard_columns.items():
+                if col not in df.columns:
+                    df[col] = dtype()
+                df[col] = df[col].astype(dtype)
             
             # Normalize quality and language values
             df['quality'] = df['quality'].apply(ExternalDataSynchronizer.normalize_quality)
