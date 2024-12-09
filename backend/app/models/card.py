@@ -1,6 +1,7 @@
 from app.extensions import db
 from .base_card import BaseCard
 from sqlalchemy.orm import validates
+from datetime import datetime, timezone
 
 class UserBuylistCard(BaseCard):
     """
@@ -9,7 +10,9 @@ class UserBuylistCard(BaseCard):
     """
     __tablename__ = "user_buylist_card"
     id = db.Column(db.Integer, primary_key=True)
-    set_code = db.Column(db.String(10))  # Set code (e.g., 'RNA', 'M20')
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
     @validates('quantity')
     def validate_quantity(self, key, value):
@@ -25,15 +28,20 @@ class UserBuylistCard(BaseCard):
         Convert to dictionary for API responses
         Include all BaseCard fields from parent class
         """
-        return {
+        base_dict = super().to_dict()
+        base_dict.update({
             "id": self.id,
-            "name": self.name,  # This will use the inherited column
-            "set_code": self.set_code,  # Include set code in response
+            "name": self.name, 
+            "set_code": self.set_code, 
             "set_name": self.set_name,
             "language": self.language,
             "quantity": self.quantity,
+            "quality": self.quality,
             "version": self.version,
             "foil": self.foil,
-            "quality": self.quality  # Add quality field
-        }
+            "user_id": self.user_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        })
+        return base_dict
 

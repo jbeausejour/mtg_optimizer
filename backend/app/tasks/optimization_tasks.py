@@ -17,6 +17,7 @@ from sqlalchemy import select, text
 from app.services.scan_service import ScanService
 from app.services.site_service import SiteService
 from app.dto.optimization_dto import OptimizationConfigDTO, OptimizationResultDTO, ScanResultDTO
+from app.services.card_service import CardService 
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def is_data_fresh(card_name):
         
     now = datetime.now(timezone.utc).replace(microsecond=0)
     age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
-    return age.total_seconds() < 24 * 3600
+    return age.total_seconds() < 300  # 5 minutes
 
 
 class OptimizationTaskManager:
@@ -92,6 +93,7 @@ class OptimizationTaskManager:
                         'site_id': r.site_id,
                         'name': r.name,
                         'set_name': r.set_name,
+                        'set_code': r.set_code,
                         'price': float(r.price),
                         'version': getattr(r, 'version', 'Standard'),
                         'foil': bool(getattr(r, 'foil', False)),
@@ -172,9 +174,11 @@ class OptimizationTaskManager:
         """Process scraping results into card listings"""
         card_listings = []
         for r in scraping_results:
-            # All results are now dictionaries, no need to check type
             site_info = self.site_data.get(r['site_id'])
             if site_info:
+                # Get set code from the set name using CardService
+                set_code = CardService.get_set_code(r['set_name']) if r['set_name'] else None
+                
                 card_listings.append({
                     'name': r['name'],
                     'site_name': site_info['name'],
@@ -182,6 +186,7 @@ class OptimizationTaskManager:
                     'quality': r['quality'],
                     'quantity': int(r['quantity']),
                     'set_name': r['set_name'],
+                    'set_code': set_code,  # Use the retrieved set code
                     'version': r.get('version', 'Standard'),
                     'foil': bool(r.get('foil', False)),
                     'language': r.get('language', 'English'),

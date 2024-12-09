@@ -231,6 +231,23 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
 
   if (!data) return <div>No card data available</div>;
 
+  // Ensure all properties have default values
+  const {
+    name = '',
+    set_name = '',
+    collector_number = '',
+    rarity = '',
+    colors = [],
+    type_line = '',
+    oracle_text = '',
+    flavor_text = '',
+    power,
+    toughness,
+    loyalty,
+    image_uris = {},
+    card_faces = []
+  } = data;
+
   console.log('Rendering card display');
   return (
     <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
@@ -273,12 +290,12 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
                 key={`${print.set}-${print.collector_number}`}
                 style={selectedPrinting?.id === print.id ? selectedPrintingStyle : printingItemStyle}
                 onClick={() => handlePrintClick(print)}
-                onMouseEnter={() => setHoveredPrinting(print)} // Allow hover in both modes
-                onMouseLeave={() => setHoveredPrinting(null)} // Allow hover in both modes
+                onMouseEnter={() => setHoveredPrinting(print)}
+                onMouseLeave={() => setHoveredPrinting(null)}
               >
                 <Space>
                   <SetSymbol setCode={print.set} rarity={print.rarity} />
-                  <span>{print.set.toUpperCase()}</span>
+                  <span>{print.set?.toUpperCase() || 'Unknown Set'}</span>
                   {print.prices?.usd && <span>${print.prices.usd}</span>}
                 </Space>
               </div>

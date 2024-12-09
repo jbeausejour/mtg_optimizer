@@ -16,7 +16,7 @@ card_routes = Blueprint("card_routes", __name__)
 
 # Card Operations
 @card_routes.route("/cards", methods=["GET"])
-def get_cards():
+def get_user_buylist_cards():
     """
     Get all the cards in the user's buylist.
     """
@@ -28,7 +28,7 @@ def get_cards():
         return jsonify({"error": "Failed to fetch user cards"}), 500
 
 @card_routes.route("/cards/<int:card_id>", methods=["PUT"])
-def update_card(card_id):
+def update_user_buylist_card(card_id):
     """Update a specific card in the user's buylist."""
     try:
         data = request.json
@@ -47,67 +47,101 @@ def update_card(card_id):
         return jsonify({"error": f"Failed to update card: {str(e)}"}), 500
 
 @card_routes.route("/cards", methods=["POST"])
-def save_card():
-    """
-    Save a new card or update an existing card.
-    """
+def add_user_buylist_card():
+    """Save a new card or update an existing card."""
     try:
         data = request.json
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
-        required_fields = ["name"]
-        if not all(field in data for field in required_fields):
-            return jsonify({"error": "Missing required fields"}), 400
-
         # Standardize data fields
         card_data = {
             "name": data.get("name"),
-            "set_name": data.get("set_name"),  # Changed from 'set'
+            "set_name": data.get("set_name"),
+            "set_code": data.get("set_code"),
             "language": data.get("language", "English"),
             "quantity": data.get("quantity", 0),
             "version": data.get("version", "Standard"),
             "foil": data.get("foil", False)
         }
 
-        saved_card = CardService.save_card(**card_data)
+        # Validate card data
+        validation_errors = CardService.validate_card_data(card_data)
+        if validation_errors:
+            return jsonify({
+                "error": "Validation failed",
+                "details": validation_errors
+            }), 400
+
+        saved_card = CardService.add_user_buylist_card(**card_data)
         return jsonify(saved_card.to_dict()), 200
+        
     except Exception as e:
         current_app.logger.error(f"Error saving card: {str(e)}")
         return jsonify({"error": "Failed to save card"}), 500
-   
+
 @card_routes.route("/fetch_card", methods=["GET"])
-def fetch_card():
+def fetch_scryfall_card():
     card_name = request.args.get("name")
-    set_code = request.args.get("set")
+    set_code = request.args.get("set_code")
     language = request.args.get("language")
     version = request.args.get('version')
 
-    current_app.logger.info(f"Fetching card with params: name={card_name}, set={set_code}, lang={language}, ver={version}")
+    current_app.logger.info(f"Fetching card with params: name={card_name}, set_code={set_code}, lang={language}, ver={version}")
 
     if not card_name:
-        return jsonify({"error": "Card name is required"}), 400
-
-    card_data = CardService.fetch_card_data(card_name, set_code, language, version)
-    if card_data is None:
-        current_app.logger.warning(f"No data found for card: {card_name} (set: {set_code})")
         return jsonify({
-            "scryfall": {
-                "name": None,
-                "set": None,
-                "type": None,
-                "rarity": None,
-                "mana_cost": None,
-                "text": None,
-                "flavor": None,
-                "power": None,
-                "toughness": None,
-                "loyalty": None
-            },
-            "scan_timestamp": None
-        }), 404
+            "error": "Missing parameter",
+            "details": "Card name is required"
+        }), 400
 
-    return jsonify(card_data)
+    try:
+        card_data = CardService.fetch_scryfall_card_data(card_name, set_code, language, version)
+        if card_data is None:
+            error_msg = f"Card not found: '{card_name}'"
+            if set_code:
+                error_msg += f" in set '{set_code}'"
+            current_app.logger.warning(error_msg)
+            
+            return jsonify({
+                "error": "Card not found",
+                "details": error_msg,
+                "params": {
+                    "name": card_name,
+                    "set_code": set_code,
+                    "language": language,
+                    "version": version
+                },
+                "scryfall": {
+                    "name": None,
+                    "set": None,  # makesure this is supposed to be set and not set_code
+                    "type": None,
+                    "rarity": None,
+                    "mana_cost": None,
+                    "text": None,
+                    "flavor": None,
+                    "power": None,
+                    "toughness": None,
+                    "loyalty": None
+                },
+                "scan_timestamp": None
+            }), 404
+
+        return jsonify(card_data)
+        
+    except Exception as e:
+        error_msg = f"Error fetching card data: {str(e)}"
+        current_app.logger.error(error_msg)
+        return jsonify({
+            "error": "API Error",
+            "details": error_msg,
+            "params": {
+                "name": card_name,
+                "set": set_code,
+                "language": language,
+                "version": version
+            }
+        }), 500
  
 @card_routes.route("/card_suggestions", methods=["GET"])
 def get_card_suggestions():
@@ -192,7 +226,7 @@ def save_set_selection():
     """Save the selected set for a card"""
     try:
         data = request.json
-        set_code = data.get('set')
+        set_code = data.get('set_code')
         if not set_code:
             return jsonify({"error": "Set code is required"}), 400
         

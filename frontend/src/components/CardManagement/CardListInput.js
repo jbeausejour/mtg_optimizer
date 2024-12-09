@@ -31,7 +31,7 @@ const CardListInput = ({ onSubmit }) => {
 
   const debouncedFetchSuggestions = debounce(fetchSuggestions, 300);
 
-  const fetchCardVersions = async (cardName) => {
+  const fetchCardVersions = async (cardName) => { //to review
     try {
       const response = await api.get(`/card_versions?name=${encodeURIComponent(cardName)}`);
       console.log('Card versions received:', response.data);
@@ -115,7 +115,7 @@ const CardListInput = ({ onSubmit }) => {
           dataSource={cardList}
           renderItem={item => (
             <List.Item>
-              {item.name} x{item.quantity} ({item.set})
+              {item.name} x{item.quantity} ({item.set_code})
             </List.Item>
           )}
         />

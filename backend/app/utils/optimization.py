@@ -4,7 +4,7 @@ from functools import partial
 import pandas as pd
 import pulp
 from deap import algorithms, base, creator, tools
-from app.dto.optimization_dto import CardQuality, QUALITY_WEIGHTS
+from app.constants import CardQuality, QUALITY_WEIGHTS
 
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,7 @@ class PurchaseOptimizer:
             try:
                 df = CardQuality.validate_and_update_qualities(
                     df, 
-                    quality_column='quality',
-                    interactive=False  # Set to True if you want interactive prompts
+                    quality_column='quality'
                 )
             except Exception as e:
                 logger.warning(f"Error normalizing qualities: {e}")
@@ -421,6 +420,7 @@ class PurchaseOptimizer:
                             "quality": card_data["quality"],
                             "quantity": int(quantity),
                             "set_name": card_data["set_name"],
+                            "set_code": card_data["set_code"],
                             "version": card_data.get("version", "Standard"),
                             "foil": bool(card_data.get("foil", False)),
                             "language": card_data.get("language", "English"),

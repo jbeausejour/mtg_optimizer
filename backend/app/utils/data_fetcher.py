@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import datetime
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor
@@ -14,9 +13,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from aiohttp import ClientTimeout
 
 from app.extensions import db
-from app.dto.optimization_dto import QUALITY_MAPPING, LANGUAGE_MAPPING
+from app.constants import CardLanguage, CardQuality, CardVersion
+from app.services import CardService
 from app.models.card import UserBuylistCard
-from app.models.scan import Scan, ScanResult
 from app.models.site import Site
 from app.utils.helpers import (
     clean_card_name,
@@ -352,6 +351,7 @@ class ExternalDataSynchronizer:
                         'site_id': site.id,
                         'name': row['name'],
                         'set_name': row['set_name'],
+                        'set_code': CardService.get_set_code(row['set_name']),  # Add set code resolution
                         'price': float(row.get('price', 0.0)),
                         'version': row.get('version', 'Standard'),
                         'foil': bool(row.get('foil', False)),
@@ -372,48 +372,12 @@ class ExternalDataSynchronizer:
 
     @staticmethod
     def convert_foil_to_bool(foil_value):
-        """Convert foil value to boolean"""
+        """Convert foil value to boolean based on CardVersion"""
         if isinstance(foil_value, bool):
             return foil_value
         if isinstance(foil_value, str):
-            return foil_value.lower() in ['foil', 'true', '1', 'yes']
+            return foil_value.lower() in [CardVersion.FOIL.value.lower(), 'true', '1', 'yes']
         return False
-
-    @staticmethod
-    def normalize_quality(quality):
-        """Normalize quality to standard values"""
-        logger.debug(f"=== Starting quality normalization for: {quality} ===")
-        
-        if not quality:
-            logger.debug("Empty quality value, defaulting to NM")
-            return 'NM'
-            
-        try:
-            # Strip whitespace and convert to uppercase for consistent comparison
-            quality_str = str(quality).strip().upper()
-            
-            # Create uppercase version of mapping for case-insensitive comparison
-            upper_mapping = {k.upper(): v for k, v in QUALITY_MAPPING.items()}
-            
-            # Try to find direct match in uppercase mapping
-            if quality_str in upper_mapping:
-                normalized = upper_mapping[quality_str]
-                logger.debug(f"Found quality mapping: '{quality}' -> '{normalized}'")
-                return normalized
-                
-            # Handle special case for "MINT/NEAR-MINT" -> "NM"
-            if any(x in quality_str for x in ['MINT', 'NEAR-MINT', 'NM']):
-                logger.debug(f"Found mint-related quality: '{quality}', mapping to NM")
-                return 'NM'
-                
-            # If no match found, log warning and return NM (being optimistic here)
-            ErrorCollector.get_instance().unknown_qualities.add(quality)
-            logger.warning(f"Unknown quality value: '{quality}'")
-            return 'NM'
-                
-        except Exception as e:
-            logger.error(f"Error normalizing quality '{quality}': {str(e)}")
-            return 'NM'
 
     @classmethod
     async def update_all_cards(cls):
@@ -545,8 +509,9 @@ class ExternalDataSynchronizer:
                 df[col].astype(dtype)
             
             # Normalize quality and language values
-            df['quality'] = df['quality'].apply(ExternalDataSynchronizer.normalize_quality)
-            df['language'] = df['language'].apply(ExternalDataSynchronizer.normalize_language)
+            df['quality'] = df['quality'].apply(CardQuality.normalize)
+            df['language'] = df['language'].apply(CardLanguage.normalize)
+            df['version'] = df['version'].apply(CardVersion.normalize)
             
             return df
             
@@ -683,27 +648,6 @@ class ExternalDataSynchronizer:
         return a_tag and "yugioh" in a_tag["href"]
 
     @staticmethod
-    def normalize_language(language):
-        """Normalize language to standard values"""
-
-        if not language:
-            logger.info("Empty language value, defaulting to English")
-            return 'English'
-
-        
-            
-        cleaned_language = language.lower().strip()
-        normalized = LANGUAGE_MAPPING.get(cleaned_language, 'Unknown')
-        
-        if normalized == 'Unknown' and cleaned_language not in LANGUAGE_MAPPING:
-            ErrorCollector.get_instance().unknown_languages.add(language)
-            logger.warning(f"Unknown language value: '{language}' (cleaned: '{cleaned_language}')")
-        # else:
-        #     logger.info(f"Normalized language from '{language}' to '{normalized}'")
-            
-        return normalized
-
-    @staticmethod
     def strategy_add_to_cart(card, variant):
         """Modified to handle both dict and object card data"""
         if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
@@ -729,8 +673,8 @@ class ExternalDataSynchronizer:
                 attributes["data-variant"]
             )
             quality, language = quality_language[:2]
-            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
-            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
+            quality = CardQuality.normalize(quality)  # Normalize quality here
+            language = CardLanguage.normalize(language)  # Add this line
 
             select_tag = variant.find("select", {"class": "qty"}) or variant.find(
                 "input", {"class": "qty"}
@@ -758,8 +702,8 @@ class ExternalDataSynchronizer:
                 attributes["data-variant"]
             )
             quality, language = quality_language[:2]
-            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
-            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
+            quality = CardQuality.normalize(quality)  # Normalize quality here
+            language = CardLanguage.normalize(language)  # Add this line
 
             select_tag = variant.find("select", {"class": "qty"}) or variant.find(
                 "input", {"class": "qty"}
@@ -789,8 +733,8 @@ class ExternalDataSynchronizer:
             if quality is None or language is None:
                 return None
                 
-            quality = ExternalDataSynchronizer.normalize_quality(quality)  # Normalize quality here
-            language = ExternalDataSynchronizer.normalize_language(language)  # Add this line
+            quality = CardQuality.normalize(quality)  # Normalize quality here
+            language = CardLanguage.normalize(language)  # Add this line
 
             quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
             if quantity is None:
@@ -923,8 +867,9 @@ class ExternalDataSynchronizer:
                 logger.debug(f"Before normalization - Quality: {raw_quality}, Language: {raw_language}")
                 
                 # Normalize both values
-                quality = ExternalDataSynchronizer.normalize_quality(raw_quality)
-                language = ExternalDataSynchronizer.normalize_language(raw_language)
+                
+                quality = CardQuality.normalize(raw_quality)
+                language = CardLanguage.normalize(raw_language)
                 
                 logger.debug(f"After normalization - Quality: {quality}, Language: {language}")
                 return quality, language

@@ -8,16 +8,25 @@ class Scan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     scan_results = relationship("ScanResult", backref="scan", cascade="all, delete-orphan")
+    optimization_result = relationship(
+        "OptimizationResult",
+        uselist=False,
+        back_populates="scan",
+        cascade="all, delete-orphan",
+        overlaps="optimization_results"
+    )
 
     def to_dict(self):
         """Scan metadata and raw results only"""
-        return {
+        result = {
             'id': self.id,
             'created_at': self.created_at.isoformat(),
             'sites_scraped': len({r.site_id for r in self.scan_results}),
             'cards_scraped': len({r.name for r in self.scan_results}),
-            'scan_results': [result.to_dict() for result in self.scan_results]
+            'scan_results': [result.to_dict() for result in self.scan_results],
+            'optimization_result': self.optimization_result.to_dict() if self.optimization_result else None
         }
+        return result
 
 class ScanResult(BaseCard):
     """Raw card data from scraping"""
@@ -39,6 +48,7 @@ class ScanResult(BaseCard):
             'quality': self.quality,
             'quantity': self.quantity,
             'set_name': self.set_name,
+            'set_code': self.set_code,
             'version': self.version,
             'site_name': self.site.name if self.site else None
         }

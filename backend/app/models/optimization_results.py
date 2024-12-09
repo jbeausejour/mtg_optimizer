@@ -14,7 +14,11 @@ class OptimizationResult(db.Model):
     errors = db.Column(db.JSON)     # Changed from JSONB to JSON for SQLite compatibility
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    scan = db.relationship('Scan', backref='optimization_results')
+    scan = db.relationship(
+        'Scan',
+        back_populates='optimization_result',
+        overlaps="optimization_results"
+    )
 
     def to_dict(self):
         return {

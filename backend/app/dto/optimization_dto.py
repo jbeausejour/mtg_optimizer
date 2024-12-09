@@ -3,250 +3,12 @@ import pandas as pd
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict
 from datetime import datetime
-from enum import Enum
-
-# Quality mapping for standardization across the application
-QUALITY_MAPPING = {
-    # NM variants
-    "NM-Mint": "NM", 
-    "NM-MINT": "NM",
-    "MINT/NEAR-MINT": "NM",  # Add this line
-    "Mint/Near-Mint": "NM",
-    "Near-Mint": "NM",
-    "NEAR-MINT": "NM",
-    "NM": "NM",
-    "Brand New": "NM",
-    "HERO DEAL": "NM",
-    "New": "NM", 
-    "Mint/Near-Mint": "NM",
-    "MINT/NEAR-MINT": "NM",
-    "Near Mint": "NM",
-    "M/NM": "NM",
-    "Mint": "NM",
-    # LP variants
-    "LP": "LP", 
-    "Light Play": "LP",
-    "LIGHT PLAY": "LP",
-    "Lightly Played": "LP",
-    "EX": "LP",  
-    "VG": "LP",  
-    "SP": "LP",  
-    "SLIGHTLY PLAYED": "LP",  
-    # MP variants
-    "MP": "MP",
-    "Moderate Play": "MP", 
-    "MODERATE PLAY": "MP", 
-    "MODERATLY PLAYED": "MP", 
-    "Moderately Played": "MP",
-    "GD": "MP",  
-    "PL": "MP",  
-    # HP variants
-    "HP": "HP",
-    "Heavy Play": "HP",
-    "HEAVY PLAY": "HP",
-    "Heavy Played": "HP",
-    "Heavily Played": "HP",
-    "HEAVILY PLAYED": "HP",
-    "PR": "HP",  
-    # DMG variants
-    "DMG": "DMG",
-    "Damaged": "DMG",
-    "DAMAGED": "DMG",
-    # Default case
-    "": "DMG"  
-}
-
-# Quality weights for price adjustments
-QUALITY_WEIGHTS = {
-    "NM": 1.0,
-    "LP": 1.3,
-    "MP": 1.7,
-    "HP": 2.5,
-    "DMG": 999999
-}
-
-LANGUAGE_MAPPING = {
-    # English variants
-    'en': 'English',
-    'eng': 'English',
-    'english': 'English',
-    'en-us': 'English',
-    'anglais': 'English',  # French word for English
-    # Japanese variants
-    'jp': 'Japanese',
-    'ja': 'Japanese',
-    'jpn': 'Japanese',
-    'japanese': 'Japanese',
-    'japonais': 'Japanese',  # French word for Japanese
-    # Chinese variants
-    'cn': 'Chinese',
-    'zh': 'Chinese',
-    'chi': 'Chinese',
-    'chinese': 'Chinese',
-    's-chinese': 'Chinese',
-    'chinois': 'Chinese',  # French word for Chinese
-    # Korean variants
-    'kr': 'Korean',
-    'ko': 'Korean',
-    'kor': 'Korean',
-    'korean': 'Korean',
-    'coréen': 'Korean',  # French word for Korean
-    # Russian variants
-    'ru': 'Russian',
-    'rus': 'Russian',
-    'russian': 'Russian',
-    'russe': 'Russian',  # French word for Russian
-    # German variants
-    'de': 'German',
-    'deu': 'German',
-    'ger': 'German',
-    'german': 'German',
-    'allemand': 'German',  # French word for German
-    # Spanish variants
-    'es': 'Spanish',
-    'esp': 'Spanish',
-    'spa': 'Spanish',
-    'spanish': 'Spanish',
-    'espagnol': 'Spanish',  # French word for Spanish
-    # French variants
-    'fr': 'French',
-    'fra': 'French',
-    'fre': 'French',
-    'french': 'French',
-    'français': 'French',
-    # Italian variants
-    'it': 'Italian',
-    'ita': 'Italian',
-    'italian': 'Italian',
-    'italien': 'Italian',  # French word for Italian
-    # Portuguese variants
-    'pt': 'Portuguese',
-    'por': 'Portuguese',
-    'portuguese': 'Portuguese',
-    'portugais': 'Portuguese',  # French word for Portuguese
-    # Unknown variants
-    'unknown': 'Unknown',  # French word for Portuguese
-}
+from app.constants.card_mappings import CardLanguage, CardQuality
+from app.services.card_service import CardService
 
 logger = logging.getLogger(__name__)
 
-class CardQuality(str, Enum):
-    """Enumeration of possible card quality values"""
-    NM = "NM"
-    LP = "LP"
-    MP = "MP"
-    HP = "HP"  
-    DMG = "DMG"
-
-    @classmethod
-    def get_weight(cls, quality: str) -> float:
-        """Get weight for price adjustment based on card quality"""
-        normalized = cls.normalize(quality)
-        return QUALITY_WEIGHTS.get(normalized, QUALITY_WEIGHTS["DMG"])
-
-    @classmethod
-    def normalize(cls, quality: str) -> str:
-        """Normalize quality string to standard enum value"""
-        
-        if not quality:
-            logger.debug("Empty quality value, defaulting to NM")
-            return "NM"
-            
-        # Convert input quality to string and uppercase
-        quality_str = str(quality).strip().upper()
-        
-        # Create uppercase version of mapping for case-insensitive comparison
-        upper_mapping = {k.upper(): v for k, v in QUALITY_MAPPING.items()}
-        
-        # Try to find direct match in uppercase mapping
-        if quality_str in upper_mapping:
-            normalized = upper_mapping[quality_str]
-            logger.debug(f"Found quality mapping: '{quality}' -> '{normalized}'")
-            return normalized
-                
-        # If no match found, log warning and return DMG
-        logger.warning(f"No quality mapping found for '{quality}', defaulting to DMG")
-        return "DMG"
-
-    @classmethod
-    def validate(cls, quality: str) -> bool:
-        """Validate if a quality value is valid after normalization"""
-        normalized = cls.normalize(quality)
-        return normalized in {q.value for q in cls}
-
-    @classmethod
-    def validate_and_normalize(cls, quality: str) -> str:
-        """Validate and normalize quality string, raising error if invalid"""
-        logger.debug(f"Validating and normalizing quality: '{quality}'")
-        try:
-            normalized = cls.normalize(quality)
-            logger.debug(f"Normalized quality: '{normalized}'")
-            
-            if not cls.validate(normalized):
-                valid_qualities = ", ".join(q.value for q in cls)
-                logger.error(f"Quality validation failed - '{quality}' normalized to '{normalized}' is not in valid qualities: {valid_qualities}")
-                raise ValueError(f"Invalid quality '{quality}' (normalized: '{normalized}'). Must be one of: {valid_qualities}")
-                
-            return normalized
-        except Exception as e:
-            logger.error(f"Error in validate_and_normalize: {str(e)}", exc_info=True)
-            raise
-
-    @classmethod
-    def update_mapping(cls, quality: str, mapped_quality: str) -> None:
-        """Update the quality mapping dictionary with a new mapping"""
-        if mapped_quality not in {q.value for q in cls}:
-            raise ValueError(f"Invalid mapped quality: {mapped_quality}. Must be one of {[q.value for q in cls]}")
-        QUALITY_MAPPING[quality] = mapped_quality
-        logger.info(f"Added new quality mapping: {quality} -> {mapped_quality}")
-
-    @classmethod
-    def validate_and_update_qualities(cls, df: pd.DataFrame, quality_column: str = "Quality", interactive: bool = False) -> pd.DataFrame:
-        """Validate quality values in DataFrame and optionally update mappings."""
-        if quality_column not in df.columns:
-            logger.error(f"Column '{quality_column}' not found in DataFrame. Available columns: {df.columns.tolist()}")
-            raise ValueError(f"Column {quality_column} not found in DataFrame")
-
-        # Create a copy to avoid modifying the original
-        df = df.copy()
-        
-        # Find unmapped qualities
-        unique_qualities = df[quality_column].dropna().unique()
-        # logger.info(f"Found unique qualities in DataFrame: {unique_qualities.tolist()}")
-        
-        for quality in unique_qualities:
-            logger.debug(f"Processing quality value: '{quality}'")
-            try:
-                normalized = cls.validate_and_normalize(quality)
-                # Update all matching values in the DataFrame
-                df.loc[df[quality_column] == quality, quality_column] = normalized
-                logger.debug(f"Successfully normalized '{quality}' to '{normalized}'")
-            except ValueError as e:
-                logger.warning(f"Quality normalization failed for '{quality}': {str(e)}")
-                if interactive:
-                    # ...existing interactive code...
-                    pass
-                else:
-                    logger.warning(f"Automatically mapping unknown quality '{quality}' to 'DMG'")
-                    df.loc[df[quality_column] == quality, quality_column] = "DMG"
-
-        # Verify final qualities
-        # final_qualities = df[quality_column].unique()
-        # logger.info(f"Final unique qualities after normalization: {final_qualities.tolist()}")
-        return df
-
-class CardLanguage(str, Enum):
-    """Enumeration of possible card language values"""
-    ENGLISH = "English"
-    JAPANESE = "Japanese"
-    CHINESE = "Chinese"
-    KOREAN = "Korean"
-    RUSSIAN = "Russian"
-    GERMAN = "German"
-    SPANISH = "Spanish"
-    FRENCH = "French"
-    ITALIAN = "Italian"
-    PORTUGUESE = "Portuguese"
+# Remove CardQuality class entirely as it's now in card_mappings.py
 
 class CardValidation(BaseModel):
     """Base validation rules for card-related DTOs"""
@@ -280,6 +42,7 @@ class CardInSolution(BaseModel):
     quality: str
     quantity: int
     set_name: str
+    set_code: str
     version: str = Field(default="Standard")
     foil: bool = False
     language: str = "English"
@@ -294,6 +57,7 @@ class CardOptimizationDTO(CardValidation):
     site_id: int = Field(..., gt=0)
     site_name: str
     set_name: str
+    set_code: str
     quality: CardQuality = CardQuality.NM
     foil: bool = False
     language: CardLanguage = CardLanguage.ENGLISH
@@ -381,14 +145,27 @@ class OptimizationResultDTO(BaseModel):
             version = card_data.get('version')
             if version is None or version == "":
                 version = 'Standard'
-                
+
+            set_name = card_data.get('set_name')
+            set_code = card_data.get('set_code')
+            
+            if not set_code:
+                logger.info(f"Attempting to get set code for set name: {set_name}")
+                try:
+                    set_code = CardService.get_set_code(set_name)
+                    logger.info(f"Retrieved set code: {set_code} for set: {set_name}")
+                except Exception as e:
+                    logger.error(f"Failed to get set code for {set_name}: {str(e)}")
+                    set_code = ""  # Fallback to empty string if lookup fails
+            
             return {
                 'name': card_data['name'],
                 'site_name': card_data['site_name'],
                 'price': float(card_data['price']),
                 'quality': card_data['quality'],
                 'quantity': int(card_data['quantity']),
-                'set_name': card_data['set_name'],
+                'set_name': set_name,
+                'set_code': set_code,
                 'version': version,
                 'foil': bool(card_data.get('foil', False)),
                 'language': card_data.get('language', 'English'),

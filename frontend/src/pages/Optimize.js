@@ -26,6 +26,7 @@ const Optimize = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [taskProgress, setTaskProgress] = useState(0);
+  const [isOptimizing, setIsOptimizing] = useState(false);
 
   useEffect(() => {
     fetchCards();
@@ -34,6 +35,7 @@ const Optimize = () => {
 
   useEffect(() => {
     if (taskId) {
+      setIsOptimizing(true);
       const interval = setInterval(() => {
         checkTaskStatus(taskId);
       }, 2000);
@@ -91,16 +93,20 @@ const Optimize = () => {
       setTaskStatus(response.data.state);
       setTaskProgress(response.data.progress ?? 0);
 
-      if (response.data.state === 'SUCCESS') {
-        message.success('Optimization completed successfully!');
+      if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
+        setIsOptimizing(false);
         setTaskId(null);
-        setOptimizationResult(response.data.result?.optimization);
-      } else if (response.data.state === 'FAILURE') {
-        message.error(`Optimization failed: ${response.data.error}`);
-        setTaskId(null);
+        if (response.data.state === 'SUCCESS') {
+          message.success('Optimization completed successfully!');
+          setOptimizationResult(response.data.result?.optimization);
+        } else {
+          message.error(`Optimization failed: ${response.data.error}`);
+        }
       }
     } catch (error) {
       console.error('Error checking task status:', error);
+      setIsOptimizing(false);
+      setTaskId(null);
     }
   };
 
@@ -169,8 +175,13 @@ const Optimize = () => {
         </Col>
       </Row>
 
-      <Button type="primary" onClick={handleOptimize} className={`optimize-button ${theme}`}>
-        Run Optimization
+      <Button 
+        type="primary" 
+        onClick={handleOptimize} 
+        className={`optimize-button ${theme}`}
+        disabled={isOptimizing}
+      >
+        {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
       </Button>
 
       {taskStatus && (
@@ -184,7 +195,10 @@ const Optimize = () => {
 
       {optimizationResult && (
         <div className="mt-8">
-          <OptimizationSummary result={optimizationResult} />
+          <OptimizationSummary 
+            result={optimizationResult} 
+            onCardClick={handleCardClick}
+          />
         </div>
       )}
 
@@ -248,9 +262,11 @@ const Optimize = () => {
             <Spin size="large" />
             <Text className="mt-4">Loading card data...</Text>
           </div>
-        ) : cardData ? (
+        ) : cardData?.scryfall ? (
           <ScryfallCard data={cardData.scryfall} />
-        ) : null}
+        ) : (
+          <div>No card data available</div>
+        )}
       </Modal>
     </div>
   );

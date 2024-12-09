@@ -185,7 +185,7 @@ export const OptimizationDetails = ({ solution, onCardClick }) => {
       {selectedCard && (
         <CardDetail
           cardName={selectedCard.name}
-          setName={selectedCard.set}
+          setName={selectedCard.set_name}
           language={selectedCard.language}
           version={selectedCard.version}
           foil={selectedCard.foil}
