@@ -53,7 +53,7 @@ def login():
     return jsonify({"message": "Invalid username or password"}), 401
 
 @admin_routes.route("/create_user", methods=["POST"])
-def create_user():
+def route_create_user():
     try:
         logger.info("Creating user")
         create_user()

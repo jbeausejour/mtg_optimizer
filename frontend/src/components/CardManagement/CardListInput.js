@@ -13,6 +13,7 @@ const CardListInput = ({ onSubmit }) => {
   const [selectedSet, setSelectedSet] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [cardVersions, setCardVersions] = useState(null);
+  const [quality, setQuality] = useState('NM');  // Add quality state
 
   const fetchSuggestions = async (query) => {
     if (query.length > 2) {
@@ -56,11 +57,13 @@ const CardListInput = ({ onSubmit }) => {
       setCardList([...cardList, { 
         name: cardName,     // Changed from 'Name'
         quantity,           // Changed from 'Quantity'
-        set_name: selectedSet  // Changed from 'Edition' or 'set'
+        set_name: selectedSet,  // Changed from 'Edition' or 'set'
+        quality  // Include quality
       }]);
       setCardName('');
       setQuantity(1);
       setSelectedSet('');
+      setQuality('NM');  // Reset quality
       setCardVersions(null);
     }
   };
@@ -108,6 +111,18 @@ const CardListInput = ({ onSubmit }) => {
               min={1} 
               placeholder="Quantity"
             />
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Select Quality"
+              value={quality}
+              onChange={setQuality}
+            >
+              <Option value="NM">Near Mint (NM)</Option>
+              <Option value="LP">Lightly Played (LP)</Option>
+              <Option value="MP">Moderately Played (MP)</Option>
+              <Option value="HP">Heavily Played (HP)</Option>
+              <Option value="DMG">Damaged (DMG)</Option>
+            </Select>
           </>
         )}
         <Button onClick={handleAddCard} disabled={!cardName || !selectedSet || quantity < 1}>Add Card</Button>
@@ -115,7 +130,7 @@ const CardListInput = ({ onSubmit }) => {
           dataSource={cardList}
           renderItem={item => (
             <List.Item>
-              {item.name} x{item.quantity} ({item.set_code})
+              {item.name} x{item.quantity} ({item.set_name}) - {item.quality}
             </List.Item>
           )}
         />

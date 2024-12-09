@@ -86,7 +86,7 @@ class PurchaseOptimizer:
         """Validate input data structure and content"""
         required_columns = {
             'filtered_listings': ['name', 'site_name', 'price', 'quality', 'quantity'],
-            'user_wishlist': ['name', 'quantity']
+            'user_wishlist': ['name', 'quantity', 'min_quality']  # Ensure min_quality is included
         }
 
         for df_name, columns in required_columns.items():
@@ -117,26 +117,24 @@ class PurchaseOptimizer:
 
     def run_optimization(self, card_names, config):
         try:
+            final_result = None
             # Debug incoming data
             logger.debug(f"Input DataFrame columns: {self.filtered_listings_df.columns.tolist()}")
 
             self.filtered_listings_df['site_name'] = self.filtered_listings_df['site_name'].astype(str)
-            filtered_df = self.filtered_listings_df[self.filtered_listings_df["name"].isin(card_names)]
+            self.filtered_listings_df = self.filtered_listings_df[self.filtered_listings_df["name"].isin(card_names)]
 
-            # Debug site data
-            logger.info(f"Unique sites: {filtered_df['site_name'].nunique()}")
-            logger.debug(f"Site values: {filtered_df['site_name'].unique().tolist()}")
-            if filtered_df.empty:
+            if self.filtered_listings_df.empty:
                 logger.error("No matching cards found in listings")
                 return {"best_solution": [], "iterations": None}
 
             logger.info(f"Starting optimization with {len(card_names)} cards")
-            logger.info(f"Found {filtered_df['site_name'].nunique()} unique sites")
-            logger.debug(f"Unique sites: {filtered_df['site_name'].unique().tolist()}")
+            logger.info(f"Found {self.filtered_listings_df['site_name'].nunique()} unique sites")
+            logger.info(f"Unique sites: {self.filtered_listings_df['site_name'].unique().tolist()}")
 
-            if config["milp_strat"]:
+            if config["milp_strat"] or config["hybrid_strat"]:
                 logger.info("Running MILP optimization...")
-                best_solution, iterations = self.run_milp_optimization()
+                best_solution, all_milp_solutions = self.run_milp_optimization()
                 
                 if best_solution is None:
                     logger.warning("MILP optimization returned no results")
@@ -147,11 +145,11 @@ class PurchaseOptimizer:
                 
                 # Format iterations to be serializable
                 formatted_iterations = []
-                if iterations:
-                    for iteration in iterations:
-                        iteration_copy = iteration.copy()
-                        if isinstance(iteration['sorted_results_df'], pd.DataFrame):
-                            iteration_copy['sorted_results_df'] = iteration['sorted_results_df'].to_dict('records')
+                if all_milp_solutions:
+                    for a_milp_solution in all_milp_solutions:
+                        iteration_copy = a_milp_solution.copy()
+                        if isinstance(a_milp_solution['sorted_results_df'], pd.DataFrame):
+                            iteration_copy['sorted_results_df'] = a_milp_solution['sorted_results_df'].to_dict('records')
                         formatted_iterations.append(iteration_copy)
 
                 final_result = {
@@ -162,9 +160,90 @@ class PurchaseOptimizer:
                 logger.info(f"Final optimization results:")
                 logger.info(f"\tNumber of cards in best solution: {len(best_solution_records)}")
                 logger.info(f"\tNumber of attempted solutions: {len(formatted_iterations)}")
-                
-                return final_result
+            
+            if config["nsga_strat"] or config["hybrid_strat"]:
+                logger.info("Running NSGA-II optimization...")
 
+                # Convert MILP results to milp_solution
+                milp_solution = []
+                # Run the optimization algorithm
+                if config["hybrid_strat"]:
+                    logger.info(f"Hybrid optimization preparation...")
+                    # Create a unique identifier in card_details_df
+                    self.filtered_listings_df['Identifier'] = self.filtered_listings_df.apply(lambda row: f"{row['name']}_{row['site_name']}_{row['price']}", axis=1)
+
+                    # Create a mapping from the unique identifier to index
+                    identifier_to_index = {identifier: idx for idx, identifier in self.filtered_listings_df['Identifier'].items()}
+
+                    if isinstance(final_result.get('best_solution'), list):
+                        for row in final_result['best_solution']:
+                            identifier = f"{row['name']}_{row['site_name']}_{row['price']}"
+                            if identifier in identifier_to_index:
+                                idx = identifier_to_index[identifier]
+                                milp_solution.append(idx)
+                            else:
+                                logger.info(f"Combination {identifier} not found in card_details_df.")
+                    else:
+                        logger.warning("best_solution is not a list.")
+
+                    # Drop the 'Identifier' column as it's no longer needed
+                    self.filtered_listings_df = self.filtered_listings_df.drop(columns=['Identifier'])
+                    
+                    logger.info(f"Hybrid optimization preparation complte.")
+
+                # Run NSGA-II without the MILP solution
+                pareto_front = self.run_nsga_ii_optimization(milp_solution=milp_solution)
+
+                # Process the Pareto front
+                best_solution = None
+                best_score = float('inf')
+
+                # Adjusted weights
+                weight_cost = 0.45
+                weight_quality = 0.3  # Adjust as needed
+                weight_availability = 0.15  # Adjust as needed
+                weight_num_stores = 0.1  # Adjust as needed
+
+                def normalize_cost(cost):
+                    return (cost - 100) / (900)  # Assuming costs range from $100 to $1000
+
+                def normalize_num_stores(num_stores):
+                    return (num_stores - 1) / (19)  # Assuming store count ranges from 1 to 20
+
+                for solution in pareto_front:
+                    cost, quality, availability, num_stores = solution.fitness.values
+
+                    normalized_cost = normalize_cost(cost)
+                    normalized_num_stores = normalize_num_stores(num_stores)
+                    # Composite score calculation
+                    composite_score = (weight_cost * normalized_cost +
+                                       weight_quality * quality +
+                                       weight_availability * availability +
+                                       weight_num_stores * normalized_num_stores)
+                    
+                    if composite_score < best_score:
+                        logger.info("A new \"best solution\" was found: ")
+                        logger.info(f"cost: {str(weight_cost * cost)} ({cost})")
+                        logger.info(f"quality: {str(weight_quality * (1/quality))} ({quality})")
+                        logger.info(f"availability: {str(weight_availability * (availability) )} ({availability})")
+                        logger.info(f"num_stores: {str(weight_num_stores * num_stores)} ({num_stores})")
+                        logger.info(f"composite_score vs old composite_score: {str(composite_score)} vs {str(best_score)}")
+
+                        best_score = composite_score
+                        best_solution = solution
+
+                # Extract the purchasing plan from the best solution
+                if best_solution:
+                    # Map the solution back to your card_details_df to determine the purchasing plan
+                    purchasing_plan = self.get_purchasing_plan(best_solution)
+
+                    # Convert the list of dictionaries into a DataFrame
+                    final_result = pd.DataFrame(purchasing_plan)
+
+                else:
+                    logger.info("No \"best solution\" found in the Pareto front.")
+            return final_result
+        
         except Exception as e:
             logger.error(f"Optimization failed: {str(e)}", exc_info=True)
             raise
@@ -184,10 +263,10 @@ class PurchaseOptimizer:
             # Validate and clean input data
             filtered_listings_df = filtered_listings_df.copy()
             
-            # Ensure site column is string and properly formatted
-            filtered_listings_df['site_name'] = filtered_listings_df['site_name'].fillna(
-                filtered_listings_df['site_name']
-            ).astype(str)
+            # # Ensure site column is string and properly formatted
+            # filtered_listings_df['site_name'] = filtered_listings_df['site_name'].fillna(
+            #     filtered_listings_df['site_name']
+            # ).astype(str)
             
             # Debug site data
             logger.debug(f"Site column unique values: {filtered_listings_df['site_name'].unique().tolist()}")
@@ -255,7 +334,7 @@ class PurchaseOptimizer:
 
             if not find_min_store:
                 prob, buy_vars = PurchaseOptimizer._setup_prob(
-                    costs, unique_cards, unique_stores, user_wishlist_df, min_store
+                    costs, unique_cards, unique_stores, user_wishlist_df, min_store, total_qty
                 )
                 if pulp.LpStatus[prob.status] != "Optimal":
                     logger.warning("Solver did not find an optimal solution.")
@@ -281,6 +360,7 @@ class PurchaseOptimizer:
                         unique_stores,
                         user_wishlist_df,
                         current_min,
+                        total_qty
                     )
                     
                     logger.info(f"Solver solution: {pulp.LpStatus[prob.status]}")
@@ -348,7 +428,7 @@ class PurchaseOptimizer:
 
 
     @staticmethod
-    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store):
+    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store, total_qty):
         # Add validation for store count
         if len(unique_stores) < min_store:
             logger.warning(f"Adjusting min_store from {min_store} to {len(unique_stores)} due to available stores")
@@ -456,6 +536,7 @@ class PurchaseOptimizer:
         ELITISM_SIZE = int(0.1 * MU)
 
         if milp_solution:
+            logger.info(f"integrating milp optimization.")
             milp_individual = PurchaseOptimizer._milp_solution_to_individual(
                 milp_solution
             )
@@ -465,6 +546,7 @@ class PurchaseOptimizer:
         else:
             pop = toolbox.population(n=MU)
 
+        logger.info(f"setting up fitness evaluation.")
         fitnesses = map(toolbox.evaluate, pop)
         for ind, fit in zip(pop, fitnesses):
             ind.fitness.values = fit
@@ -476,7 +558,9 @@ class PurchaseOptimizer:
         best_fitness_so_far = float("inf")
         generations_without_improvement = 0
 
+        logger.info(f"Running each genenrations.")
         for gen in range(NGEN):
+            logger.info(f"Generation {gen} started.")
             offspring = algorithms.varAnd(pop, toolbox, CXPB, MUTPB)
             fitnesses = map(toolbox.evaluate, offspring)
             for ind, fit in zip(offspring, fitnesses):
@@ -486,13 +570,17 @@ class PurchaseOptimizer:
             pareto_front.update(pop)
 
             current_best_fitness = tools.selBest(pop, 1)[0].fitness.values[0]
+            logger.info(f"Generation {gen} best fitness: {current_best_fitness}")
+
             if (
                 best_fitness_so_far - current_best_fitness
             ) / best_fitness_so_far > convergence_threshold:
                 best_fitness_so_far = current_best_fitness
                 generations_without_improvement = 0
+                logger.info(f"Improvement found in generation {gen}. Best fitness so far: {best_fitness_so_far}")
             else:
                 generations_without_improvement += 1
+                logger.info(f"No improvement in generation {gen}. Generations without improvement: {generations_without_improvement}")
 
             if generations_without_improvement >= num_generations_threshold:
                 logger.info(f"Convergence reached after {gen} generations.")
@@ -567,7 +655,7 @@ class PurchaseOptimizer:
             quality_weights = QUALITY_WEIGHTS
 
             all_cards_present = all(
-                card_counters[getattr(card_row, "Name")] > 0
+                card_counters[getattr(card_row, "name")] > 0
                 for card_row in filtered_listings_df.itertuples()
             )
             if not all_cards_present:
@@ -582,19 +670,21 @@ class PurchaseOptimizer:
                 user_wishlist_card = user_wishlist_df[user_wishlist_df["name"] == card_name].iloc[0]
                 
                 # Add quality matching penalty
-                requested_quality = user_wishlist_card.get("quality", "NM")
-                actual_quality = card_row.get("Quality", "NM")
+                requested_quality = user_wishlist_card.get("min_quality", "NM")
+                actual_quality = card_row.get("quality", "NM")
+                # Ensure requested_quality is a valid key
+                requested_quality = requested_quality if requested_quality in QUALITY_WEIGHTS else "NM"
                 quality_mismatch_penalty = (
-                    quality_weights[requested_quality] - 
-                    quality_weights.get(actual_quality, quality_weights["DMG"])
+                    QUALITY_WEIGHTS[requested_quality] - 
+                    QUALITY_WEIGHTS.get(actual_quality, QUALITY_WEIGHTS["DMG"])
                 ) * 10  # Adjust penalty weight as needed
 
                 if card_counters[card_name] > 0:
                     card_counters[card_name] -= 1
                     card_availability[card_name] += card_row["quantity"]
 
-                    card_price = card_row["Price"]
-                    if card_row["language"] != "English":
+                    card_price = card_row["price"]
+                    if card_row["language"].lower() != "english":
                         card_price *= language_penalty
                     total_cost += card_price + quality_mismatch_penalty
 
@@ -717,15 +807,16 @@ class PurchaseOptimizer:
     @staticmethod
     def _initialize_individual(filtered_listings_df, user_wishlist_df):
         individual = []
+        not_present = set()  # Use a set to handle unique values
         for _, card in user_wishlist_df.iterrows():
-            available_options = filtered_listings_df[filtered_listings_df["name"]
-                                                == card["name"]]
+            available_options = filtered_listings_df[filtered_listings_df["name"] == card["name"]]
             if not available_options.empty:
                 selected_option = available_options.sample(n=1)
                 individual.append(selected_option.index.item())
             else:
-                logger.warning(
-                    "Card %s not available in any store!", card["name"])
+                not_present.add(card["name"])
+        for card in not_present:
+            logger.warning(f"Card {card} not available in any store!")  # Corrected logging
         return creator.Individual(individual)
 
     @staticmethod

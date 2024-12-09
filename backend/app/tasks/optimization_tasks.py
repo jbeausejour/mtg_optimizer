@@ -125,8 +125,7 @@ class OptimizationTaskManager:
                 new_results = loop.run_until_complete(
                     scraper.scrape_multiple_sites(
                         self.sites,
-                        [card['name'] for card in outdated_cards],
-                        strategy=self.strategy
+                        [card['name'] for card in outdated_cards]
                     )
                 )
                 if new_results:
@@ -163,6 +162,12 @@ class OptimizationTaskManager:
             card_listings_df = pd.DataFrame(card_listings)
             filtered_listings_df = self._process_listings_dataframe(card_listings_df)
             user_wishlist_df = pd.DataFrame(self.card_list_from_frontend)
+
+            # Ensure min_quality is included in user_wishlist_df
+            if 'quality' in user_wishlist_df.columns:
+                user_wishlist_df.rename(columns={'quality': 'min_quality'}, inplace=True)
+            else:
+                user_wishlist_df['min_quality'] = 'NM'  # Default to 'NM' if not provided
 
             return filtered_listings_df, user_wishlist_df
 
@@ -243,10 +248,11 @@ class OptimizationTaskManager:
             
             config = {
                 "milp_strat": self.strategy == "milp",
-                "nsga_algo_strat": self.strategy == "nsga-ii",
+                "nsga_strat": self.strategy == "nsga-ii",
                 "hybrid_strat": self.strategy == "hybrid",
                 "min_store": self.min_store,
                 "find_min_store": self.find_min_store,
+                "max_store": 10  # Introduce a maximum number of stores to use
             }
             
             optimizer = PurchaseOptimizer(
@@ -344,12 +350,12 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
             
             self.update_state(state="PROCESSING", meta={"status": "Running optimization", "progress": 50})
             optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
-            self.update_state(state="PROCESSING", meta={"status": "Otimization complete", "progress": 75})
+            self.update_state(state="PROCESSING", meta={"status": "Optimization complete", "progress": 75})
             
             if optimization_result:
-                # logger.info("Optimization Result received:")
-                # logger.info(f"Sites Results: {len(optimization_result['best_solution']) if optimization_result.get('best_solution') else 0} items")
-                # logger.info(f"Iterations: {len(optimization_result['iterations']) if optimization_result.get('iterations') else 0} items")
+                logger.info("Optimization Result received:")
+                logger.info(f"Sites count results: {len(optimization_result['best_solution']) if optimization_result.get('best_solution') else 0} items")
+                logger.info(f"# Iterations: {len(optimization_result['iterations']) if optimization_result.get('iterations') else 0} items")
 
                 result_dto = OptimizationResultDTO(
                     status="Completed",
@@ -365,7 +371,7 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                 dumped_result = result_dto.model_dump()
                 # logger.info("Final DTO dump:")
                 # logger.info(f"Status: {dumped_result['status']}")
-                # logger.info(f"Solutions count: {len(dumped_result['optimization']['solutions'])}")
+                logger.info(f"Solutions count: {len(dumped_result['optimization']['solutions'])}")
                 # logger.info(f"First solution cards: {len(dumped_result['optimization']['solutions'][0]['cards']) if dumped_result['optimization']['solutions'] else 0} cards")
                 
                 # Save optimization result to database
@@ -381,6 +387,7 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                 db.session.add(optimization_result_db)
                 db.session.commit()
                 
+                self.update_state(state="PROCESSING", meta={"status": "Task complete", "progress": 100})
                 return dumped_result
 
                 
@@ -395,7 +402,17 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                 progress=100
             ).model_dump()
             
-            db.session.add(failed_optimization)
+            failed_optimization_db = OptimizationResult(
+                scan_id=task_manager.current_scan_id,
+                status=failed_optimization['status'],
+                message=failed_optimization['message'],
+                sites_scraped=failed_optimization['sites_scraped'],
+                cards_scraped=failed_optimization['cards_scraped'],
+                solutions=failed_optimization['optimization']['solutions'],
+                errors=failed_optimization['optimization']['errors']
+            )
+            
+            db.session.add(failed_optimization_db)
             db.session.commit()
             return failed_optimization
 

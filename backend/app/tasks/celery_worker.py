@@ -32,4 +32,4 @@ logger.info(f"Celery result backend: {celery_app.conf.result_backend}")
 if __name__ == "__main__":
     with app.app_context():
         print("Starting Celery worker...")
-        celery_app.worker_main(["worker", "--loglevel=info --pool=solo"])
+        celery_app.worker_main(["worker", "--loglevel=info", "--pool=solo"])

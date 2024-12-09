@@ -172,6 +172,7 @@ const SiteManagement = () => {
       sorter: (a, b) => a.method?.localeCompare(b.method),
       filters: [
         { text: 'Add to cart', value: 'add_to_cart' },
+        { text: 'Shopify', value: 'Shopify' },
         { text: 'Other', value: 'other' },
       ],
       onFilter: (value, record) => record.method === value,
@@ -297,6 +298,7 @@ const SiteManagement = () => {
       >
         <Select>
           <Select.Option value="add_to_cart">add_to_cart</Select.Option>
+          <Select.Option value="Shopify">Shopify</Select.Option>
           <Select.Option value="other">other</Select.Option>
         </Select>
       </Form.Item>

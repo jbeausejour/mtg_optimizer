@@ -77,7 +77,12 @@ const Optimize = () => {
         strategy: optimizationStrategy,
         min_store: minStore,
         find_min_store: findMinStore,
-        card_list: cardList
+        card_list: cardList.map(card => ({
+          name: card.name,
+          quantity: card.quantity,
+          set_name: card.set_name,
+          quality: card.quality  // Ensure quality is included
+        }))
       });
       setTaskId(response.data.task_id);
       message.success('Optimization task started!');
