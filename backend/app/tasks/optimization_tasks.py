@@ -42,6 +42,8 @@ class OptimizationTaskManager:
         self.min_store = min_store
         self.find_min_store = find_min_store
         self.sites = Site.query.filter(Site.id.in_(site_ids)).all()
+        logger.info(f"Site IDs received: {site_ids}")
+        logger.info(f"Sites found: {[(site.id, site.name) for site in self.sites]}")
         self.site_data = {site.id: {'name': site.name, 'url': site.url} for site in self.sites}
         self.card_names = [card['name'] for card in card_list_from_frontend if 'name' in card]
         self.logger = logger
@@ -236,6 +238,34 @@ class OptimizationTaskManager:
 
     def run_optimization(self, filtered_listings_df, user_wishlist_df):
         """Run optimization with the prepared data"""
+
+        logger.info("\n=== Starting Optimization Process ===")
+        
+        # Add site statistics debugging
+        if not filtered_listings_df.empty:
+            logger.info(f"Total filtered listings: {len(filtered_listings_df)}")
+            site_stats = filtered_listings_df.groupby('site_id').agg({
+                'name': 'count',
+                'price': ['min', 'max', 'mean'],
+                'quantity': 'sum'
+            }).round(2)
+            
+            logger.info("\nAvailable Sites Statistics:")
+            logger.info("=" * 80)
+            logger.info(f"{'Site ID':<8} {'Cards':<6} {'Min $':>8} {'Max $':>8} {'Avg $':>8} {'Total Qty':>10}")
+            logger.info("-" * 80)
+            
+            for site_id, stats in site_stats.iterrows():
+                logger.info(
+                    f"{site_id:<8} "
+                    f"{stats[('name', 'count')]:<6} "
+                    f"{stats[('price', 'min')]:>8.2f} "
+                    f"{stats[('price', 'max')]:>8.2f} "
+                    f"{stats[('price', 'mean')]:>8.2f} "
+                    f"{stats[('quantity', 'sum')]:>10}"
+                )
+            logger.info("=" * 80)
+
         try:
             if filtered_listings_df is None or user_wishlist_df is None:
                 self.logger.error("Invalid input data for optimization")
@@ -262,7 +292,7 @@ class OptimizationTaskManager:
             )
             
             optimization_results = optimizer.run_optimization(self.card_names, config)
-            
+
             # Collect errors from ErrorCollector
             error_collector = ErrorCollector.get_instance()
             optimization_results['errors'] = {
@@ -321,6 +351,8 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
         task_manager = OptimizationTaskManager(site_ids, card_list_from_frontend, config.strategy, 
                                              config.min_store, config.find_min_store)
         logger = task_manager.logger
+        logger.info(f"Sites after task_manager init: {task_manager.site_ids}")
+        logger.info(f"Sites after sites.dict init: {task_manager.sites}")
         try:
             self.update_state(state="PROCESSING", meta={"status": "Task initialized", "progress": 0})
             scraping_results = task_manager.handle_scraping()
@@ -352,7 +384,7 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
             optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
             self.update_state(state="PROCESSING", meta={"status": "Optimization complete", "progress": 75})
             
-            if optimization_result:
+            if isinstance(optimization_result, pd.DataFrame) and not optimization_result.empty:
                 logger.info("Optimization Result received:")
                 logger.info(f"Sites count results: {len(optimization_result['best_solution']) if optimization_result.get('best_solution') else 0} items")
                 logger.info(f"# Iterations: {len(optimization_result['iterations']) if optimization_result.get('iterations') else 0} items")
@@ -366,7 +398,13 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                     progress=100
                 )
                 
-                result_dto.format_from_milp(optimization_result["best_solution"], optimization_result["iterations"])
+                # Convert DataFrame to dict format for DTO
+                optimization_result_dict = {
+                    "best_solution": optimization_result.to_dict('records'),
+                    "iterations": []  # Add iterations if available
+                }
+                # Changed from format_from_milp to format_solutions
+                result_dto.format_solutions(optimization_result_dict["best_solution"], optimization_result_dict["iterations"])
                 
                 dumped_result = result_dto.model_dump()
                 # logger.info("Final DTO dump:")
@@ -391,6 +429,40 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                 return dumped_result
 
                 
+            elif isinstance(optimization_result, dict) and optimization_result.get('pareto_front'):
+                result_dto = OptimizationResultDTO(
+                    status="Completed",
+                    message="Optimization completed successfully",
+                    sites_scraped=len(task_manager.sites),
+                    cards_scraped=len(card_list_from_frontend),
+                    solutions=[],
+                    progress=100
+                )
+                
+                # Format NSGA-II solutions
+                solutions = optimization_result['pareto_front']
+                iterations = optimization_result.get('iterations', [])
+                result_dto.format_solutions(solutions, iterations)
+
+                dumped_result = result_dto.model_dump()
+                logger.info(f"Solutions count: {len(dumped_result['optimization']['solutions'])}")
+                
+                # Save optimization result to database
+                optimization_result_db = OptimizationResult(
+                    scan_id=task_manager.current_scan_id,
+                    status=dumped_result['status'],
+                    message=dumped_result['message'],
+                    sites_scraped=dumped_result['sites_scraped'],
+                    cards_scraped=dumped_result['cards_scraped'],
+                    solutions=dumped_result['optimization']['solutions'],
+                    errors=dumped_result['optimization']['errors']
+                )
+                db.session.add(optimization_result_db)
+                db.session.commit()
+                
+                self.update_state(state="PROCESSING", meta={"status": "Task complete", "progress": 100})
+                return dumped_result
+
             error_collector = ErrorCollector.get_instance()
             failed_optimization = OptimizationResultDTO(
                 status="Failed",
@@ -414,6 +486,8 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
             
             db.session.add(failed_optimization_db)
             db.session.commit()
+            
+            self.update_state(state="PROCESSING", meta={"status": "Task Failed", "progress": 100})
             return failed_optimization
 
         except Exception as e:

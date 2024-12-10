@@ -198,10 +198,15 @@ def start_scraping():
     #current_app.logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
+    current_app.logger.info(f"Received site_ids: {site_ids}")
     card_list_from_frontend = data.get("card_list", [])
+    #current_app.logger.info(f"Received card_list_from_frontend: {card_list_from_frontend}")
     strategy = data.get("strategy", "milp")
+    current_app.logger.info(f"Received strategy: {strategy}")
     min_store = data.get("min_store", 1)
+    current_app.logger.info(f"Received min_store: {min_store}")
     find_min_store = data.get("find_min_store", False)
+    current_app.logger.info(f"Received find_min_store: {find_min_store}")
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400

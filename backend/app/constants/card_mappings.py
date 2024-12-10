@@ -30,6 +30,7 @@ QUALITY_MAPPING: Dict[str, str] = {
     "EX": "LP",  
     "VG": "LP",  
     "SP": "LP",  
+    "Slight Play": "LP",  
     "SLIGHTLY PLAYED": "LP",  
     # MP variants
     "MP": "MP",
@@ -37,8 +38,10 @@ QUALITY_MAPPING: Dict[str, str] = {
     "MODERATE PLAY": "MP", 
     "MODERATLY PLAYED": "MP", 
     "Moderately Played": "MP",
+    "Played": "MP",
     "GD": "MP",  
     "PL": "MP",  
+    "PL/MP": "MP",  
     # HP variants
     "HP": "HP",
     "Heavy Play": "HP",
@@ -250,6 +253,9 @@ class CardLanguage(str, Enum):
             
         return normalized
 
+    @classmethod
+    def get_language_mapping(cls):
+        return LANGUAGE_MAPPING
 class CardVersion(str, Enum):
     """Enumeration of possible card version values"""
     STANDARD = "Standard"

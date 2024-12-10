@@ -130,112 +130,79 @@ class OptimizationResultDTO(BaseModel):
     )
     progress: int = 100
 
-    def format_from_milp(self, best_solution, all_iterations) -> None:
-        """Format MILP optimization results into DTO structure"""
-        logger.info(f"Formatting MILP results:")
-        logger.info(f"Best solution type: {type(best_solution)}")
-        logger.info(f"Best solution length: {len(best_solution) if best_solution else 0}")
-        logger.info(f"Iterations length: {len(all_iterations) if all_iterations else 0}")
-
-        self.solutions = []
-
-        def create_card_dict(card_data):
-            """Helper to create standardized card dictionary with defaults"""
-            # Ensure version is never None
-            version = card_data.get('version')
-            if version is None or version == "":
-                version = 'Standard'
-
-            set_name = card_data.get('set_name')
-            set_code = card_data.get('set_code')
+    def format_solutions(self, solutions, iterations=None):
+        """Format solutions from either MILP or NSGA-II optimization"""
+        formatted_solutions = []
+        
+        # Handle MILP solutions (DataFrame converted to dict)
+        if solutions and isinstance(solutions[0], dict) and 'site_id' in solutions[0]:
+            solution_by_site = {}
+            for item in solutions:
+                site_id = item['site_id']
+                if site_id not in solution_by_site:
+                    solution_by_site[site_id] = []
+                solution_by_site[site_id].append({
+                    'name': item['name'],
+                    'quantity': int(item['quantity']),
+                    'price': float(item['price']),
+                    'set_name': item['set_name'],
+                    'set_code': item['set_code'],
+                    'quality': item['quality'],
+                    'language': item.get('language', 'English'),
+                    'version': item.get('version', 'Standard'),
+                    'foil': bool(item.get('foil', False))
+                })
             
-            if not set_code:
-                logger.info(f"Attempting to get set code for set name: {set_name}")
-                try:
-                    set_code = CardService.get_set_code(set_name)
-                    logger.info(f"Retrieved set code: {set_code} for set: {set_name}")
-                except Exception as e:
-                    logger.error(f"Failed to get set code for {set_name}: {str(e)}")
-                    set_code = ""  # Fallback to empty string if lookup fails
+            # Create single solution for MILP
+            total_price = sum(float(item['price']) * int(item['quantity']) for item in solutions)
+            formatted_solutions.append({
+                'total_price': total_price,
+                'num_stores': len(solution_by_site),
+                'stores': [{
+                    'site_id': site_id,
+                    'cards': cards
+                } for site_id, cards in solution_by_site.items()]
+            })
             
-            return {
-                'name': card_data['name'],
-                'site_name': card_data['site_name'],
-                'price': float(card_data['price']),
-                'quality': card_data['quality'],
-                'quantity': int(card_data['quantity']),
-                'set_name': set_name,
-                'set_code': set_code,
-                'version': version,
-                'foil': bool(card_data.get('foil', False)),
-                'language': card_data.get('language', 'English'),
-                'site_id': card_data.get('site_id')
-            }
-
-        if best_solution:
-            # Debug the card data structure
-            logger.info("Sample card data from best solution:")
-            if best_solution:
-                logger.info(f"First card: {best_solution[0]}")
-            
-            try:
-                # Create cards dictionary for best solution
-                cards = {
-                    str(i): CardInSolution(**create_card_dict(card))
-                    for i, card in enumerate(best_solution)
-                }
-            except Exception as e:
-                logger.error(f"Error creating cards dictionary: {str(e)}", exc_info=True)
-                logger.info(f"all cards: {best_solution}")
-
-            # Debug the created cards dictionary
-            logger.info(f"Created cards dictionary with {len(cards)} entries")
-            if cards:
-                logger.info(f"Sample card entry: {next(iter(cards.values())).model_dump()}")
-
-            # Get the corresponding iteration data
-            solution_index = next((i for i, solution in enumerate(all_iterations)
-                                if solution['total_price'] == best_solution[0]['price']), 0)
-            best_iteration = all_iterations[solution_index]
-
-            self.solutions.append(OptimizationSolution(
-                total_price=float(best_iteration['total_price']),
-                number_store=best_iteration['number_store'],
-                nbr_card_in_solution=best_iteration['nbr_card_in_solution'],
-                total_qty=best_iteration.get('total_qty'),
-                list_stores=best_iteration['list_stores'],
-                missing_cards=best_iteration.get('missing_cards', []),
-                missing_cards_count=len(best_iteration.get('missing_cards', [])),
-                cards=cards,
-                is_best_solution=True
-            ))
-
-        if all_iterations:
-            for iteration in all_iterations:
-                if iteration != best_solution:  # Skip the best solution as it's already added
-                    # Create cards dictionary for each iteration
-                    try:
-                        cards = {
-                            str(i): CardInSolution(**create_card_dict(card))
-                            for i, card in enumerate(iteration['sorted_results_df'])
-                        }
-                        
-                    except Exception as e:
-                        logger.error(f"Error creating cards dictionary: {str(e)}", exc_info=True)
-                        logger.info(f"all cards (iterations): {iteration['sorted_results_df']}")
-
-                    self.solutions.append(OptimizationSolution(
-                        total_price=float(iteration['total_price']),
-                        number_store=iteration['number_store'],
-                        nbr_card_in_solution=iteration['nbr_card_in_solution'],
-                        total_qty=iteration.get('total_qty'),
-                        list_stores=iteration['list_stores'],
-                        missing_cards=iteration.get('missing_cards', []),
-                        missing_cards_count=len(iteration.get('missing_cards', [])),
-                        cards=cards,
-                        is_best_solution=False
-                    ))
-        logger.debug(f"Formatted {len(self.solutions)} solutions")
+        # Handle NSGA-II solutions (list of solutions from pareto front)
+        elif solutions and isinstance(solutions, list):
+            for solution in solutions:
+                solution_by_site = {}
+                total_price = 0
+                
+                for card in solution:
+                    site_id = card['site_id']
+                    if site_id not in solution_by_site:
+                        solution_by_site[site_id] = []
+                    
+                    card_price = float(card['price']) * int(card['quantity'])
+                    total_price += card_price
+                    
+                    solution_by_site[site_id].append({
+                        'name': card['name'],
+                        'quantity': int(card['quantity']),
+                        'price': float(card['price']),
+                        'set_name': card['set_name'],
+                        'set_code': card['set_code'],
+                        'quality': card['quality'],
+                        'language': card.get('language', 'English'),
+                        'version': card.get('version', 'Standard'),
+                        'foil': bool(card.get('foil', False))
+                    })
+                
+                formatted_solutions.append({
+                    'total_price': total_price,
+                    'num_stores': len(solution_by_site),
+                    'stores': [{
+                        'site_id': site_id,
+                        'cards': cards
+                    } for site_id, cards in solution_by_site.items()]
+                })
+        
+        self.optimization = {
+            'solutions': formatted_solutions,
+            'iterations': iterations or []
+        }
 
     def model_dump(self):
         return {

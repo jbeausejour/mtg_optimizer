@@ -15,8 +15,8 @@ const Optimize = () => {
   const [selectedCard, setSelectedCard] = useState({});
   const [sites, setSites] = useState([]);
   const [selectedSites, setSelectedSites] = useState({});
-  const [optimizationStrategy, setOptimizationStrategy] = useState('milp');
-  const [minStore, setMinStore] = useState(5);
+  const [optimizationStrategy, setOptimizationStrategy] = useState('hybrid');
+  const [minStore, setMinStore] = useState(15);
   const [findMinStore, setFindMinStore] = useState(true);
   const [taskId, setTaskId] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
@@ -27,6 +27,8 @@ const Optimize = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [taskProgress, setTaskProgress] = useState(0);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [siteType, setSiteType] = useState('extended');
+  const [countryFilter, setCountryFilter] = useState('canada'); 
 
   useEffect(() => {
     fetchCards();
@@ -54,11 +56,17 @@ const Optimize = () => {
     }
   };
 
+  // Update fetchSites to ensure type is set
   const fetchSites = async () => {
     try {
       const response = await api.get('/sites');
-      setSites(response.data);
-      const initialSelected = response.data.reduce((acc, site) => ({
+      // Ensure each site has a type property, default to 'primary' if not set
+      const sitesWithTypes = response.data.map(site => ({
+        ...site,
+        type: site.type || 'primary'
+      }));
+      setSites(sitesWithTypes);
+      const initialSelected = sitesWithTypes.reduce((acc, site) => ({
         ...acc,
         [site.id]: site.active
       }), {});
@@ -71,7 +79,21 @@ const Optimize = () => {
 
   const handleOptimize = async () => {
     try {
-      const sitesToOptimize = Object.keys(selectedSites).filter(id => selectedSites[id]);
+      // Use the already filtered sites list and only select those that are enabled
+      const sitesToOptimize = filteredSites
+        .filter(site => selectedSites[site.id])
+        .map(site => site.id.toString());
+
+      // Debug log to verify what's being sent
+      console.log('Sites being sent for optimization:', sitesToOptimize);
+      console.log('Total filtered sites:', filteredSites.length);
+      console.log('Total selected sites:', sitesToOptimize.length);
+
+      if (sitesToOptimize.length === 0) {
+        message.warning('Please select at least one site to optimize');
+        return;
+      }
+
       const response = await api.post('/start_scraping', {
         sites: sitesToOptimize,
         strategy: optimizationStrategy,
@@ -81,11 +103,11 @@ const Optimize = () => {
           name: card.name,
           quantity: card.quantity,
           set_name: card.set_name,
-          quality: card.quality  // Ensure quality is included
+          quality: card.quality
         }))
       });
       setTaskId(response.data.task_id);
-      message.success('Optimization task started!');
+      message.success(`Optimization task started with ${sitesToOptimize.length} sites!`);
     } catch (error) {
       message.error('Failed to start optimization task');
       console.error('Error during optimization:', error);
@@ -148,6 +170,43 @@ const Optimize = () => {
     }));
   };
 
+  // Update the filteredSites logic
+  const filteredSites = sites.filter(site => {
+    // First check if site is active
+    if (!site.active) return false;
+    
+    // Apply country filtering
+    if (countryFilter !== 'all' && site.country?.toLowerCase() !== countryFilter) {
+      return false;
+    }
+
+    // Apply type filtering - always return true for 'extended' type
+    if (siteType === 'primary' && site.type?.toLowerCase() !== 'primary') {
+      return false;
+    }
+
+    return true;
+  });
+
+  // Get country counts for the selector
+  const getCountryCounts = () => {
+    const counts = sites.reduce((acc, site) => {
+      if (site.active) {
+        const country = site.country?.toLowerCase() || 'unknown';
+        acc[country] = (acc[country] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    return counts;
+  };
+
+  // Add useEffect to debug site filtering
+  useEffect(() => {
+    console.log('Current sites:', sites);
+    console.log('Site type:', siteType);
+    console.log('Filtered sites:', filteredSites);
+  }, [sites, siteType]);
+
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -157,7 +216,7 @@ const Optimize = () => {
         <Col span={8}>
           <Select value={optimizationStrategy} onChange={setOptimizationStrategy} className="w-full">
             <Option value="milp">MILP</Option>
-            <Option value="nsga_ii">NSGA-II</Option>
+            <Option value="nsga-ii">NSGA-II</Option>
             <Option value="hybrid">Hybrid</Option>
           </Select>
         </Col>
@@ -225,10 +284,38 @@ const Optimize = () => {
           </Card>
         </Col>
         <Col span={12}>
-          <Card title="Site List" className={`ant-card ${theme}`}>
+          <Card 
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Site List ({filteredSites.length})</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <Select 
+                    value={countryFilter} 
+                    onChange={setCountryFilter} 
+                    style={{ width: 150 }}
+                    size="small"
+                  >
+                    <Option value="all">All Countries ({sites.filter(s => s.active).length})</Option>
+                    <Option value="usa">USA ({getCountryCounts().usa || 0})</Option>
+                    <Option value="canada">Canada ({getCountryCounts().canada || 0})</Option>
+                  </Select>
+                  <Select 
+                    value={siteType} 
+                    onChange={setSiteType} 
+                    style={{ width: 200 }}
+                    size="small"
+                  >
+                    <Option value="primary">Primary Sites</Option>
+                    <Option value="extended">Primary + Extended Sites</Option>
+                  </Select>
+                </div>
+              </div>
+            } 
+            className={`ant-card ${theme}`}
+          >
             <List
               bordered
-              dataSource={sites}
+              dataSource={filteredSites}
               renderItem={site => (
                 <List.Item 
                   className={`list-item ${theme}`}
