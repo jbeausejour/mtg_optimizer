@@ -7,6 +7,7 @@ class Site(db.Model):
     name = db.Column(db.String(255), nullable=False, unique=True)
     url = db.Column(db.String(255), nullable=False)
     method = db.Column(db.String(50), nullable=False)
+    api_url = db.Column(db.String(255))
     active = db.Column(db.Boolean, default=True)
     type = db.Column(db.String(50), nullable=False)
     country = db.Column(db.String(50), nullable=False)
@@ -19,6 +20,7 @@ class Site(db.Model):
             "name": self.name,
             "url": self.url,
             "method": self.method,
+            "api_url": self.api_url,
             "active": self.active,
             "type": self.type,
             "country": self.country,

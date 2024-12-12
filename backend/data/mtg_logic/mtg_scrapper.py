@@ -52,7 +52,7 @@ def extract_domain(url):
 
 def extract_info(soup, site, card_names, strategy):
     if soup is None:
-        current_app.logger.info(
+        logger.info(
             color_msg(
                 [
                     ("[Warning] ", "d_yellow"),
@@ -90,7 +90,7 @@ def extract_info(soup, site, card_names, strategy):
     for x in top_level:
         content = soup.find("div", {"class": x})
         if content is None:
-            current_app.logger.info(
+            logger.info(
                 color_msg(
                     [
                         ("[Warning] ", "d_yellow"),
@@ -104,7 +104,7 @@ def extract_info(soup, site, card_names, strategy):
         else:
             break
     if content is None:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     ("[ERROR] ", "d_red"),
@@ -115,7 +115,7 @@ def extract_info(soup, site, card_names, strategy):
             )
         )
         if soup.find("title"):
-            current_app.logger.error(
+            logger.error(
                 color_msg(
                     [
                         ("[Error] ", "d_red"),
@@ -130,7 +130,7 @@ def extract_info(soup, site, card_names, strategy):
         "div", {"class": "products-container browse"}
     )
     if products_containers is None:
-        current_app.logger.warning(
+        logger.warning(
             color_msg(
                 [
                     (str(site), "b_cyan"),
@@ -150,7 +150,7 @@ def extract_info(soup, site, card_names, strategy):
             a_tag = image.find("a", href=True)
             if a_tag and "yugioh" in a_tag["href"]:
                 value = a_tag["href"]
-                current_app.logger.debug(
+                logger.debug(
                     color_msg(
                         [
                             (str(site), "b_cyan"),
@@ -172,7 +172,7 @@ def extract_info(soup, site, card_names, strategy):
                 card = Card()
                 card.Name = test_title
                 card.Site = site
-            current_app.logger.debug(
+            logger.debug(
                 color_msg(
                     [
                         ("[Warning] ", "b_magenta"),
@@ -182,7 +182,7 @@ def extract_info(soup, site, card_names, strategy):
                 )
             )
             card.Name = clean_card_name(card.Name, card_names)
-            current_app.logger.debug(
+            logger.debug(
                 color_msg(
                     [
                         ("[Warning] ", "b_magenta"),
@@ -192,7 +192,7 @@ def extract_info(soup, site, card_names, strategy):
                 )
             )
             if not card.Name:
-                current_app.logger.error(
+                logger.error(
                     color_msg(
                         [
                             ("[ERROR] ", "d_red"),
@@ -215,12 +215,12 @@ def extract_info(soup, site, card_names, strategy):
                         (" in initial list (ei).", "rst"),
                     ]
                 )
-                current_app.logger.debug(msg)
+                logger.debug(msg)
                 continue
             if any(
                 substring in test_category.lower() for substring in substrings_to_check
             ):
-                current_app.logger.debug(
+                logger.debug(
                     color_msg(
                         [
                             (str(site), "b_cyan"),
@@ -266,7 +266,7 @@ def extract_price(card, variant):
         price_text = price_elem.text
         return normalize_price(price_text)
     else:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),
@@ -289,7 +289,7 @@ def extract_quality_language(card, variant):
     if variant_description:
         quality_language = normalize_variant_description(
             variant_description.text)
-        current_app.logger.debug(
+        logger.debug(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),
@@ -302,7 +302,7 @@ def extract_quality_language(card, variant):
         )
         return quality_language[:2]
     else:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),
@@ -324,7 +324,7 @@ def extract_quantity(card, variant):
     ) or variant.find("span", {"class": "variant-short-info"})
     if variant_qty:
         variant_qty = variant_qty.text.strip()
-        current_app.logger.debug(
+        logger.debug(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),
@@ -337,7 +337,7 @@ def extract_quantity(card, variant):
         )
         return extract_numbers(variant_qty)
     else:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),
@@ -363,7 +363,7 @@ def fetch_url(domain, url, retries=3, backoff_factor=1):
         response = requests.get(url)
         if response.status_code != 200:
             sleep_time = backoff_factor * (2**attempt)
-            current_app.logger.info(
+            logger.info(
                 color_msg(
                     [
                         ("[INFO] ", "d_yellow"),
@@ -393,7 +393,7 @@ def find_name_version_foil(place_holder):
             product_foil = item
         else:
             product_version = item
-    current_app.logger.debug(
+    logger.debug(
         color_msg(
             [
                 ("[INFO]", "d_yellow"),
@@ -403,7 +403,7 @@ def find_name_version_foil(place_holder):
             ]
         )
     )
-    current_app.logger.debug(
+    logger.debug(
         color_msg(
             [
                 ("   product_name: [", "rst"),
@@ -412,7 +412,7 @@ def find_name_version_foil(place_holder):
             ]
         )
     )
-    current_app.logger.debug(
+    logger.debug(
         color_msg(
             [
                 ("   product_version: [", "rst"),
@@ -421,7 +421,7 @@ def find_name_version_foil(place_holder):
             ]
         )
     )
-    current_app.logger.debug(
+    logger.debug(
         color_msg(
             [
                 ("   product_foil: [", "rst"),
@@ -440,7 +440,7 @@ def normalize_price(price_string):
         price = match.group(1)
         return round(float(price.replace(",", "")), 2)
     else:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     ("[ERROR] ", "d_red"),
@@ -483,7 +483,7 @@ def post_request(domain, url, headers, payload, retries=3, backoff_factor=1):
         response = requests.post(url, headers=headers, data=payload)
         if response.status_code != 200:
             sleep_time = backoff_factor * (2**attempt)
-            current_app.logger.info(
+            logger.info(
                 color_msg(
                     [
                         ("[INFO] ", "b_yellow"),
@@ -523,7 +523,7 @@ def process_sites(site, card_names, strategy):
         mixed_msg_pad(mixed_message)
         cards_df = extract_info(soup, domain, card_names, strategy)
         if cards_df is None or cards_df.empty:
-            current_app.logger.error(
+            logger.error(
                 color_msg(
                     [
                         (str(domain), "b_cyan"),
@@ -537,7 +537,7 @@ def process_sites(site, card_names, strategy):
                 if strategy == STRATEGY_ADD_TO_CART
                 else STRATEGY_ADD_TO_CART
             )
-            current_app.logger.info(
+            logger.info(
                 color_msg(
                     [
                         (str(domain), "b_cyan"),
@@ -547,13 +547,13 @@ def process_sites(site, card_names, strategy):
             )
             cards_df = extract_info(soup, domain, card_names, strategy)
     except Exception as e:
-        current_app.logger.exception("An error occurred")
+        logger.exception("An error occurred")
         stack_trace = traceback.format_exc()
-        current_app.logger.error(
+        logger.error(
             color_msg([("General exception. ", "d_red"),
                       ("continuing ...", "rst")])
         )
-        current_app.logger.error(
+        logger.error(
             color_msg([("Exception detail: \n", "d_red"), (stack_trace, "rst")])
         )
         return pd.DataFrame()
@@ -569,7 +569,7 @@ def search_crystalcommerce(domain, site_url, card_names):
     try:
         response = fetch_url(domain, search_url)
         if response is None:
-            current_app.logger.error(
+            logger.error(
                 color_msg(
                     [
                         ("[ERROR] ", "b_red"),
@@ -585,7 +585,7 @@ def search_crystalcommerce(domain, site_url, card_names):
             auth_token_elem = soup.find(
                 "input", {"name": "authenticity_token"})
             if not auth_token_elem:
-                current_app.logger.info(
+                logger.info(
                     color_msg(
                         [
                             ("[INFO] ", "b_yellow"),
@@ -606,7 +606,7 @@ def search_crystalcommerce(domain, site_url, card_names):
                 soup = BeautifulSoup(response.content, "html.parser")
                 return soup
             else:
-                current_app.logger.error(
+                logger.error(
                     color_msg(
                         [
                             ("[ERROR] ", "b_red"),
@@ -618,7 +618,7 @@ def search_crystalcommerce(domain, site_url, card_names):
                 )
                 return None
     except requests.exceptions.RequestException as e:
-        current_app.logger.error(
+        logger.error(
             color_msg(
                 [
                     ("[ERROR] ", "b_red"),
@@ -650,7 +650,7 @@ def strategy_add_to_cart(card, variant):
             card.Edition = product_version
         product_name = re.sub(r"\s*\(\d+\)$", "", unclean_name)
         for key, value in attributes.items():
-            current_app.logger.debug(
+            logger.debug(
                 color_msg(
                     [(str(key), "b_green"), (" = ", "rst"), (str(value), "b_blue")]
                 )
@@ -658,7 +658,7 @@ def strategy_add_to_cart(card, variant):
         quality_language = normalize_variant_description(
             attributes["data-variant"])
         quality, language = quality_language[:2]
-        current_app.logger.debug(
+        logger.debug(
             color_msg(
                 [
                     ("In Fct: strategy_add_to_cart. Results are: ", "rst"),
@@ -678,7 +678,7 @@ def strategy_add_to_cart(card, variant):
             else:
                 qty_available = qty_available_element
         else:
-            current_app.logger.error(
+            logger.error(
                 color_msg(
                     [
                         ("[ERROR] ", "d_red"),
@@ -700,8 +700,8 @@ def strategy_add_to_cart(card, variant):
         card.Price = normalize_price(price)
         return card
     except Exception as e:
-        current_app.logger.exception(color_msg([("An error occurred", "d_red")]))
-        current_app.logger.error(
+        logger.exception(color_msg([("An error occurred", "d_red")]))
+        logger.error(
             color_msg(
                 [
                     (
@@ -782,8 +782,8 @@ def strategy_scrapper(card, variant):
             return None
         card.Price = extract_price(card, variant)
     except Exception as e:
-        current_app.logger.exception("An error occurred")
-        current_app.logger.error(
+        logger.exception("An error occurred")
+        logger.error(
             color_msg(
                 [
                     (str(card.Site), "b_cyan"),

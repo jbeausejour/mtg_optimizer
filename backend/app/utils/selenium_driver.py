@@ -1,63 +1,71 @@
 import logging
-import os
-import socket
 import asyncio
-from typing import Dict, Optional
+from typing import Optional, Union
 import aiohttp
-import dns.resolver
-from aiohttp import ClientTimeout, TCPConnector
+from aiohttp import TCPConnector, ClientTimeout
 from urllib.parse import urlparse
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium_stealth import stealth
+from fake_useragent import UserAgent
 import re
 
-homedir = os.path.expanduser("~")
-CHROME_DRIVER_PATH = f"{homedir}/Downloads/chromedriver-win64/chromedriver.exe"
-
 logger = logging.getLogger(__name__)
-
 class NetworkDriver:
     """Enhanced base class for network operations with connection pooling"""
     def __init__(self, max_connections: int = 100, keepalive_timeout: int = 30):
-        self.timeout = ClientTimeout(total=30, connect=10, sock_read=20)
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "max-age=0",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Content-Type": "application/x-www-form-urlencoded"
         }
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._connector = TCPConnector(
-            limit=max_connections,
-            ttl_dns_cache=300,
-            keepalive_timeout=keepalive_timeout,
-            force_close=False,
-            enable_cleanup_closed=True
-        )
-        self._rate_limiters: Dict[str, asyncio.Semaphore] = {}
-        self._default_rate_limit = asyncio.Semaphore(10)  # Default concurrent requests per domain
+        
+        self.session = None
+        self.connector = None
+        self.max_connections = max_connections
+        self.keepalive_timeout = keepalive_timeout
+        self._rate_limiters = {}
+        self._default_rate_limit = asyncio.Semaphore(10)
 
-    async def __aenter__(self):
-        if not self._session:
-            self._session = aiohttp.ClientSession(
-                connector=self._connector,
+    async def _init_connector(self):
+        """Initialize the connector when needed"""
+        if self.connector is None:
+            self.connector = TCPConnector(
+                limit=self.max_connections,
+                ttl_dns_cache=300,
+                keepalive_timeout=self.keepalive_timeout,
+                force_close=False,
+                enable_cleanup_closed=True
+            )
+
+    async def _ensure_session(self):
+        """Ensure session exists with proper initialization"""
+        if not self.session:
+            await self._init_connector()
+            self.session = aiohttp.ClientSession(
+                connector=self.connector,
                 headers=self.headers,
-                timeout=self.timeout,
                 trust_env=True
             )
+
+    async def __aenter__(self):
+        await self._ensure_session()
         return self
+    
+    async def _cleanup(self):
+        """Clean up resources"""
+        if self.session:
+            await self.session.close()
+        if self.connector:
+            await self.connector.close()
+        self.session = None
+        self.connector = None
 
     async def __aexit__(self, exc_type, exc, tb):
-        if self._session:
-            await self._session.close()
-            self._session = None
-
+        await self._cleanup()
+            
     def _get_rate_limiter(self, domain: str) -> asyncio.Semaphore:
         """Get or create rate limiter for a domain"""
         if domain not in self._rate_limiters:
@@ -67,288 +75,352 @@ class NetworkDriver:
             else:
                 self._rate_limiters[domain] = self._default_rate_limit
         return self._rate_limiters[domain]
-
-    async def fetch_url(self, url, attempt=1, max_attempts=3):
-        """Enhanced URL fetching with proper timeout handling"""
-        try:
-            parsed_url = urlparse(url)
-            hostname = parsed_url.hostname
-            ip = await self.resolve_dns(hostname)
-            
-            connector = aiohttp.TCPConnector(
-                ssl=False,
-                force_close=True,
-                ttl_dns_cache=300,
-            )
-
-            timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_connect=10, sock_read=10)
-
-            async with aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout
-            ) as session:
-                headers = {
-                    **self.headers,
-                    'Host': hostname
-                }
-                
-                async with session.get(
-                    url,
-                    headers=headers,
-                    allow_redirects=True
-                ) as response:
-                    if response.status >= 400:
-                        return None
-                    return await response.text()
-
-        except asyncio.TimeoutError:
-            if attempt < max_attempts:
-                logger.warning(f"Timeout fetching {url} (attempt {attempt}/{max_attempts})")
-                return await self.fetch_url(url, attempt + 1, max_attempts)
-            else:
-                logger.error(f"Failed to fetch {url} after {max_attempts} attempts")
-                return None
-        except Exception as e:
-            logger.error(f"Error fetching {url} (attempt {attempt}/{max_attempts}): {str(e)}")
-            if attempt < max_attempts:
-                return await self.fetch_url(url, attempt + 1, max_attempts)
-            return None
-
-    async def post_request(self, url, payload, attempt=1, max_attempts=3):
-        """Enhanced POST request handling with proper timeout"""
-        try:
-            parsed_url = urlparse(url)
-            hostname = parsed_url.hostname
-            ip = await self.resolve_dns(hostname)
-            
-            timeout = aiohttp.ClientTimeout(total=45, connect=10, sock_connect=10, sock_read=30)
-            headers = {
-                **self.headers,
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Host': hostname
-            }
-            
-            connector = aiohttp.TCPConnector(
-                ssl=False,
-                force_close=True,
-                ttl_dns_cache=300,
-            )
-            
-            async with aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers=headers
-            ) as session:
-                async with session.post(url, data=payload) as response:
-                    if response.status == 200:
-                        return await response.text()
-                    return None
-                        
-        except asyncio.TimeoutError:
-            if attempt < max_attempts:
-                logger.warning(f"Timeout posting to {url} (attempt {attempt}/{max_attempts})")
-                return await self.post_request(url, payload, attempt + 1, max_attempts)
-            else:
-                logger.error(f"Failed to post to {url} after {max_attempts} attempts")
-                return None
-        except Exception as e:
-            logger.error(f"Error posting to {url} (attempt {attempt}/{max_attempts}): {str(e)}")
-            if attempt < max_attempts:
-                return await self.post_request(url, payload, attempt + 1, max_attempts)
-            return None
     
-    async def resolve_dns(self, hostname):
-        """Enhanced DNS resolution with multiple fallback options"""
-        try:
-            # Try system resolver first
-            loop = asyncio.get_event_loop()
-            addresses = await loop.run_in_executor(None, socket.gethostbyname_ex, hostname)
-            if addresses and addresses[2]:
-                logger.info(f"\t o Successfully resolved {hostname} to {addresses[2][0]}")
-                return addresses[2][0]
+    async def post_request(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
+        """Enhanced POST request with detailed error tracking and Selenium fallback"""
+        await self._ensure_session()
+        parsed_url = urlparse(url)
+        origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
             
-            # Fallback to manual resolution
-            info = await asyncio.get_event_loop().getaddrinfo(
-                hostname, None, 
-                family=socket.AF_INET,
-                proto=socket.IPPROTO_TCP,
-            )
-            if info and info[0] and info[0][4]:
-                return info[0][4][0]
-                
-        except socket.gaierror:
-            # Try to use public DNS servers as last resort
+        # Add dynamic headers
+        request_headers = {
+            **self.headers,
+            **(headers or {}),
+            "Origin": origin,
+            "Referer": url,
+            "Host": parsed_url.netloc,
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1"
+        }
+        
+        max_retries = 5
+        retry_count = 0
+        backoff_factor = 1
+        
+        while retry_count < max_retries:
+            connection_info = {
+                'attempt': retry_count + 1,
+                'max_retries': max_retries
+            }  # Initialize with basic info
+            
             try:
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = ['8.8.8.8', '1.1.1.1']
-                answers = resolver.resolve(hostname, 'A')
-                if answers:
-                    return answers[0].address
+                retry_count += 1
+                
+                # Enhanced timeout configuration
+                timeout = aiohttp.ClientTimeout(
+                    total=60,
+                    connect=30,
+                    sock_read=50,
+                    sock_connect=20
+                )
+                connection_info['timeout'] = str(timeout)
+
+                connector = TCPConnector(
+                    limit=10,
+                    force_close=True,
+                    enable_cleanup_closed=True
+                )
+
+                # Track the start time for detailed timing
+                start_time = asyncio.get_event_loop().time()
+
+                async with aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                    headers=request_headers,
+                    cookie_jar=aiohttp.CookieJar(unsafe=True)  # Allow handling of secure cookies
+                ) as session:
+                    try:
+                        async with session.post(url, data=payload) as response:
+                            elapsed_time = asyncio.get_event_loop().time() - start_time
+                            
+                            # Update connection info with response data
+                            connection_info.update({
+                                'status': response.status,
+                                'elapsed_time': f"{elapsed_time:.2f}s",
+                                'headers': dict(response.headers)
+                            })
+                            
+                            # Add transport info if available
+                            if hasattr(response, 'connection') and response.connection:
+                                if hasattr(response.connection, 'transport') and response.connection.transport:
+                                    connection_info.update({
+                                        'peername': response.connection.transport.get_extra_info('peername', 'N/A'),
+                                        'ssl': bool(response.connection.transport.get_extra_info('ssl_object', None))
+                                    })  
+
+                            # Log connection info for debugging
+                            logger.debug(f"Connection details for {url}: {connection_info}")
+
+                            if response.status == 200:
+                                if retry_count > 1:
+                                    logger.info(f"Success posting to {url} after {retry_count} attempts")
+                                return await response.text()
+                            
+                            elif response.status in (301, 302, 303, 307, 308):  # Handle redirects manually if needed
+                                redirect_url = response.headers.get('Location')
+                                if redirect_url:
+                                    logger.info(f"Following redirect to {redirect_url}")
+                                    url = redirect_url
+                                    continue
+                            elif response.status == 404:
+                                logger.error(f"URL not found: {url}")
+                                return None
+                            elif response.status == 429:
+                                wait_time = int(response.headers.get('Retry-After', 60))
+                                logger.warning(f"Rate limited on {url}, waiting {wait_time}s")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                logger.error(f"Error response from {url} (attempt {retry_count}/{max_retries})")
+                                logger.error(f"Connection details: {connection_info}")
+                                await asyncio.sleep(wait_time)
+                                continue
+                                
+                    except asyncio.TimeoutError:
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        logger.error(f"Timeout after {elapsed:.2f}s posting to {url} (attempt {retry_count}/{max_retries})")
+                        connection_info['error'] = 'Timeout'
+                        logger.error(f"Request timeout: {connection_info}")
+                        await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+                        continue
+                        
+            except aiohttp.ClientError as e:
+                connection_info['error'] = f"Client error: {str(e)}"
+                logger.error(f"Connection failed: {connection_info}")
+                await asyncio.sleep(backoff_factor)
+                continue
+                
             except Exception as e:
-                logger.error(f"All DNS resolution methods failed for {hostname}: {e}")
+                connection_info['error'] = f"Unexpected error: {str(e)}"
+                logger.error(f"Request failed: {connection_info}")
+                await asyncio.sleep(backoff_factor)
+                continue
+            
+            backoff_factor *= 2
+        
+        return None    
+    
+    async def fetch_url(self, url: str, headers: dict = None) -> Optional[str]:
+        """Enhanced fetch URL with detailed diagnostics and Selenium fallback"""
+        await self._ensure_session()
+        
+        if headers:
+            merged_headers = {**self.headers, **headers}
+        else:
+            merged_headers = self.headers
+
+        max_retries = 5
+        retry_count = 0
+        backoff_factor = 1
+        
+        while retry_count < max_retries:
+
+            connection_info = {
+                'attempt': retry_count + 1,
+                'max_retries': max_retries
+            }  # Initialize with basic info
+        
+            try:
+                retry_count += 1
+                
+                # Track start time for detailed timing
+                start_time = asyncio.get_event_loop().time()
+                
+                # Set timeout and connector with proper configuration
+                timeout = aiohttp.ClientTimeout(
+                    total=30,
+                    connect=10,
+                    sock_read=25,
+                    sock_connect=10
+                )
+
+                connector = TCPConnector(
+                    limit=10,
+                    force_close=True,
+                    enable_cleanup_closed=True
+                )
+                
+                async with aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                    headers=merged_headers
+                ) as session:
+                    try:
+                        async with session.get(url) as response:
+                            elapsed_time = asyncio.get_event_loop().time() - start_time
+                            
+                            # Gather detailed connection information
+                            
+                            connection_info.update({
+                                'status': response.status,
+                                'elapsed_time': f"{elapsed_time:.2f}s",
+                                'headers': dict(response.headers)
+                            })
+
+                            if hasattr(response, 'connection') and response.connection:
+                                if hasattr(response.connection, 'transport') and response.connection.transport:
+
+                                    connection_info.update({
+                                        'peername': response.connection.transport.get_extra_info('peername', 'N/A'),
+                                        'ssl': bool(response.connection.transport.get_extra_info('ssl_object', None))
+                                    })                                    
+
+                            if response.status == 200:
+                                content = await response.text()
+                                if retry_count > 1:
+                                    logger.info(f"Successfully fetched {url} after {retry_count} attempts")
+                                    
+                                # Check if content is valid
+                                if not content or content.isspace():
+                                    logger.warning(f"Empty response from {url}, attempting Selenium fallback")
+                                    logger.info(f"GET connection details for {url}: {connection_info}")
+                                    
+                                return content
+                                
+                            elif response.status == 404:
+                                logger.error(f"URL not found: {url}")
+                                return None
+                                
+                            elif response.status == 429:  # Rate limit
+                                wait_time = int(response.headers.get('Retry-After', 60))
+                                logger.warning(f"Rate limited on {url}, waiting {wait_time}s")
+                                logger.info(f"GET connection details for {url}: {connection_info}")
+                                await asyncio.sleep(wait_time)
+                                continue
+                                
+                            else:
+                                logger.error(f"Error response from {url} (attempt {retry_count}/{max_retries})")
+                                logger.error(f"Connection details: {connection_info}")
+                                await asyncio.sleep(wait_time)
+                                continue
+                                
+                    except asyncio.TimeoutError:
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        logger.error(f"Timeout after {elapsed:.2f}s fetching {url} (attempt {retry_count}/{max_retries})")
+                        logger.error(f"Timeout configuration: {timeout}")
+                        logger.info(f"GET connection details for {url}: {connection_info}")
+                        
+                        wait_time = backoff_factor * (2 ** (retry_count - 1))
+                        await asyncio.sleep(wait_time)
+                        
+            except aiohttp.ClientError as e:
+                logger.error(f"Client error fetching {url} (attempt {retry_count}/{max_retries}):")
+                logger.error(f"Error type: {type(e).__name__}")
+                logger.error(f"Error details: {str(e)}")
+                logger.info(f"GET connection details for {url}: {connection_info}")
+                                
+                await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+                continue
+                
+            except Exception as e:
+                logger.error(f"Unexpected error fetching {url} (attempt {retry_count}/{max_retries}):")
+                logger.error(f"Error type: {type(e).__name__}")
+                logger.error(f"Error details: {str(e)}")
+                logger.info(f"GET connection details for {url}: {connection_info}")
+                               
+                await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+                continue
+            
+            backoff_factor *= 2
+        
         return None
 
     async def get_auth_token(self, soup, site):
-        """Enhanced token fetching with multiple fallbacks"""
+        """Get authentication token from response"""
         token = None
         
-        # Method 1: Standard auth token input
-        auth_input = soup.find("input", {"name": ["authenticity_token", "csrf_token", "_token"]})
-        if auth_input:
-            token = auth_input.get("value")
-            if token:
-                logger.debug(f"Found auth token via input field for {site.name}")
-                return token
-
-        # Method 2: Meta tag
-        meta_token = soup.find("meta", {"name": ["csrf-token", "csrf-param"]})
-        if meta_token:
-            token = meta_token.get("content")
-            if token:
-                logger.debug(f"Found auth token via meta tag for {site.name}")
-                return token
-
-        # Method 3: Form based
-        form = soup.find("form", {"class": ["search-form", "advanced-search", "bulk-search"]})
-        if form:
-            hidden_input = form.find("input", {"type": "hidden", "name": ["authenticity_token", "csrf_token", "_token"]})
-            if hidden_input:
-                token = hidden_input.get("value")
+        # Try multiple methods to find token
+        selectors = [
+            ("input", {"name": ["authenticity_token", "csrf_token", "_token"]}),
+            ("meta", {"name": ["csrf-token", "csrf-param"]}),
+            ("form input", {"type": "hidden", "name": ["authenticity_token", "csrf_token", "_token"]})
+        ]
+        
+        for tag, attrs in selectors:
+            if tag == "form input":
+                form = soup.find("form", {"class": ["search-form", "advanced-search", "bulk-search"]})
+                if form:
+                    element = form.find("input", attrs)
+            else:
+                element = soup.find(tag, attrs)
+                
+            if element:
+                token = element.get("value") or element.get("content")
                 if token:
-                    logger.debug(f"Found auth token via form for {site.name}")
                     return token
-
-        # Method 4: Script based
-        scripts = soup.find_all("script")
+                    
+        # Fallback to script parsing
+        scripts = soup.find_all("script", string=re.compile(r'csrf|token|auth'))
         for script in scripts:
-            if script.string and any(x in script.string for x in ['csrf', 'token', 'auth']):
-                token_match = re.search(r'["\']csrf[_-]token["\']\s*:\s*["\']([^"\']+)["\']', script.string)
-                if token_match:
-                    token = token_match.group(1)
-                    logger.debug(f"Found auth token via script for {site.name}")
-                    return token
-
-        # Add new fallback methods - JavaScript variable parsing
-        if not token:
-            scripts = soup.find_all("script")
-            for script in scripts:
-                if script.string:
-                    patterns = [
-                        r'csrf_token["\s:]+"([^"]+)"',
-                        r'authenticity_token["\s:]+"([^"]+)"',
-                        r'_token["\s:]+"([^"]+)"',
-                    ]
-                    for pattern in patterns:
-                        match = re.search(pattern, script.string)
-                        if match:
-                            token = match.group(1)
-                            logger.info(f"Found token via JS pattern for {site.name}")
-                            return token
-
-        logger.warning(f"No auth token found for {site.name}, will try to proceed without it")
+            if script.string:
+                patterns = [
+                    r'csrf_token["\s:]+"([^"]+)"',
+                    r'authenticity_token["\s:]+"([^"]+)"',
+                    r'_token["\s:]+"([^"]+)"'
+                ]
+                for pattern in patterns:
+                    match = re.search(pattern, script.string)
+                    if match:
+                        return match.group(1)
+                        
+        logger.warning(f"No auth token found for {site.name}")
         return ""
+        
+    async def _fallback_request(self, url: str, payload: str, headers: dict) -> Optional[str]:
+        """Fallback request using alternative approach"""
+        try:
+            # Create a new session with different settings
+            async with aiohttp.ClientSession(
+                timeout=ClientTimeout(total=120),  # Longer timeout
+                headers={
+                    **headers,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            ) as session:
+                # First make a GET request to get any necessary tokens
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        return None
+                    
+                    # Extract any CSRF tokens if present
+                    html = await response.text()
+                    csrf_token = self._extract_csrf_token(html)
+                    
+                    if csrf_token:
+                        headers['X-CSRF-Token'] = csrf_token
 
-class SeleniumDriver(NetworkDriver):
-    """Selenium driver with additional network capabilities"""
-    def __init__(self):
-        super().__init__()
-        self.driver = None
+                # Make the actual POST request
+                async with session.post(
+                    url,
+                    data=payload,
+                    headers=headers,
+                    allow_redirects=True
+                ) as response:
+                    if response.status == 200:
+                        return await response.text()
+
+        except Exception as e:
+            logger.error(f"Fallback request failed: {str(e)}")
+            return None
 
     @staticmethod
-    def get_driver(use_headless=True):
-        """Initialize Chrome driver with automatic version management"""
-        try:
-            options = Options()
-            if use_headless:
-                options.add_argument("--headless")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--log-level=3")
-            options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            options.add_experimental_option("useAutomationExtension", False)
-
-            # Use webdriver_manager to get correct ChromeDriver version
-            driver_path = ChromeDriverManager().install()
-            service = Service(driver_path)
-            driver = webdriver.Chrome(service=service, options=options)
-
-            stealth(
-                driver,
-                languages=["en-US", "en"],
-                vendor="Google Inc.",
-                platform="Win32",
-                webgl_vendor="Intel Inc.",
-                renderer="Intel Iris OpenGL Engine",
-                fix_hairline=True,
-            )
-
-            logger.info("Successfully initialized Chrome driver with automated version management")
-            return driver
+    def _extract_csrf_token(html: str) -> Optional[str]:
+        """Extract CSRF token from HTML content"""
+        import re
         
-        except Exception as e:
-            logger.error(f"Failed to initialize Chrome driver: {str(e)}")
-            return None
+        # Common patterns for CSRF tokens
+        patterns = [
+            r'<meta name="csrf-token" content="([^"]+)"',
+            r'<input[^>]+name="authenticity_token"[^>]+value="([^"]+)"',
+            r'csrf_token["\s:]+"([^"]+)"'
+        ]
         
-    def perform_get(self, url, wait_time=10):
-        """Perform GET request using Selenium"""
-        try:
-            logger.info(f"Attempting Selenium GET for {url}")
-            
-            self.get(url)
-            WebDriverWait(self, wait_time).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            return self.page_source
-            
-        except Exception as e:
-            logger.error(f"Selenium GET failed for {url}: {str(e)}")
-            return None
-
-    def perform_post(self, url, payload, wait_time=10):
-        """Perform POST request using Selenium"""
-        try:
-            logger.info(f"Attempting Selenium POST for {url}")
-            
-            # Create a form to submit
-            script = """
-                let form = document.createElement('form');
-                form.method = 'POST';
-                form.action = arguments[0];
-            """
-            
-            # Add payload fields
-            for key, value in payload.items():
-                script += f"""
-                    let input_{key} = document.createElement('input');
-                    input_{key}.type = 'hidden';
-                    input_{key}.name = '{key}';
-                    input_{key}.value = '{value}';
-                    form.appendChild(input_{key});
-                """
-                
-            script += """
-                document.body.appendChild(form);
-                form.submit();
-            """
-            
-            # Execute the form submission
-            self.execute_script(script, url)
-            
-            # Wait for response
-            WebDriverWait(self, wait_time).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            return self.page_source
-            
-        except Exception as e:
-            logger.error(f"Selenium POST failed for {url}: {str(e)}")
-            return None
-
-    def quit(self):
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+        for pattern in patterns:
+            match = re.search(pattern, html)
+            if match:
+                return match.group(1)
+        
+        return None

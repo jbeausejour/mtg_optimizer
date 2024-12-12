@@ -175,6 +175,10 @@ class CardQuality(str, Enum):
             return "NM"
             
         quality_str = str(quality).strip().upper()
+        if "FREDERICTON: " in quality_str:
+            quality_str = quality_str.replace("FREDERICTON: ", "")
+        if "MONCTON: " in quality_str:
+            quality_str = quality_str.replace("MONCTON: ", "")
         upper_mapping = {k.upper(): v for k, v in QUALITY_MAPPING.items()}
         
         if quality_str in upper_mapping:

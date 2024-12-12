@@ -7,6 +7,7 @@ import pandas as pd
 import pulp
 from deap import algorithms, base, creator, tools
 from app.constants import CardQuality, QUALITY_WEIGHTS
+from app.utils.data_fetcher import ErrorCollector
 
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,23 @@ class PurchaseOptimizer:
                 if required_col in ['price', 'quantity']:
                     df[required_col] = 0
                 elif required_col == 'quality':
-                    df[required_col] = 'NM'
+                    df[required_col] = 'HP'
                 elif required_col == 'site_name':
                     df[required_col] = df['site_id'].astype(str)
                 else:
                     df[required_col] = ''
-        
+        # Standardize price values
+        if 'price' in df.columns:
+            try:
+                # Convert to float first to handle any string prices
+                df['price'] = pd.to_numeric(df['price'], errors='coerce')
+                # Round to 2 decimal places
+                df['price'] = df['price'].round(2)
+                # Fill any NaN values with 0
+                df['price'] = df['price'].fillna(0)
+            except Exception as e:
+                logger.error(f"Error standardizing prices: {e}")
+            
         # Validate and normalize quality values
         if 'quality' in df.columns:
             try:
@@ -120,10 +132,20 @@ class PurchaseOptimizer:
         )
 
     def run_nsga_ii_optimization(self, milp_solution=None):
-        return self._run_nsga_ii(self.filtered_listings_df, self.user_wishlist_df, milp_solution)
+        return self._run_nsga_ii(self.filtered_listings_df, self.user_wishlist_df, self.config, milp_solution)
 
     def run_optimization(self, card_names, config):
         try:
+            # Add specific logging for Caves of Koilos at the start
+            if "Caves of Koilos" in card_names:
+                logger.info("=== Caves of Koilos Debug ===")
+                logger.info(f"Initial listings containing Caves of Koilos:")
+                koilos_listings = self.filtered_listings_df[self.filtered_listings_df['name'] == "Caves of Koilos"]
+                if not koilos_listings.empty:
+                    logger.info("\n" + str(koilos_listings[['name', 'site_name', 'price', 'quality', 'quantity']]))
+                else:
+                    logger.info("No initial listings found for Caves of Koilos")
+
             final_result = None
             # Debug incoming data
             logger.debug(f"Input DataFrame columns: {self.filtered_listings_df.columns.tolist()}")
@@ -136,8 +158,8 @@ class PurchaseOptimizer:
                 return {"best_solution": [], "iterations": None}
 
             # Add logging for unique available cards
-            available_cards = sorted(self.filtered_listings_df['name'].unique())
-            logger.info(f"Available cards ({len(available_cards)}): {available_cards}")
+            # available_cards = sorted(self.filtered_listings_df['name'].unique())
+            #logger.info(f"Available cards ({len(available_cards)}): {available_cards}")
 
             logger.info(f"Starting optimization with {len(card_names)} cards")
             logger.info(f"Found {self.filtered_listings_df['site_name'].nunique()} unique sites")
@@ -148,227 +170,325 @@ class PurchaseOptimizer:
                 best_solution, all_milp_solutions = self.run_milp_optimization()
                 self.filtered_listings_df = self._cleanup_temporary_columns(df=self.filtered_listings_df)
 
-                if best_solution is None:
-                    logger.warning("MILP optimization returned no results")
-                    return {"best_solution": [], "iterations": None}
+                # Add Caves of Koilos check in MILP solution
+                if isinstance(best_solution, pd.DataFrame):
+                    koilos_in_solution = best_solution[best_solution['name'] == "Caves of Koilos"]
+                    if not koilos_in_solution.empty:
+                        logger.info("Found Caves of Koilos in MILP solution:")
+                        logger.info("\n" + str(koilos_in_solution))
+                    else:
+                        logger.warning("Caves of Koilos not found in MILP solution")
 
-                # Convert DataFrame to records for serialization
-                best_solution_records = best_solution.to_dict('records') if isinstance(best_solution, pd.DataFrame) else best_solution
                 
-                # Add set_code and set_name only to records missing them
-                for record in best_solution_records:
-                    if 'set_code' not in record or not record['set_code']:
-                        matching_listings = self.filtered_listings_df[
-                            (self.filtered_listings_df['name'] == record['name']) &
-                            (self.filtered_listings_df['site_name'] == record['site_name']) &
-                            (self.filtered_listings_df['price'] == record['price'])
-                        ]
-                        
-                        if not matching_listings.empty:
-                            record['set_code'] = matching_listings.iloc[0]['set_code']
-                            record['set_name'] = matching_listings.iloc[0]['set_name']
-                        else:
-                            logger.warning(f"No matching listing found for {record['name']} at {record['site_name']}")
-                            record['set_code'] = ''
-                            record['set_name'] = ''
+                if best_solution is not None:
 
-                # Format iterations to be serializable
-                formatted_iterations = []
-                if all_milp_solutions:
-                    for solution in all_milp_solutions:
-                        iteration_copy = solution.copy()
-                        if isinstance(solution['sorted_results_df'], pd.DataFrame):
-                            results_records = solution['sorted_results_df'].to_dict('records')
-                            # Add set information only to records missing them
-                            for record in results_records:
-                                if 'set_code' not in record or not record['set_code']:
-                                    matching_listings = self.filtered_listings_df[
-                                        (self.filtered_listings_df['name'] == record['name']) &
-                                        (self.filtered_listings_df['site_name'] == record['site_name']) &
-                                        (self.filtered_listings_df['price'] == record['price'])
-                                    ]
-                                    if not matching_listings.empty:
-                                        record['set_code'] = matching_listings.iloc[0]['set_code']
-                                        record['set_name'] = matching_listings.iloc[0]['set_name']
-                                    else:
-                                        record['set_code'] = ''
-                                        record['set_name'] = ''
-                            iteration_copy['sorted_results_df'] = results_records
-                        formatted_iterations.append(iteration_copy)
+                    # Convert DataFrame to records for serialization
+                    best_solution_records = best_solution.to_dict('records') if isinstance(best_solution, pd.DataFrame) else best_solution
+                    
+                    # Add set_code and set_name only to records missing them
+                    for record in best_solution_records:
+                        if 'set_code' not in record or not record['set_code']:
+                            matching_listings = self.filtered_listings_df[
+                                (self.filtered_listings_df['name'] == record['name']) &
+                                (self.filtered_listings_df['site_name'] == record['site_name']) &
+                                (self.filtered_listings_df['price'] == record['price'])
+                            ]
+                            
+                            if not matching_listings.empty:
+                                record['set_code'] = matching_listings.iloc[0]['set_code']
+                                record['set_name'] = matching_listings.iloc[0]['set_name']
+                            else:
+                                logger.warning(f"No matching listing found for {record['name']} at {record['site_name']}")
+                                record['set_code'] = ''
+                                record['set_name'] = ''
 
-                final_result = {
-                    "best_solution": best_solution_records,
-                    "iterations": formatted_iterations
-                }
+                        # Format iterations to be serializable
+                        formatted_iterations = []
+                        if all_milp_solutions:
+                            for solution in all_milp_solutions:
+                                iteration_copy = solution.copy()
+                                if isinstance(solution['sorted_results_df'], pd.DataFrame):
+                                    results_records = solution['sorted_results_df'].to_dict('records')
+                                    iteration_copy['sorted_results_df'] = results_records
+                                formatted_iterations.append(iteration_copy)
+
+                        final_result = {
+                            "status": "success",
+                            "best_solution": best_solution_records,
+                            "iterations": formatted_iterations,
+                            "type": "milp"
+                        }
+                else:
+                    logger.warning("MILP optimization returned no results")
+
 
             if config["nsga_strat"] or config["hybrid_strat"]:
                 logger.info("Running NSGA-II optimization...")
+                milp_solution = None
+                
+                if config["hybrid_strat"] and final_result and final_result.get("best_solution"):
+                    milp_solution = self._convert_solution_to_indices(final_result["best_solution"])
 
-                # Convert MILP results to milp_solution
-                milp_solution = []
-                # Run the optimization algorithm
-                if config["hybrid_strat"]:
-                    expected_length = sum(self.user_wishlist_df['quantity'])
-                    logger.info(f"Hybrid optimization preparation...")
-                    # Create a unique identifier in card_details_df
-                    self.filtered_listings_df['Identifier'] = self.filtered_listings_df.apply(lambda row: f"{row['name']}_{row['site_name']}_{row['price']}", axis=1)
-
-                    # Create a mapping from the unique identifier to index
-                    identifier_to_index = {identifier: idx for idx, identifier in self.filtered_listings_df['Identifier'].items()}
-
-                    if isinstance(final_result.get('best_solution'), list):
-                        missing_cards = []
-                        for row in final_result['best_solution']:
-                            identifier = f"{row['name']}_{row['site_name']}_{row['price']}"
-                            if identifier in identifier_to_index:
-                                idx = identifier_to_index[identifier]
-                                milp_solution.append(idx)
-                            else:
-                                missing_cards.append(row['name'])
-                                alternative = self._find_alternative_listing(row['name'], self.filtered_listings_df)
-                                if alternative is not None:
-                                    milp_solution.append(alternative)
-                                logger.info(f"Combination {identifier} not found in card_details_df.")
-                        if len(milp_solution) != expected_length:
-                            logger.warning(f"MILP solution incomplete: {len(milp_solution)}/{expected_length} cards. Missing: {missing_cards}")
-                    else:
-                        logger.warning("best_solution is not a list.")
-
-                    # Drop the 'Identifier' column as it's no longer needed
-                    self.filtered_listings_df = self.filtered_listings_df.drop(columns=['Identifier'])
-                    
-                    logger.info(f"Hybrid optimization preparation complte.")
-
-                # Run NSGA-II without the MILP solution
                 pareto_front = self.run_nsga_ii_optimization(milp_solution=milp_solution)
-                if pareto_front is None:  
-                    logger.warning("NSGA-II optimization returned no results")
-                    return {"best_solution": [], "iterations": None}
-
-                # Process the Pareto front
-                best_solution = None
-                best_score = float('inf')
-
-                # Adjusted weights
-                weight_cost = 0.45
-                weight_quality = 0.3  # Adjust as needed
-                weight_availability = 0.15  # Adjust as needed
-                weight_num_stores = 0.1  # Adjust as needed
-
-                def normalize_cost(cost):
-                    return (cost - 100) / (900)  # Assuming costs range from $100 to $1000
-
-                def normalize_num_stores(num_stores):
-                    return (num_stores - 1) / (19)  # Assuming store count ranges from 1 to 20
-
-                for solution in pareto_front:
-                    cost, quality, availability, num_stores = solution.fitness.values
-
-                    normalized_cost = normalize_cost(cost)
-                    normalized_num_stores = normalize_num_stores(num_stores)
-                    # Composite score calculation
-                    composite_score = (weight_cost * normalized_cost +
-                                       weight_quality * quality +
-                                       weight_availability * availability +
-                                       weight_num_stores * normalized_num_stores)
-                    
-                    if composite_score < best_score:
-                        logger.info("A new \"best solution\" was found: ")
-                        logger.info(f"cost: {str(weight_cost * cost)} ({cost})")
-                        logger.info(f"quality: {str(weight_quality * (1/quality))} ({quality})")
-                        logger.info(f"availability: {str(weight_availability * (availability) )} ({availability})")
-                        logger.info(f"num_stores: {str(weight_num_stores * num_stores)} ({num_stores})")
-                        logger.info(f"composite_score vs old composite_score: {str(composite_score)} vs {str(best_score)}")
-
-                        best_score = composite_score
-                        best_solution = solution
-
-                # Extract the purchasing plan from the best solution
-                if best_solution:
-                    # Convert indices to card data before processing
-                    purchasing_details = []
-                    for idx in best_solution:
-                        if isinstance(idx, int) and idx in self.filtered_listings_df.index:
-                            card_data = self.filtered_listings_df.loc[idx].to_dict()
-                            purchasing_details.append(card_data)
-                        elif isinstance(idx, (dict, pd.Series)):
-                            purchasing_details.append(idx)
-
-                    # Process each card's purchasing details
-                    for card_data in purchasing_details:
-                        # Find matching listing to get set_code
-                        matching_listings = self.filtered_listings_df[
-                            (self.filtered_listings_df['name'] == card_data['name']) &
-                            (self.filtered_listings_df['site_name'] == card_data['site_name'])
-                        ]
+                
+                if pareto_front:
+                    best_solution = self._select_best_solution(pareto_front)
+                    if best_solution:
+                        purchasing_plan = self.get_purchasing_plan(best_solution)
                         
-                        if not matching_listings.empty:
-                            card_data['set_code'] = matching_listings.iloc[0]['set_code']
-                            card_data['set_name'] = matching_listings.iloc[0]['set_name']
+                        # Create iterations from Pareto front
+                        pareto_iterations = []
+                        for solution in pareto_front:
+                            iteration_plan = self.get_purchasing_plan(solution)
+                            pareto_iterations.append({
+                                'sorted_results_df': iteration_plan,
+                                'total_price': sum(plan['total_price'] for plan in iteration_plan),
+                                'number_store': len(set(plan['site_name'] for plan in iteration_plan)),
+                                'nbr_card_in_solution': len(iteration_plan)
+                            })
+
+                        nsga_result = {
+                            "status": "success",
+                            "best_solution": purchasing_plan,
+                            "iterations": pareto_iterations,
+                            "type": "nsga"
+                        }
+
+                        # For hybrid strategy, compare and select the better solution
+                        if config["hybrid_strat"] and final_result:
+                            final_result = self._select_better_solution(final_result, nsga_result)
                         else:
-                            logger.warning(f"No matching listing found for {card_data['name']} at {card_data['site_name']}")
-                            card_data['set_code'] = ''
-                            card_data['set_name'] = ''
+                            final_result = nsga_result
+                else:
+                    logger.warning("NSGA-II optimization returned no results")
 
-                    # Map the solution back to determine the purchasing plan
-                    purchasing_plan = self.get_purchasing_plan(purchasing_details)
-
-                    # Add set information only to plans missing them
-                    for plan in purchasing_plan:
-                        if 'set_code' not in plan or not plan['set_code']:
-                            matching_listings = self.filtered_listings_df[
-                                (self.filtered_listings_df['name'] == plan['name']) &
-                                (self.filtered_listings_df['site_name'] == plan['site_name']) &
-                                (self.filtered_listings_df['price'] == plan['price'])
-                            ]
-                            if not matching_listings.empty:
-                                plan['set_code'] = matching_listings.iloc[0]['set_code']
-                                plan['set_name'] = matching_listings.iloc[0]['set_name']
-                            else:
-                                logger.warning(f"No matching listing found for {plan['name']} at {plan['site_name']}")
-                                plan['set_code'] = ''
-                                plan['set_name'] = ''
-
-                    # Create iterations from Pareto front with conditional set info addition
-                    pareto_iterations = []
-                    for idx, solution in enumerate(pareto_front):
-                        iteration_plan = self.get_purchasing_plan(solution)
-                        for plan in iteration_plan:
-                            if 'set_code' not in plan or not plan['set_code']:
-                                matching_listings = self.filtered_listings_df[
-                                    (self.filtered_listings_df['name'] == plan['name']) &
-                                    (self.filtered_listings_df['site_name'] == plan['site_name']) &
-                                    (self.filtered_listings_df['price'] == plan['price'])
-                                ]
-                                if not matching_listings.empty:
-                                    plan['set_code'] = matching_listings.iloc[0]['set_code']
-                                    plan['set_name'] = matching_listings.iloc[0]['set_name']
-                                else:
-                                    plan['set_code'] = ''
-                                    plan['set_name'] = ''
-
-                        pareto_iterations.append({
-                            'sorted_results_df': iteration_plan,
-                            'total_price': sum(plan['total_price'] for plan in iteration_plan),
-                            'number_store': len(set(plan['site_name'] for plan in iteration_plan)),
-                            'nbr_card_in_solution': len(iteration_plan),
-                            'list_stores': ', '.join(set(plan['site_name'] for plan in iteration_plan))
-                        })
-
-                    final_result = {
-                        "best_solution": pd.DataFrame(purchasing_plan),
-                        "iterations": pareto_iterations
+            if final_result and final_result.get("status") == "success":
+                error_collector = ErrorCollector.get_instance()
+                final_result["errors"] = {
+                    'unreachable_stores': list(error_collector.unreachable_stores),
+                    'unknown_languages': list(error_collector.unknown_languages),
+                    'unknown_qualities': list(error_collector.unknown_qualities)
+                }
+                return final_result
+            else:
+                logger.error("Optimization failed to produce valid results")
+                return {
+                    "status": "failed",
+                    "best_solution": [],
+                    "iterations": None,
+                    "errors": {
+                        'unreachable_stores': list(error_collector.unreachable_stores),
+                        'unknown_languages': list(error_collector.unknown_languages),
+                        'unknown_qualities': list(error_collector.unknown_qualities)
                     }
+                }
 
-            logger.info(f"Final optimization results:")
-            logger.info(f"\tNumber of cards in best solution: {len(final_result.get('best_solution', []))}")
-            logger.info(f"\tNumber of attempted solutions: {len(final_result.get('iterations', []))}")
-            return final_result
-        
         except Exception as e:
             logger.error(f"Optimization failed: {str(e)}", exc_info=True)
-            raise
+            return {
+                "status": "failed",
+                "best_solution": [],
+                "iterations": None,
+                "errors": {
+                    'unreachable_stores': [],
+                    'unknown_languages': [],
+                    'unknown_qualities': []
+                }
+            }
 
+    def format_optimization_summary(final_result):
+        """Format optimization results in a human-readable way"""
+        best_solution = final_result.get('best_solution', [])
+        iterations = final_result.get('iterations', [])
+        
+        # Handle different types of best_solution
+        if isinstance(best_solution, pd.DataFrame):
+            best_solution = best_solution.to_dict('records')
+        elif isinstance(best_solution, str):
+            logger.warning("best_solution is a string, expected DataFrame or list")
+            return "Unable to format optimization summary: invalid solution format"
+        
+        try:
+            # Calculate summary statistics
+            total_price = 0
+            quality_counts = {}
+            cards_found = len(best_solution)
+            
+            # Process each card safely
+            unique_stores = set()
+            for card in best_solution:
+                # Handle price and quantity
+                price = float(card['price'] if isinstance(card, dict) else getattr(card, 'price', 0))
+                quantity = int(card['quantity'] if isinstance(card, dict) else getattr(card, 'quantity', 1))
+                total_price += price * quantity
+                
+                # Handle quality counts
+                quality = card['quality'] if isinstance(card, dict) else getattr(card, 'quality', 'Unknown')
+                quality_counts[quality] = quality_counts.get(quality, 0) + 1
+                
+                # Handle store tracking
+                store = card['site_name'] if isinstance(card, dict) else getattr(card, 'site_name', None)
+                if store:
+                    unique_stores.add(store)
+            
+            # Format the summary
+            summary = [
+                "Final Optimization Results:",
+                f"{'='*50}",
+                f"Cards Found:        {cards_found} cards",
+                f"Total Cost:         ${total_price:.2f}",
+                f"Stores Used:        {len(unique_stores)} stores",
+                f"Solutions Tried:    {len(iterations)}",
+                "",
+                "Quality Distribution:",
+                "-" * 30
+            ]
+            
+            if cards_found > 0:  # Avoid division by zero
+                for quality, count in quality_counts.items():
+                    percentage = (count / cards_found) * 100
+                    summary.append(f"{quality:<15} {count:>3} cards ({percentage:>5.1f}%)")
+            else:
+                summary.append("No cards in solution")
+
+            return "\n".join(summary)
+            
+        except Exception as e:
+            logger.error(f"Error formatting optimization summary: {str(e)}")
+            # Return a basic summary in case of error
+            return f"Optimization completed with {len(best_solution)} cards"
+    
+    def _convert_solution_to_indices(self, solution):
+        """Convert solution records to DataFrame indices"""
+        indices = []
+        for record in solution:
+            matching_rows = self.filtered_listings_df[
+                (self.filtered_listings_df['name'] == record['name']) &
+                (self.filtered_listings_df['site_name'] == record['site_name']) &
+                (abs(self.filtered_listings_df['price'] - record['price']) < 0.01)
+            ]
+            if not matching_rows.empty:
+                indices.append(matching_rows.index[0])
+        return indices
+    
+    def _select_better_solution(self, milp_result, nsga_result):
+        """Compare and select the better solution between MILP and NSGA-II"""
+        milp_score = self._calculate_solution_score(milp_result["best_solution"])
+        nsga_score = self._calculate_solution_score(nsga_result["best_solution"])
+        
+        if milp_score <= nsga_score:
+            return milp_result
+        return nsga_result
+
+    def _select_best_solution(self, pareto_front):
+        """
+        Select the best solution from the Pareto front using weighted objectives.
+        
+        Args:
+            pareto_front (list): List of non-dominated solutions from NSGA-II
+            
+        Returns:
+            best_solution: The selected best solution based on composite score
+        """
+        if not pareto_front:
+            logger.warning("Empty Pareto front provided")
+            return None
+            
+        best_solution = None
+        best_score = float('inf')
+        
+        # Adjusted weights for different objectives
+        weight_cost = 0.45      # Cost is most important
+        weight_quality = 0.3    # Quality is second priority
+        weight_availability = 0.15  # Availability is third priority
+        weight_num_stores = 0.1    # Number of stores is least priority
+        
+        def normalize_cost(cost):
+            """Normalize cost to 0-1 range"""
+            # Assuming costs typically range from $100 to $1000
+            return (cost - 100) / (900)
+            
+        def normalize_num_stores(num_stores):
+            """Normalize number of stores to 0-1 range"""
+            max_stores = self.config.get('max_store', 20)
+            return (num_stores - 1) / (max_stores - 1)
+            
+        def safe_quality_score(quality):
+            """Convert quality score to 0-1 range, avoiding division by zero"""
+            return 1 / (max(0.0001, quality))
+            
+        for solution in pareto_front:
+            try:
+                # Extract fitness values
+                cost, quality, availability, num_stores = solution.fitness.values
+                
+                # Normalize each objective to 0-1 range
+                normalized_cost = normalize_cost(cost)
+                normalized_stores = normalize_num_stores(num_stores)
+                normalized_quality = safe_quality_score(quality)
+                normalized_availability = max(0, min(1, availability))
+                
+                # Calculate composite score (lower is better)
+                composite_score = (
+                    weight_cost * normalized_cost +
+                    weight_quality * normalized_quality +
+                    weight_availability * (1 - normalized_availability) +  # Invert since higher availability is better
+                    weight_num_stores * normalized_stores
+                )
+                
+                # Log scores for debugging
+                logger.info("Evaluating solution:")
+                logger.info(f"cost: {str(weight_cost * normalized_cost)} ({cost})")
+                logger.info(f"quality: {str(weight_quality * normalized_quality)} ({quality})")
+                logger.info(f"availability: {str(weight_availability * (1 - normalized_availability))} ({availability})")
+                logger.info(f"num_stores: {str(weight_num_stores * normalized_stores)} ({num_stores})")
+                logger.info(f"composite_score vs old composite_score: {str(composite_score)} vs {str(best_score)}")
+                
+                # Update best solution if this one is better
+                if composite_score < best_score:
+                    logger.info("A new \"best solution\" was found")
+                    best_score = composite_score
+                    best_solution = solution
+                    
+            except Exception as e:
+                logger.error(f"Error evaluating solution: {str(e)}")
+                continue
+                
+        if best_solution is None:
+            logger.error("Failed to select best solution from Pareto front")
+            return None
+            
+        # Validate the selected solution
+        try:
+            # Convert indices to actual card data
+            card_indices = best_solution
+            card_data = []
+            
+            for idx in card_indices:
+                if isinstance(idx, int) and idx in self.filtered_listings_df.index:
+                    card_data.append(self.filtered_listings_df.loc[idx].to_dict())
+                elif isinstance(idx, (dict, pd.Series)):
+                    card_data.append(idx)
+                    
+            if not card_data:
+                logger.error("Selected solution contains no valid card data")
+                return None
+                
+            return card_data
+            
+        except Exception as e:
+            logger.error(f"Error processing selected solution: {str(e)}")
+            return None
+
+    def _calculate_solution_score(self, solution):
+        """Calculate a score for a solution based on multiple objectives"""
+        total_cost = sum(float(card['price']) * int(card['quantity']) for card in solution)
+        num_stores = len(set(card['site_name'] for card in solution))
+        completeness = len(solution) / len(self.user_wishlist_df)
+        
+        # Lower score is better
+        return total_cost * (1 + 0.1 * num_stores) * (1 / completeness)
+    
     def _get_convergence_params(self):
         """Get convergence parameters based on problem size"""
         num_cards = len(self.user_wishlist_df)
@@ -389,11 +509,62 @@ class PurchaseOptimizer:
     
     def _find_alternative_listing(self, card_name, listings_df):
         """Find alternative listing when exact match isn't found"""
-        matches = listings_df[listings_df['name'] == card_name]
-        if not matches.empty:
-            return matches.index[0]  # Return first matching index
-        return None
-    
+        if card_name == "Caves of Koilos":
+            logger.info("=== Caves of Koilos Alternative Search ===")
+            logger.info(f"Current listings dataframe shape: {listings_df.shape}")
+            logger.info(f"Column names: {listings_df.columns.tolist()}")
+            
+            # Try exact match first
+            matches = listings_df[listings_df['name'] == card_name]
+            logger.info(f"Exact matches found: {len(matches)}")
+            if not matches.empty:
+                logger.info("First matching record:")
+                logger.info("\n" + str(matches.iloc[0]))
+                return matches.index[0]
+                
+            # Try case-insensitive match
+            logger.info("Attempting case-insensitive search...")
+            matches = listings_df[listings_df['name'].str.lower() == card_name.lower()]
+            logger.info(f"Case-insensitive matches found: {len(matches)}")
+            if not matches.empty:
+                return matches.index[0]
+                
+            # Try fuzzy matching
+            logger.info("Attempting partial matches...")
+            similar_cards = listings_df[listings_df['name'].str.contains(card_name, case=False, na=False)]
+            if not similar_cards.empty:
+                logger.info(f"Similar cards found: {similar_cards['name'].unique().tolist()}")
+            else:
+                logger.info("No similar cards found")
+                
+            return None
+        else:
+            # Original implementation for other cards
+            # Add debug logging
+            logger.info(f"Searching for alternative listing for: {card_name}")
+            logger.info(f"Available card names in listings: {sorted(listings_df['name'].unique())}")
+            
+            # Try exact match first
+            matches = listings_df[listings_df['name'] == card_name]
+            if not matches.empty:
+                logger.info(f"Found exact match for {card_name}")
+                return matches.index[0]
+                
+            # Try case-insensitive match
+            matches = listings_df[listings_df['name'].str.lower() == card_name.str.lower()]
+            if not matches.empty:
+                logger.info(f"Found case-insensitive match for {card_name}")
+                return matches.index[0]
+                
+            # Try fuzzy matching
+            similar_cards = listings_df[listings_df['name'].str.contains(card_name, case=False, na=False)]
+            if not similar_cards.empty:
+                logger.info(f"Found similar cards: {similar_cards['name'].unique().tolist()}")
+            else:
+                logger.info(f"No similar cards found for {card_name}")
+                
+            return None
+
     @staticmethod
     def _run_pulp(filtered_listings_df, user_wishlist_df, min_store, find_min_store):
         """Run MILP optimization"""
@@ -669,7 +840,7 @@ class PurchaseOptimizer:
         }
 
     @staticmethod
-    def _run_nsga_ii(filtered_listings_df, user_wishlist_df, milp_solution=None):
+    def _run_nsga_ii(filtered_listings_df, user_wishlist_df, config, milp_solution=None):
         """
         Run NSGA-II optimization with proper selection and elitism.
         
@@ -688,7 +859,7 @@ class PurchaseOptimizer:
             logger.error("Missing required columns in filtered_listings_df")
             return None
 
-        toolbox = PurchaseOptimizer._initialize_toolbox(filtered_listings_df, user_wishlist_df)
+        toolbox = PurchaseOptimizer._initialize_toolbox(filtered_listings_df, user_wishlist_df, config)
         
         # Algorithm parameters
         NGEN = 50         # More generations
@@ -798,7 +969,7 @@ class PurchaseOptimizer:
         return pareto_front
 
     @staticmethod
-    def _initialize_toolbox(filtered_listings_df, user_wishlist_df):
+    def _initialize_toolbox(filtered_listings_df, user_wishlist_df, config):
         toolbox = base.Toolbox()
         toolbox.register("attr_idx", random.randint,
                          0, len(filtered_listings_df) - 1)
@@ -814,7 +985,7 @@ class PurchaseOptimizer:
         toolbox.register(
             "evaluate",
             PurchaseOptimizer._evaluate_solution_wrapper(
-                filtered_listings_df, user_wishlist_df),
+                filtered_listings_df, user_wishlist_df, config),
         )
         toolbox.register("mate", PurchaseOptimizer._custom_crossover)
         toolbox.register(
@@ -879,7 +1050,7 @@ class PurchaseOptimizer:
                 not_present.add(card_name)
                 
         if not_present:
-            logger.warning(f"Cards not found in filtered listings: {list(not_present)}")
+            logger.debug(f"Cards not found in filtered listings: {list(not_present)}")
 
         if len(individual) != expected_length:
             raise ValueError(f"Invalid individual length: {len(individual)} != {expected_length}")
@@ -932,19 +1103,23 @@ class PurchaseOptimizer:
         return (individual,)
 
     @staticmethod
-    def _evaluate_solution_wrapper(filtered_listings_df, user_wishlist_df):
+    def _evaluate_solution_wrapper(filtered_listings_df, user_wishlist_df, config):
         def evaluate_solution(individual):
             # Initialize trackers
             total_cost = 0
             total_quality_score = 0
             stores = set()
-            card_counts = defaultdict(int)  # Track how many of each card we have
-            
-            # Required quantities
+            card_counts = defaultdict(int)
+            card_availabilities = defaultdict(float)
             required_quantities = {
                 row["name"]: row["quantity"] 
                 for _, row in user_wishlist_df.iterrows()
             }
+
+            # Track available stores per card for availability scoring
+            card_store_options = defaultdict(set)
+            for idx, row in filtered_listings_df.iterrows():
+                card_store_options[row['name']].add(row['site_name'])
             
             # Process each card in the individual
             for idx in individual:
@@ -955,51 +1130,49 @@ class PurchaseOptimizer:
                 card_name = card_row["name"]
                 card_counts[card_name] += 1
                 
-                # Only count costs/quality if we actually need this card
+                # Only count costs/quality if we need this card (don't exceed required quantity)
                 if card_counts[card_name] <= required_quantities.get(card_name, 0):
-                    # Base price
-                    price = float(card_row["price"])
-                    
-                    # Quality adjustment
-                    quality_multiplier = QUALITY_WEIGHTS.get(card_row["quality"], QUALITY_WEIGHTS["DMG"])
-                    total_cost += price * quality_multiplier
-                    
-                    # Add quality score
-                    total_quality_score += QUALITY_WEIGHTS.get(card_row["quality"], 0)
-                    
-                    # Track store
                     stores.add(card_row["site_name"])
-            
-            # Calculate scores
-            # 1. Check if we have enough of each card
+                    
+                    # Calculate card-specific scores
+                    quality_score = QUALITY_WEIGHTS.get(card_row["quality"], 0)
+                    availability_score = len(card_store_options[card_name]) / len(stores)
+                    
+                    # Add to total scores
+                    total_cost += float(card_row["price"])
+                    total_quality_score += quality_score
+                    card_availabilities[card_name] = availability_score
+
+            # Calculate completeness score - how many required cards we found
             missing_cards = sum(
                 max(0, required_quantities[name] - count)
                 for name, count in card_counts.items()
             )
+            completeness_score = 1.0 - (missing_cards / sum(required_quantities.values()))
+
+            # Calculate final objectives
+            valid_cards = sum(min(count, required_quantities.get(name, 0)) 
+                            for name, count in card_counts.items())
             
-            # 2. Calculate availability score
-            availability_score = sum(
-                1 for name, count in card_counts.items()
-                if count >= required_quantities.get(name, 0)
-            ) / len(required_quantities)
-            
-            # 3. Normalize quality score
-            quality_score = total_quality_score / len(individual) if individual else 0
-            
-            # Apply penalties
-            cost_with_penalties = (
-                total_cost +
-                missing_cards * 10000 +  # Heavy penalty for missing cards
-                (len(stores) - 1) * 100   # Small penalty for each additional store
-            )
+            if valid_cards == 0:
+                return float('inf'), 0.0, 0.0, 1.0  # Heavily penalize invalid solutions
+                
+            avg_quality = total_quality_score / valid_cards
+            avg_availability = sum(card_availabilities.values()) / len(card_availabilities) if card_availabilities else 0
+            store_penalty = len(stores) / config.get('max_store', 20)  # Normalize store count
+
+            # Apply heavy penalty if solution is incomplete
+            if completeness_score < 1.0:
+                total_cost *= (2.0 - completeness_score)  # Double cost for completely missing solution
+                avg_quality *= completeness_score
+                avg_availability *= completeness_score
             
             return (
-                cost_with_penalties,
-                quality_score,
-                availability_score,
-                len(stores)
+                total_cost,           # Raw total cost (not normalized) - minimize
+                avg_quality,          # Average quality score (0-1) - maximize
+                avg_availability,     # Average availability score (0-1) - maximize
+                store_penalty         # Store count penalty (0-1) - minimize
             )
-
         return evaluate_solution
 
     @staticmethod

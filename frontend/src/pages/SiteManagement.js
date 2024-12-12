@@ -15,6 +15,8 @@ const SiteManagement = () => {
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [addForm] = Form.useForm();
+  const [editMethodValue, setEditMethodValue] = useState('');
+  const [addMethodValue, setAddMethodValue] = useState('');
 
   useEffect(() => {
     fetchSites();
@@ -33,18 +35,23 @@ const SiteManagement = () => {
   };
 
   const getUniqueCountries = () => {
-    const countries = [...new Set(sites.map(site => site.country))];
-    return countries.filter(Boolean).map(country => ({ text: country, value: country }));
+    return [
+      { text: 'Canada', value: 'Canada' },
+      { text: 'USA', value: 'USA' },
+      { text: 'Others', value: 'Others' }
+    ];
   };
 
   const handleEdit = (record) => {
     setEditingRecord(record);
+    setEditMethodValue(record.method);
     editForm.setFieldsValue(record);
     setIsEditModalVisible(true);
   };
 
   const handleAdd = () => {
     addForm.resetFields();
+    setAddMethodValue('');
     setIsAddModalVisible(true);
   };
 
@@ -174,6 +181,7 @@ const SiteManagement = () => {
         { text: 'Crystal', value: 'crystal' },
         { text: 'Shopify', value: 'shopify' },
         { text: 'Hawk', value: 'hawk' },
+        { text: 'Scrapper', value: 'scrapper' },
         { text: 'Other', value: 'other' },
       ],
       onFilter: (value, record) => record.method === value,
@@ -276,63 +284,90 @@ const SiteManagement = () => {
 
   if (loading) return <Spin size="large" />;
 
-  const renderFormItems = (form) => (
-    <>
-      <Form.Item
-        name="name"
-        label="Name"
-        rules={[{ required: true }]}
-      >
-        <Input />
-      </Form.Item>
-      <Form.Item
-        name="url"
-        label="URL"
-        rules={[{ required: true, type: 'url' }]}
-      >
-        <Input />
-      </Form.Item>
-      <Form.Item
-        name="method"
-        label="Method"
-        rules={[{ required: true }]}
-      >
-        <Select>
-          <Select.Option value="crystal">Crystal</Select.Option>
-          <Select.Option value="shopify">Shopify</Select.Option>
-          <Select.Option value="hawk">Hawk</Select.Option>
-          <Select.Option value="other">Other</Select.Option>
-        </Select>
-      </Form.Item>
-      <Form.Item
-        name="country"
-        label="Country"
-      >
-        <Input />
-      </Form.Item>
-      <Form.Item
-        name="type"
-        label="Type"
-        rules={[{ required: true }]}
-      >
-        <Select>
-          <Select.Option value="Primary">Primary</Select.Option>
-          <Select.Option value="Extended">Extended</Select.Option>
-          <Select.Option value="Marketplace">Marketplace</Select.Option>
-          <Select.Option value="NoInventory">No Inventory</Select.Option>
-          <Select.Option value="NotWorking">Not Working</Select.Option>
-        </Select>
-      </Form.Item>
-      <Form.Item
-        name="active"
-        label="Active"
-        valuePropName="checked"
-        initialValue={form === 'add'}
-      >
-        <Switch />
-      </Form.Item>
-    </>
-  );
+  const handleMethodChange = (value, formType) => {
+    if (formType === 'edit') {
+      setEditMethodValue(value);
+    } else {
+      setAddMethodValue(value);
+    }
+
+    const currentForm = formType === 'edit' ? editForm : addForm;
+    if (value !== 'shopify' && value !== 'hawk') {
+      currentForm.setFieldsValue({
+        api_url: undefined
+      });
+    }
+    currentForm.validateFields(['method']); 
+  };
+
+  const renderFormItems = (form) => {
+    const methodValue = form === 'edit' ? editMethodValue : addMethodValue;
+
+    return (
+      <>
+        <Form.Item
+          name="name"
+          label="Name"
+          rules={[{ required: true }]}
+        >
+          <Input />
+        </Form.Item>
+        <Form.Item
+          name="url"
+          label="URL"
+          rules={[{ required: true, type: 'url' }]}
+        >
+          <Input />
+        </Form.Item>
+        <Form.Item
+          name="method"
+          label="Method"
+          rules={[{ required: true }]}
+        >
+          <Select onChange={(value) => handleMethodChange(value, form)}>
+            <Select.Option value="crystal">Crystal</Select.Option>
+            <Select.Option value="shopify">Shopify</Select.Option>
+            <Select.Option value="hawk">Hawk</Select.Option>
+            <Select.Option value="scrapper">Scrapper</Select.Option>
+            <Select.Option value="other">Other</Select.Option>
+          </Select>
+        </Form.Item>
+        {(methodValue === 'shopify' || methodValue === 'hawk') && (
+          <Form.Item
+            name="api_url"
+            label="API URL"
+            rules={[{ required: true, message: 'API URL is required for Shopify/Hawk sites' }]}
+          >
+            <Input />
+          </Form.Item>
+        )}
+        <Form.Item name="country" label="Country" rules={[{ required: true }]}>
+          <Select>
+            <Select.Option value="USA">USA</Select.Option>
+            <Select.Option value="Canada">Canada</Select.Option>
+            <Select.Option value="Others">Others</Select.Option>
+          </Select>
+        </Form.Item>
+        <Form.Item name="type" label="Type" rules={[{ required: true }]}>
+          <Select>
+            <Select.Option value="Primary">Primary</Select.Option>
+            <Select.Option value="Extended">Extended</Select.Option>
+            <Select.Option value="Marketplace">Marketplace</Select.Option>
+            <Select.Option value="NoInventory">No Inventory</Select.Option>
+            <Select.Option value="NotWorking">Not Working</Select.Option>
+          </Select>
+        </Form.Item>
+        <Form.Item
+          name="active"
+          label="Active"
+          valuePropName="checked"
+          initialValue={form === 'add'}
+        >
+          <Switch />
+        </Form.Item>
+      </>
+    );
+  };
 
   return (
     <div className={`site-management section ${theme}`}>

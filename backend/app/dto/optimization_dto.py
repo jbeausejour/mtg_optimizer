@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 from datetime import datetime
 from app.constants.card_mappings import CardLanguage, CardQuality
 from app.services.card_service import CardService
@@ -129,93 +129,139 @@ class OptimizationResultDTO(BaseModel):
         }
     )
     progress: int = 100
+    optimization: Dict[str, Any] = Field(default_factory=dict)  # Add this field
+
 
     def format_solutions(self, solutions, iterations=None):
         """Format solutions from either MILP or NSGA-II optimization"""
-        formatted_solutions = []
-        
-        # Handle MILP solutions (DataFrame converted to dict)
-        if solutions and isinstance(solutions[0], dict) and 'site_id' in solutions[0]:
-            solution_by_site = {}
-            for item in solutions:
-                site_id = item['site_id']
-                if site_id not in solution_by_site:
-                    solution_by_site[site_id] = []
-                solution_by_site[site_id].append({
-                    'name': item['name'],
-                    'quantity': int(item['quantity']),
-                    'price': float(item['price']),
-                    'set_name': item['set_name'],
-                    'set_code': item['set_code'],
-                    'quality': item['quality'],
-                    'language': item.get('language', 'English'),
-                    'version': item.get('version', 'Standard'),
-                    'foil': bool(item.get('foil', False))
-                })
+        try:
+            formatted_solutions = []
             
-            # Create single solution for MILP
-            total_price = sum(float(item['price']) * int(item['quantity']) for item in solutions)
-            formatted_solutions.append({
-                'total_price': total_price,
-                'num_stores': len(solution_by_site),
-                'stores': [{
-                    'site_id': site_id,
-                    'cards': cards
-                } for site_id, cards in solution_by_site.items()]
-            })
-            
-        # Handle NSGA-II solutions (list of solutions from pareto front)
-        elif solutions and isinstance(solutions, list):
-            for solution in solutions:
-                solution_by_site = {}
-                total_price = 0
-                
-                for card in solution:
-                    site_id = card['site_id']
-                    if site_id not in solution_by_site:
-                        solution_by_site[site_id] = []
-                    
-                    card_price = float(card['price']) * int(card['quantity'])
-                    total_price += card_price
-                    
-                    solution_by_site[site_id].append({
-                        'name': card['name'],
-                        'quantity': int(card['quantity']),
-                        'price': float(card['price']),
-                        'set_name': card['set_name'],
-                        'set_code': card['set_code'],
-                        'quality': card['quality'],
-                        'language': card.get('language', 'English'),
-                        'version': card.get('version', 'Standard'),
-                        'foil': bool(card.get('foil', False))
-                    })
-                
-                formatted_solutions.append({
-                    'total_price': total_price,
-                    'num_stores': len(solution_by_site),
-                    'stores': [{
-                        'site_id': site_id,
-                        'cards': cards
-                    } for site_id, cards in solution_by_site.items()]
-                })
-        
-        self.optimization = {
-            'solutions': formatted_solutions,
-            'iterations': iterations or []
-        }
+            if not solutions:
+                logger.warning("No solutions provided to format")
+                self.optimization = {
+                    'solutions': [],
+                    'iterations': [],
+                    'errors': self.errors
+                }
+                return
 
-    def model_dump(self):
-        return {
-            'status': self.status,
-            'message': self.message,
-            'sites_scraped': self.sites_scraped,
-            'cards_scraped': self.cards_scraped,
-            'optimization': {
-                'solutions': [solution.model_dump() for solution in self.solutions],
+            # Check if this is a result with explicit status
+            if isinstance(solutions, dict) and 'status' in solutions:
+                if solutions['status'] == 'failed':
+                    logger.warning("Received failed optimization result")
+                    self.optimization = {
+                        'solutions': [],
+                        'iterations': [],
+                        'errors': solutions.get('errors', self.errors)
+                    }
+                    return
+
+                solutions = solutions.get('best_solution', [])
+
+            # Handle MILP or NSGA solutions
+            for solution in (solutions if isinstance(solutions, list) else [solutions]):
+                try:
+                    solution_by_site = {}
+                    total_price = 0.0
+                    total_cards = 0
+                    site_names = set()
+
+                    # Process each card in the solution
+                    for card in (solution if isinstance(solution, list) else [solution]):
+                        if not isinstance(card, dict):
+                            continue
+
+                        site_id = card.get('site_id')
+                        site_name = card.get('site_name')
+                        
+                        if site_id is None and site_name:
+                            # Try to find site_id from name if missing
+                            from app.models import Site
+                            site = Site.query.filter_by(name=site_name).first()
+                            site_id = site.id if site else None
+
+                        if site_id not in solution_by_site:
+                            solution_by_site[site_id] = []
+
+                        # Calculate card price
+                        quantity = int(card.get('quantity', 1))
+                        price = float(card.get('price', 0.0))
+                        card_total = price * quantity
+                        
+                        # Update totals
+                        total_price += card_total
+                        total_cards += quantity
+                        if site_name:
+                            site_names.add(site_name)
+
+                        # Format card data
+                        formatted_card = {
+                            'name': card.get('name', ''),
+                            'quantity': quantity,
+                            'price': price,
+                            'total_price': card_total,
+                            'set_name': card.get('set_name', ''),
+                            'set_code': card.get('set_code', ''),
+                            'quality': card.get('quality', 'NM'),
+                            'language': card.get('language', 'English'),
+                            'version': card.get('version', 'Standard'),
+                            'foil': bool(card.get('foil', False))
+                        }
+                        
+                        solution_by_site[site_id].append(formatted_card)
+
+                    # Create formatted solution
+                    formatted_solution = {
+                        'total_price': total_price,
+                        'number_store': len(solution_by_site),
+                        'nbr_card_in_solution': total_cards,
+                        'list_stores': ', '.join(sorted(site_names)),
+                        'stores': [
+                            {
+                                'site_id': site_id,
+                                'cards': cards
+                            }
+                            for site_id, cards in solution_by_site.items()
+                            if site_id is not None
+                        ]
+                    }
+                    
+                    formatted_solutions.append(formatted_solution)
+
+                except Exception as e:
+                    logger.error(f"Error formatting individual solution: {str(e)}")
+                    continue
+
+            # Format iterations if provided
+            formatted_iterations = []
+            if iterations:
+                for iteration in iterations:
+                    try:
+                        if isinstance(iteration, dict) and 'sorted_results_df' in iteration:
+                            formatted_iteration = {
+                                'total_price': float(iteration.get('total_price', 0.0)),
+                                'number_store': int(iteration.get('number_store', 0)),
+                                'nbr_card_in_solution': int(iteration.get('nbr_card_in_solution', 0)),
+                                'list_stores': iteration.get('list_stores', '')
+                            }
+                            formatted_iterations.append(formatted_iteration)
+                    except Exception as e:
+                        logger.error(f"Error formatting iteration: {str(e)}")
+                        continue
+
+            self.optimization = {
+                'solutions': formatted_solutions,
+                'iterations': formatted_iterations,
                 'errors': self.errors
-            },
-            'progress': self.progress
-        }
+            }
+
+        except Exception as e:
+            logger.error(f"Error in format_solutions: {str(e)}")
+            self.optimization = {
+                'solutions': [],
+                'iterations': [],
+            }
 
 class ScanResultDTO(CardValidation):
     scan_id: int = Field(..., gt=0) 

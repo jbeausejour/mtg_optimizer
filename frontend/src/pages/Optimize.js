@@ -29,6 +29,7 @@ const Optimize = () => {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [siteType, setSiteType] = useState('extended');
   const [countryFilter, setCountryFilter] = useState('canada'); 
+  const [methodFilter, setMethodFilter] = useState(['all']);  // Change to array
 
   useEffect(() => {
     fetchCards();
@@ -185,6 +186,11 @@ const Optimize = () => {
       return false;
     }
 
+    // Apply platform filtering - allow if 'all' is selected or method matches any selected method
+    if (!methodFilter.includes('all') && !methodFilter.includes(site.method?.toLowerCase())) {
+      return false;
+    }
+
     return true;
   });
 
@@ -194,6 +200,18 @@ const Optimize = () => {
       if (site.active) {
         const country = site.country?.toLowerCase() || 'unknown';
         acc[country] = (acc[country] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    return counts;
+  };
+
+  // Add platform counts helper
+  const getMethodCounts = () => {
+    const counts = sites.reduce((acc, site) => {
+      if (site.active) {
+        const method = site.method?.toLowerCase() || 'unknown';
+        acc[method] = (acc[method] || 0) + 1;
       }
       return acc;
     }, {});
@@ -298,6 +316,19 @@ const Optimize = () => {
                     <Option value="all">All Countries ({sites.filter(s => s.active).length})</Option>
                     <Option value="usa">USA ({getCountryCounts().usa || 0})</Option>
                     <Option value="canada">Canada ({getCountryCounts().canada || 0})</Option>
+                  </Select>
+                  <Select 
+                    mode="multiple"
+                    value={methodFilter}
+                    onChange={setMethodFilter}
+                    style={{ width: 200 }}
+                    size="small"
+                    maxTagCount="responsive"
+                  >
+                    <Option value="all">All Platforms</Option>
+                    <Option value="crystal">Crystal ({getMethodCounts().crystal || 0})</Option>
+                    <Option value="shopify">Shopify ({getMethodCounts().shopify || 0})</Option>
+                    <Option value="hawk">Hawk ({getMethodCounts().hawk || 0})</Option>
                   </Select>
                   <Select 
                     value={siteType} 

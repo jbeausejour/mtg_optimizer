@@ -3,7 +3,8 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 import json
-from json import JSONDecodeError 
+from json import JSONDecodeError
+import uuid 
 import pandas as pd
 from bs4 import BeautifulSoup
 from threading import Lock
@@ -15,8 +16,9 @@ from app.utils.helpers import (
     clean_card_name,
     extract_numbers,
     normalize_price,
+    parse_card_string
 )
-from app.utils.selenium_driver import NetworkDriver, SeleniumDriver
+from app.utils.selenium_driver import NetworkDriver
 
 logger = logging.getLogger(__name__)
 
@@ -45,126 +47,57 @@ class ErrorCollector:
         return cls()
 
 class ExternalDataSynchronizer:
-    STRATEGY_CRYSTAL = 1
-    STRATEGY_SCRAPPER = 2
-    STRATEGY_HAWK = 3
-    STRATEGY_SHOPIFY = 4
-    STRATEGY_OTHER = 5
-    strats = {
-        "crystal": STRATEGY_CRYSTAL,
-        "scrapper": STRATEGY_SCRAPPER,
-        "hawk": STRATEGY_HAWK,
-        "shopify": STRATEGY_SHOPIFY,
-        "other": STRATEGY_OTHER,
+    SCRAPPING_METHOD_CRYSTAL = 1
+    SCRAPPING_METHOD_SCRAPPER = 2
+    SCRAPPING_METHOD_HAWK = 3
+    SCRAPPING_METHOD_SHOPIFY = 4
+    SCRAPPING_METHOD_OTHER = 5
+    scrapping_method_dict = {
+        "crystal": SCRAPPING_METHOD_CRYSTAL,
+        "scrapper": SCRAPPING_METHOD_SCRAPPER,
+        "hawk": SCRAPPING_METHOD_HAWK,
+        "shopify": SCRAPPING_METHOD_SHOPIFY,
+        "other": SCRAPPING_METHOD_OTHER,
     }
 
     def __init__(self):
         self.network = NetworkDriver()
-        self.selenium_driver = None
-        self.use_selenium_fallback = True
         self.error_collector = ErrorCollector.get_instance()
         self.error_collector.reset()
-        self._selenium_attempts = 0
-        self.MAX_SELENIUM_ATTEMPTS = 3
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.cleanup_selenium()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass 
 
-    async def get_selenium_driver(self):
-        """Lazily initialize selenium driver with retry logic"""
-        if not self.selenium_driver:
-            try:
-                self.selenium_driver = SeleniumDriver.get_driver(use_headless=True)
-                logger.info("Successfully initialized Selenium driver")
-            except Exception as e:
-                logger.error(f"Failed to initialize Selenium driver: {str(e)}")
-                return None
-        return self.selenium_driver
-
-    async def cleanup_selenium(self):
-        """Cleanup selenium driver with proper error handling"""
-        if self.selenium_driver:
-            try:
-                self.selenium_driver.quit()
-            except Exception as e:
-                logger.error(f"Error cleaning up Selenium driver: {str(e)}")
-            finally:
-                self.selenium_driver = None
-                self._selenium_attempts = 0
-
-    async def search_crystalcommerce(self, site, card_names):
-        """Enhanced search with proper fallback to Selenium"""
-        search_url = site.url
-        
-        # First attempt with NetworkDriver
+    async def detect_response_type(self, response_text):
+        """Detect response type and format"""
+        if not response_text:
+            return None, None
+            
+        # Check if it's JSON (Shopify API response)
         try:
-            response_text = await self.network.fetch_url(search_url)
-            if response_text:
-                soup = BeautifulSoup(response_text, "html.parser")
-                auth_token = await self.network.get_auth_token(soup, site)
-                
-                if auth_token:
-                    cards_payload = "\r\n".join(card_names)
-                    payload = {
-                        "authenticity_token": auth_token,
-                        "query": cards_payload,
-                        "submit": "Continue",
-                    }
-                    
-                    response_text = await self.network.post_request(search_url, payload)
-                    if response_text:
-                        return BeautifulSoup(response_text, "html.parser")
-        except Exception as e:
-            logger.warning(f"NetworkDriver attempt failed for {site.name}: {str(e)}")
-
-        # Fallback to Selenium if network request fails
-        if self.use_selenium_fallback and self._selenium_attempts < self.MAX_SELENIUM_ATTEMPTS:
-            try:
-                logger.info(f"Attempting Selenium fallback for {site.name}")
-                self._selenium_attempts += 1
-                
-                driver = await self.get_selenium_driver()
-                if not driver:
-                    return None
-                    
-                # Perform GET request
-                response_text = driver.perform_get(search_url)
-                if not response_text:
-                    return None
-                    
-                soup = BeautifulSoup(response_text, "html.parser")
-                auth_token = await self.network.get_auth_token(soup, site)
-                
-                if auth_token:
-                    cards_payload = "\r\n".join(card_names)
-                    payload = {
-                        "authenticity_token": auth_token,
-                        "query": cards_payload,
-                        "submit": "Continue",
-                    }
-                    
-                    response_text = driver.perform_post(search_url, payload)
-                    if response_text:
-                        return BeautifulSoup(response_text, "html.parser")
-                        
-                # Try direct search as last resort
-                direct_url = f"{search_url}?q={'+'.join(card_names)}"
-                response_text = driver.perform_get(direct_url)
-                if response_text:
-                    return BeautifulSoup(response_text, "html.parser")
-                    
-            except Exception as e:
-                logger.error(f"Selenium fallback failed for {site.name}: {str(e)}")
-            finally:
-                if self._selenium_attempts >= self.MAX_SELENIUM_ATTEMPTS:
-                    logger.warning(f"Max Selenium attempts reached for {site.name}")
-                    self.use_selenium_fallback = False
-                    
-        self.error_collector.unreachable_stores.add(site.name)
-        return None
+            json_data = json.loads(response_text)
+            if isinstance(json_data, list) and json_data and 'searchName' in json_data[0]:
+                return 'shopify_json', json_data
+        except json.JSONDecodeError:
+            pass
+            
+        # Check if it's HTML
+        if any(marker in response_text for marker in ['<!DOCTYPE html>', '<html', '<?xml']):
+            # Check for loading indicators
+            loading_indicators = [
+                "Searching... Please wait",
+                "custom-loader",
+                "savedLoader",
+                "loading-overlay",
+                "spinner"
+            ]
+            is_loading = any(indicator in response_text for indicator in loading_indicators)
+            return 'html', {'is_loading': is_loading}
+            
+        return 'unknown', None
 
     async def scrape_multiple_sites(self, sites, card_names):
         """Enhanced scraping with proper Selenium integration"""
@@ -197,9 +130,6 @@ class ExternalDataSynchronizer:
                                 
                     except Exception as e:
                         logger.error(f"Error processing batch {batch_num}: {str(e)}")
-                    finally:
-                        # Reset Selenium attempts between batches
-                        self._selenium_attempts = 0
                         
                 logger.info(f"Completed scraping with {len(results)} total results")
                 return results
@@ -207,85 +137,20 @@ class ExternalDataSynchronizer:
             except Exception as e:
                 logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}")
                 raise
-            finally:
-                await self.cleanup_selenium()
-
-    async def detect_response_type(self, response_text):
-        """Detect response type and format"""
-        if not response_text:
-            return None, None
-            
-        # Check if it's JSON (Shopify API response)
-        try:
-            json_data = json.loads(response_text)
-            if isinstance(json_data, list) and json_data and 'searchName' in json_data[0]:
-                return 'shopify_json', json_data
-        except json.JSONDecodeError:
-            pass
-            
-        # Check if it's HTML
-        if any(marker in response_text for marker in ['<!DOCTYPE html>', '<html', '<?xml']):
-            # Check for loading indicators
-            loading_indicators = [
-                "Searching... Please wait",
-                "custom-loader",
-                "savedLoader",
-                "loading-overlay",
-                "spinner"
-            ]
-            is_loading = any(indicator in response_text for indicator in loading_indicators)
-            return 'html', {'is_loading': is_loading}
-            
-        return 'unknown', None
-
-    @staticmethod
-    def log_cards_df_stat(site, cards_df):
-        summary = cards_df.groupby(['name', 'foil']).agg({
-            'set_name': 'count',
-            'price': ['min', 'max', 'mean'],
-            'quantity': 'sum'
-        }).round(2)
-        
-        logger.info(f"Results from {site.name} - {len(cards_df)} cards found:")
-        logger.info("=" * 100)
-        logger.info(f"{'Name':<40} {'Type':<8} {'Sets':>5} {'Min $':>8} {'Max $':>8} {'Avg $':>8} {'Qty':>5}")
-        logger.info("-" * 100)
-        
-        for (name, foil), row in summary.iterrows():
-            logger.info(
-                f"{name[:38]:<40} "
-                f"{'Foil' if foil else 'Regular':<8} "
-                f"{int(row[('set name', 'count')]):>5} "
-                f"{row[('price', 'min')]:>8.2f} "
-                f"{row[('price', 'max')]:>8.2f} "
-                f"{row[('price', 'mean')]:>8.2f} "
-                f"{int(row[('quantity', 'sum')]):>5}"
-            )
-        logger.info("=" * 100 + "\n")
-
-    @staticmethod
-    def log_site_error(site_name, error_type, details=None):
-        """Standardized error logging for site processing"""
-        error_box_width = 80
-        logger.error("=" * error_box_width)
-        logger.error(f"Site Processing Error: {site_name}")
-        logger.error("-" * error_box_width)
-        logger.error(f"Error Type: {error_type}")
-        if details:
-            logger.error(f"Details: {details}")
-        logger.error("=" * error_box_width + "\n")
 
     async def process_site(self, site, card_names):
         """Process a single site and return results without saving to DB"""
-        strategy = ExternalDataSynchronizer.strats.get(site.method.lower(), 
-                                    ExternalDataSynchronizer.STRATEGY_CRYSTAL)
+        scrapping_method = ExternalDataSynchronizer.scrapping_method_dict.get(site.method.lower(), 
+                                    ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL)
         
         logger.info(f"Processing site: {site.name}")
         logger.info(f"\t o Strategy: {site.method}")
         logger.info(f"\t o URL: {site.url}")
-        
+        if site.api_url:
+            logger.info(f"\t o API URL: {site.api_url}")
+
         try:
-            if strategy == ExternalDataSynchronizer.STRATEGY_SHOPIFY:
+            if scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_SHOPIFY:
                 # Get data from Shopify API
                 json_data = await self.search_shopify(site, card_names)
                 
@@ -297,7 +162,7 @@ class ExternalDataSynchronizer:
                     
                 cards_df = self.extract_info_shopify_json(json_data, site, card_names)
                 
-            elif strategy == ExternalDataSynchronizer.STRATEGY_HAWK:
+            elif scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_HAWK:
                 
                 json_data = await self.search_hawk(site, card_names)
             
@@ -310,22 +175,22 @@ class ExternalDataSynchronizer:
                 cards_df = self.extract_info_hawk_json(json_data, site, card_names)
                 
             else:
-                soup = await self.search_crystalcommerce_simple(site, card_names)
+                soup = await self.search_crystalcommerce(site, card_names)
                 if not soup:
                     self.error_collector.unreachable_stores.add(site.name)
                     self.log_site_error(site.name, "Connection Error", 
                                     "Failed to retrieve data from site. Site may be down or blocking requests.")
                     return None
-                cards_df = self.extract_info_simple(soup, site, card_names, strategy)
-                if cards_df is None:
-                    old_strategy = strategy
-                    strategy = (
-                        ExternalDataSynchronizer.STRATEGY_SCRAPPER
-                        if strategy == ExternalDataSynchronizer.STRATEGY_CRYSTAL
-                        else ExternalDataSynchronizer.STRATEGY_CRYSTAL
+                cards_df = self.extract_info_crystal(soup, site, card_names, scrapping_method)
+                if cards_df.empty:
+                    old_strategy = scrapping_method
+                    scrapping_method = (
+                        ExternalDataSynchronizer.SCRAPPING_METHOD_SCRAPPER
+                        if scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
+                        else ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
                     )
-                    logger.info(f"Strategy {old_strategy} failed, attempting with {strategy}")
-                    cards_df = self.extract_info_simple(soup, site, card_names, strategy)
+                    logger.info(f"Strategy {old_strategy} failed, attempting with {scrapping_method}")
+                    cards_df = self.extract_info_crystal(soup, site, card_names, scrapping_method)
 
             if cards_df is None or cards_df.empty:
                 self.log_site_error(site.name, "No Data Found", 
@@ -339,10 +204,10 @@ class ExternalDataSynchronizer:
                 found_cards = cards_df['name'].nunique()
                 logger.info(f"Successfully processed {found_cards} cards out of {total_cards} for {site.name}")
                 
-                if found_cards < total_cards:
-                    missing_cards = set(card_names) - set(cards_df['name'].unique())
-                    #logger.warning(f"Missing cards for {site.name}: {', '.join(missing_cards)}")
-                    logger.warning(f"Missing cards {len(missing_cards)} for {site.name}")
+                # if found_cards < total_cards:
+                #     missing_cards = set(card_names) - set(cards_df['name'].unique())
+                #     #logger.warning(f"Missing cards for {site.name}: {', '.join(missing_cards)}")
+                #     logger.warning(f"Missing cards {len(missing_cards)} for {site.name}")
 
                 # Convert DataFrame rows to results
                 results = []
@@ -370,60 +235,45 @@ class ExternalDataSynchronizer:
             self.log_site_error(site.name, "Processing Error", str(e))
             return None
 
+    def extract_magic_set(url):
+        # Split the URL into parts
+        parts = url.split('/')
 
-    async def search_crystalcommerce_simple(self, site, card_names):
-        """
-        Simplified version of crystal commerce search that extracts data directly from form elements.
-        
-        Args:
-            site: Site object containing URL and other site info
-            card_names: List of card names to search for
-        
-        Returns:
-            BeautifulSoup object containing the parsed HTML response
-        """
-        search_url = site.url
-        
-        try:
-            # Initial network request
-            response_text = await self.network.fetch_url(search_url)
-            if not response_text:
-                return None
-                
-            soup = BeautifulSoup(response_text, "html.parser")
-            auth_token = await self.network.get_auth_token(soup, site)
-            
-            if auth_token:
-                # Submit search with all card names
-                cards_payload = "\r\n".join(card_names)
-                payload = {
-                    "authenticity_token": auth_token,
-                    "query": cards_payload,
-                    "submit": "Continue",
-                }
-                
-                response_text = await self.network.post_request(search_url, payload)
-                if response_text:
-                    return BeautifulSoup(response_text, "html.parser")
-                    
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error in simplified crystal search for {site.name}: {str(e)}")
-            return None
+        # Find the part that contains the set information
+        for part in parts:
+            if "singles-" in part:  # Look for the part with "singles-"
+                # Remove the prefix up to "singles-", suffix like "-brawl", and replace underscores with spaces
+                return (
+                    part.split("singles-")[-1]  # Extract after "singles-"
+                    .replace("-brawl", "")
+                    .replace("_", " ")
+            )
+        return None  # Return None if no matching segment is found
 
-    def extract_info_simple(soup, site, card_names):
+    def extract_info_crystal(self, soup, site, card_names, scrapping_method):
         """
-        Simplified extraction focusing on form data attributes.
-        
-        Args:
-            soup: BeautifulSoup object containing the parsed HTML
-            site: Site object containing site information
-            card_names: List of card names to search for
-        
-        Returns:
-            pandas.DataFrame: DataFrame containing the extracted card information
+        Extract card information using either form-based or scrapper scrapping_method.
         """
+        
+        excluded_categories = {
+            "playmats",
+            "booster packs",
+            "booster box",
+            "CB Consignment",
+            "mtg booster boxes",
+            "art series",
+            "fat packs and bundles",
+            "mtg booster packs",
+            "magic commander deck",
+            "world championship deck singles",
+            "The Crimson Moon's Fairy Tale",
+            "rpg accessories",
+            "scan other",
+            "intro packs and planeswalker decks",
+            "wall scrolls",
+        }
+
+
         if soup is None:
             logger.warning(f"Soup is None for site {site.name}")
             return pd.DataFrame()
@@ -431,65 +281,182 @@ class ExternalDataSynchronizer:
         cards = []
         seen_variants = set()
 
-        # Find all add-to-cart forms
-        forms = soup.find_all("form", {"class": "add-to-cart-form"})
-        
-        for form in forms:
-            try:
-                # Extract data from form attributes
-                data = form.attrs
-                
-                # Skip if required attributes are missing
-                required_attrs = ['data-name', 'data-price', 'data-category', 'data-variant']
-                if not all(attr in data for attr in required_attrs):
-                    continue
-                
-                # Clean and validate card name
-                name = clean_card_name(data['data-name'], card_names)
-                if not name or name not in card_names:
-                    continue
-                
-                # Parse variant information (quality, language, location)
-                variant_parts = data['data-variant'].split(',')
-                if len(variant_parts) >= 2:
-                    quality = CardQuality.normalize(variant_parts[0].strip())
-                    language = CardLanguage.normalize(variant_parts[1].strip())
-                else:
-                    quality = 'Near Mint'
-                    language = 'English'
-                
-                # Extract price
-                price = normalize_price(data['data-price'])
-                
-                # Create card info dictionary
-                card_info = {
-                    'name': name,
-                    'set_name': data['data-category'],
-                    'quality': quality,
-                    'language': language,
-                    'price': price,
-                    'quantity': 1,  # Default quantity if not specified
-                    'foil': False,  # Default foil status
-                    'version': 'Standard'  # Default version
-                }
-                
-                # Create variant key for deduplication
-                variant_key = (
-                    card_info['name'],
-                    card_info['set_name'],
-                    card_info['quality'],
-                    card_info['language'],
-                    card_info['foil'],
-                    card_info['version']
-                )
-                
-                if variant_key not in seen_variants:
-                    cards.append(card_info)
-                    seen_variants.add(variant_key)
+        if scrapping_method == self.SCRAPPING_METHOD_CRYSTAL:
+            # Form-based extraction focusing on add-to-cart forms
+            forms = soup.find_all("form", {"class": "add-to-cart-form"})
+            if not forms:
+                logger.warning(f"No add-to-cart forms found for site {site.name}")
+                logger.warning(f"\n\nSoup: {soup}")
+            for form in forms:
+                try:
+                    # Extract data from form attributes
+                    data = form.attrs
                     
-            except Exception as e:
-                logger.error(f"Error processing form in {site.name}: {str(e)}")
-                continue
+                    # Skip if required attributes are missing
+                    required_attrs = ['data-name', 'data-price', 'data-category', 'data-variant']
+                    if not all(attr in data for attr in required_attrs):
+                        continue
+                    
+                    category = data.get('data-category')
+                    set_name = category
+                    if any(test in category for test in excluded_categories):
+                        if category == 'Brawl':
+                            product_link = form.find_previous("a", itemprop="url")
+
+                            if product_link:
+                                product_url = product_link.get("href")
+                                set_name = self.extract_magic_set(product_url)
+                        continue
+
+                    current_card = parse_card_string(data['data-name'])
+                    if not current_card:
+                        continue
+
+                    # Clean and validate card name
+                    name = clean_card_name(current_card["Name"], card_names)
+                    if not name or (name not in card_names and name.split(" // ")[0].strip() not in card_names):
+                        continue
+
+                    test = data.get('data-variant', '').strip()
+                    if not test:
+                        continue
+
+                    # Parse variant information (quality, language, location)
+                    variant_parts = test.split(',')
+                    if len(variant_parts) >= 2:
+                        quality = CardQuality.normalize(variant_parts[0].strip())
+                        
+                        if variant_parts[1].strip() == 'SIGNED by artist':
+                            language = 'English'
+                        else:
+                            language = CardLanguage.normalize(variant_parts[1].strip())
+                    else:
+                        logger.debug(f"Invalid variant data (quality or langage) for {site.name} : {variant_parts}")
+                        continue
+                    
+                    # Parse name, version, and foil status
+                    unclean_name, version, foil = self.find_name_version_foil(data['data-name'])
+                    is_foil = self.detect_foil(product_foil=foil, product_version=version, variant_data=test)
+                    version = CardVersion.normalize(version or 'Standard')
+
+                    # Create card info dictionary
+                    card_info = {
+                        'name': name,
+                        'set_name': set_name,
+                        'quality': quality,
+                        'language': language,
+                        'price': normalize_price(data['data-price']),
+                        'quantity': 1,
+                        'foil': is_foil,
+                        'version': version
+                    }
+                    
+                    # Create variant key for deduplication
+                    variant_key = (
+                        card_info['name'],
+                        card_info['set_name'],
+                        card_info['quality'],
+                        card_info['language'],
+                        card_info['foil'],
+                        card_info['version']
+                    )
+                    
+                    if variant_key not in seen_variants:
+                        cards.append(card_info)
+                        seen_variants.add(variant_key)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing form in {site.name}: {str(e)}")
+                    continue
+
+        else:
+            # Original scrapper strategy with enhanced validation
+            content = soup.find("div", {"class": ["content", "content clearfix", "content inner clearfix"]})
+            if content is None:
+                logger.error(f"Content div not found for site {site.name}")
+                return pd.DataFrame()
+
+            products_containers = content.find_all("div", {"class": "variants"})
+            if not products_containers:
+                logger.warning(f"No variants container found for site {site.name}")
+                return pd.DataFrame()
+
+            for container in products_containers:
+                for variant in container.find_all("div", {"class": "variant-row"}):
+                    try:
+                        if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
+                            continue
+
+                        # Extract and validate quality and language
+                        quality, language = self.extract_quality_language(variant)
+                        if not quality or not language:
+                            continue
+
+                        quality = CardQuality.normalize(quality)
+                        language = CardLanguage.normalize(language)
+                        if not quality or not language:
+                            continue
+
+                        # Extract and validate quantity
+                        quantity = self.extract_quantity(variant)
+                        if quantity is None or quantity <= 0:
+                            continue
+
+                        # Extract and validate price
+                        price = self.extract_price(variant)
+                        if price is None or price <= 0:
+                            continue
+
+                        # Get and validate name
+                        name_header = variant.find_previous("h4", {"class": "name"})
+                        if not name_header:
+                            continue
+
+                        parsed_card = parse_card_string(name_header.text)
+                        if not parsed_card:
+                            continue
+
+                        clean_name = clean_card_name(parsed_card.get('Name', name_header.text), card_names)
+                        if not clean_name or (clean_name not in card_names and 
+                                            clean_name.split(" // ")[0].strip() not in card_names):
+                            continue
+
+                        # Get set name
+                        set_elem = variant.find_previous("span", {"class": "category"})
+                        if not set_elem or any(cat in set_elem.text.lower() for cat in excluded_categories):
+                            continue
+
+                        # Determine foil status and version
+                        is_foil = parsed_card.get('Foil', False)
+                        version = CardVersion.normalize(parsed_card.get('Version', 'Standard'))
+
+                        card_info = {
+                            'name': clean_name,
+                            'set_name': set_elem.text.strip(),
+                            'quality': quality,
+                            'language': language,
+                            'price': price,
+                            'quantity': quantity,
+                            'foil': is_foil,
+                            'version': version
+                        }
+
+                        # Deduplicate variants
+                        variant_key = (
+                            card_info['name'],
+                            card_info['set_name'],
+                            card_info['quality'],
+                            card_info['language'],
+                            card_info['foil'],
+                            card_info['version']
+                        )
+                        if variant_key not in seen_variants:
+                            cards.append(card_info)
+                            seen_variants.add(variant_key)
+
+                    except Exception as e:
+                        logger.error(f"Error processing variant: {str(e)}")
+                        continue
 
         if not cards:
             logger.warning(f"No valid cards found for {site.name}")
@@ -510,7 +477,7 @@ class ExternalDataSynchronizer:
                 'quantity': int
             }
             
-            # Add missing columns with default values
+            # Add missing columns with default values and convert types
             for col, dtype in standard_columns.items():
                 if col not in df.columns:
                     df[col] = dtype()
@@ -521,32 +488,119 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
             return pd.DataFrame()
-
-    @staticmethod
-    def parse_shopify_variant_title(title):
-        """Parse title in format 'Card Name [Set Name] Quality [Foil]'"""
+        
+    def extract_info_hawk_json(self, json_data, site, card_names):
+        """Extract card information from Hawk API response with deduplication"""
+        if not json_data or 'Results' not in json_data:
+            logger.warning(f"No valid results in Hawk response for {site.name}")
+            return pd.DataFrame()
+            
+        cards = []
+        processed_cards = set()  # Track unique card variants
+        
         try:
-            # Extract set name (content between square brackets)
-            set_match = re.search(r'\[(.*?)\]', title)
-            if not set_match:
-                return None
+            # Process each result
+            for result in json_data['Results']:
+                if not result.get('Document'):
+                    continue
+                    
+                doc = result['Document']
                 
-            set_name = set_match.group(1).strip()
-            
-            # Remove the set name part to process the rest
-            remaining = title.split(']')[-1].strip()
-            
-            # Determine if foil
-            is_foil = 'Foil' in remaining
-            
-            # Extract quality (everything before "Foil" or the end)
-            quality = remaining.replace('Foil', '').strip()
-            
-            return set_name, quality, is_foil
-        except Exception as e:
-            logger.error(f"Error parsing variant title '{title}': {str(e)}")
-            return None
+                # Get basic card info
+                card_name = doc.get('card name', [''])[0]
+                if not card_name or card_name not in card_names:
+                    continue
+                    
+                # Process child attributes (variants)
+                child_attrs = doc.get('hawk_child_attributes_hits', [])
+                for child_attr_group in child_attrs:
+                    for item in child_attr_group.get('Items', []):
+                        try:
+                            # Extract condition and finish
+                            option_condition = item.get('option_condition', ['NM'])[0]
+                            option_finish = item.get('option_finish', ['Non-Foil'])[0]
+                            
+                            # Extract price and inventory
+                            price = float(item.get('child_price_sort_bc', ['0.0'])[0])
+                            inventory = int(item.get('child_inventory_level', ['0'])[0])
+                            
+                            if inventory <= 0:
+                                continue
 
+                            # Create unique identifier for deduplication
+                            variant_key = (
+                                card_name,
+                                doc.get('set', [''])[0],
+                                option_condition,
+                                'Foil' in option_finish,
+                                price
+                            )
+                            
+                            # Skip if we've already processed this variant
+                            if variant_key in processed_cards:
+                                continue
+                                
+                            processed_cards.add(variant_key)
+                                    
+                            # Create card info dictionary
+                            card_info = {
+                                'name': card_name,
+                                'set_name': doc.get('set', [''])[0],
+                                'quality': option_condition,
+                                'language': 'English',  # Default for F2F
+                                'quantity': inventory,
+                                'price': price,
+                                'version': 'Standard',
+                                'foil': 'Foil' in option_finish,
+                                'set_code': doc.get('set_code', [''])[0]
+                            }
+                            
+                            cards.append(card_info)
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing variant for {card_name} in {site.name}: {str(e)}")
+                            continue
+                                
+            if not cards:
+                logger.warning(f"No valid cards found in Hawk response for {site.name}")
+                return pd.DataFrame()
+                    
+            # Convert to DataFrame
+            df = pd.DataFrame(cards)
+            
+            # Ensure standard column names and data types
+            standard_columns = {
+                'name': str,
+                'set_name': str,
+                'price': float,
+                'version': str,
+                'foil': bool,
+                'quality': str,
+                'language': str,
+                'quantity': int,
+                'set_code': str
+            }
+            
+            # Add missing columns with default values
+            for col, dtype in standard_columns.items():
+                if col not in df.columns:
+                    df[col] = dtype()
+                df[col] = df[col].astype(dtype)
+            
+            # Normalize quality values
+            df['quality'] = df['quality'].apply(CardQuality.normalize)
+            
+            # Remove any remaining duplicates
+            df = df.drop_duplicates(subset=['name', 'set_name', 'quality', 'foil', 'price'])
+            
+            logger.info(f"Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
+            
+            return df
+                
+        except Exception as e:
+            logger.error(f"Error processing Hawk JSON for {site.name}: {str(e)}")
+            return pd.DataFrame()
+ 
     def extract_info_shopify_json(self, json_data, site, card_names):
         """Extract card information from Shopify API response"""
         cards = []
@@ -641,7 +695,179 @@ class ExternalDataSynchronizer:
             logger.error(f"Error processing Shopify JSON for {site.name}: {str(e)}")
             return pd.DataFrame()
 
-
+    async def search_crystalcommerce(self, site, card_names):
+        """
+        Simplified crystal commerce search with better error handling.
+        """
+        search_url = site.url.rstrip('/')
+        
+        try:
+            # Make initial request to get auth token
+            initial_response = await self.network.fetch_url(search_url)
+            if not initial_response:
+                logger.error(f"Initial request failed for {site.name}")
+                return None
+                
+            # Parse response and get auth token
+            soup = BeautifulSoup(initial_response, "html.parser")
+            auth_token = await self.network.get_auth_token(soup, site)
+            
+            if not auth_token:
+                logger.error(f"Failed to get auth token for {site.name}")
+                return None
+                
+            # Prepare search payload
+            clean_names = [clean_card_name(name, card_names) for name in card_names if name]
+            if not clean_names:
+                logger.error(f"No valid card names to search for {site.name}")
+                return None
+                
+            payload = {
+                "authenticity_token": auth_token,
+                "query": "\r\n".join(clean_names),
+                "submit": "Continue"
+            }
+            
+            # Set headers for form submission
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36",
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                "Referer": site.url
+            }
+            
+            # Submit search
+            response = await self.network.post_request(search_url, payload, headers=headers)
+            if not response:
+                logger.error(f"Search request failed for {site.name}")
+                return None
+                
+            # Check response type
+            response_type, response_data = await self.detect_response_type(response)
+            
+            if response_type == 'html':
+                if response_data and response_data.get('is_loading', False):
+                    logger.warning(f"Response indicates still loading for {site.name}")
+                    return None
+                return BeautifulSoup(response, "html.parser")
+                
+            logger.error(f"Unexpected response type '{response_type}' from {site.name}")
+            return None
+            
+        except Exception as e:
+            logger.error(
+                f"Error in crystal commerce search for {site.name}: {str(e)}",
+                exc_info=True
+            )
+            return None
+       
+    async def search_hawk(self, site, card_names):
+        """Submit individual card searches to Hawk API with proper name formatting"""
+        try:
+            results = []
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/plain, */*',
+                'Origin': 'https://www.facetofacegames.com',
+                'Referer': 'https://www.facetofacegames.com/deck-results/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Connection': 'keep-alive'
+            }
+            
+            api_url = "https://essearchapi-na.hawksearch.com/api/v2/search"
+            
+            for card_name in card_names:
+                # Format query based on card name type
+                if "//" in card_name:
+                    # Handle double-faced cards
+                    front, back = map(str.strip, card_name.split("//"))
+                    query = f'card\\ name.text: "{front}" AND card\\ name\\ 2.text: "{back}"'
+                else:
+                    # Handle regular cards including those with quotes or special characters
+                    # Keep any existing quotes in the name
+                    escaped_name = card_name.replace('"', '\\"')  # Escape any existing quotes
+                    if '"' in card_name:
+                        # Card already has quotes, use as is
+                        query = f'card\\ name.text: "{escaped_name}"'
+                    else:
+                        # Regular card name
+                        query = f'card\\ name.text: "{escaped_name}"'
+                
+                payload = {
+                    "ClientData": {
+                        "VisitorId": str(uuid.uuid4())
+                    },
+                    "ClientGuid": "30c874915d164f71bf6f84f594bf623f",
+                    "FacetSelections": {
+                        "tab": ["Magic"],
+                        "child_inventory_level": ["1"]
+                    },
+                    "query": query,
+                    "SortBy": "score"
+                }
+                
+                json_payload = json.dumps(payload)
+                
+                # Debug logging
+                logger.debug(f"Hawk API Request for {card_name}:")
+                logger.debug(f"URL: {api_url}")
+                logger.debug(f"Payload: {json_payload}")
+                
+                # Add delay between requests
+                if results:  # Skip delay for first request
+                    await asyncio.sleep(1.5)
+                
+                try:
+                    async with self.network.session.post(
+                        api_url,
+                        data=json_payload,
+                        headers=headers,
+                        timeout=30
+                    ) as response:
+                        status = response.status
+                        logger.debug(f"Response Status for {card_name}: {status}")
+                        
+                        if status == 400:
+                            error_text = await response.text()
+                            logger.debug(f"API Error Response for {card_name}:")
+                            logger.debug(f"Status: {status}")
+                            logger.debug(f"Error Details: {error_text[:1000]}")
+                            continue
+                            
+                        response.raise_for_status()
+                        response_text = await response.text()
+                        
+                        try:
+                            card_results = json.loads(response_text)
+                            if card_results and 'Results' in card_results:
+                                results.extend(card_results['Results'])
+                                logger.debug(f"Successfully processed {card_name} with {len(card_results['Results'])} results")
+                            else:
+                                logger.warning(f"No results for {card_name}, Response: {response_text[:200]}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Invalid JSON response for {card_name}: {str(e)}")
+                            logger.error(f"Raw response: {response_text[:200]}")
+                            continue
+                            
+                except Exception as e:
+                    logger.error(f"Request failed for {card_name}: {str(e)}")
+                    continue
+                    
+            if results:
+                logger.debug(f"Successfully processed {card_name} with {len(card_results['Results'])} results")          
+                return {"Results": results}
+                
+            logger.error(f"No valid results from Hawk API for {site.name}")
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error in Hawk search: {str(e)}")
+            return None
+    
     async def search_shopify(self, site, card_names):
         """Get card data from Shopify via Binder API"""
         try:
@@ -649,173 +875,156 @@ class ExternalDataSynchronizer:
             payload = [{"card": name, "quantity": 1} for name in card_names]
             
             # Construct API URL
-            store_url = site.url.replace('https://', '').replace('http://', '')
-            if store_url.endswith('/'):
-                store_url = store_url[:-1]
+            api_url = "https://api.binderpos.com/external/shopify/decklist"
+            if hasattr(site, 'api_url') and site.api_url:
+                api_url += f"?storeUrl={site.api_url}&type=mtg"
             
-            initial_url = site.url
-            response_text = await self.network.fetch_url(initial_url)
-            #api_url = f"https://api.binderpos.com/external/shopify/decklist?storeUrl={store_url}&type=mtg"
+            # Set headers
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
             
             # Make the request
-            # Submit the decklist
-            submit_url = f"{site.url}"
-            response = await self.network.post_request(submit_url, payload)
+            json_payload = json.dumps(payload)  # Convert list to JSON string
+            response = await self.network.post_request(api_url, json_payload, headers=headers)
             
             if not response:
-                logger.error(f"Failed to submit decklist to {site.name}")
+                logger.error(f"Failed to get response from Binder API for {site.name}")
                 return None
                 
+            logger.info(f"response from Binder API for {site.name}  : {len(response)}")
             try:
                 return json.loads(response)
-            except json.JSONDecodeError:
-                logger.error(f"Invalid JSON response from {site.name}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON response from {site.name}: {str(e)}")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error searching Hawk site {site.name}: {str(e)}")
+            logger.error(f"Error searching Shopify site {site.name}: {str(e)}")
+            return None
+    
+    @staticmethod
+    def parse_shopify_variant_title(title):
+        """Parse title in format 'Card Name [Set Name] Quality [Foil]'"""
+        try:
+            # Extract set name (content between square brackets)
+            set_match = re.search(r'\[(.*?)\]', title)
+            if not set_match:
+                return None
+                
+            set_name = set_match.group(1).strip()
+            
+            # Remove the set name part to process the rest
+            remaining = title.split(']')[-1].strip()
+            
+            # Determine if foil
+            is_foil = 'Foil' in remaining
+            
+            # Extract quality (everything before "Foil" or the end)
+            quality = remaining.replace('Foil', '').strip()
+            
+            return set_name, quality, is_foil
+        except Exception as e:
+            logger.error(f"Error parsing variant title '{title}': {str(e)}")
             return None
 
-    async def extract_info_hawk_json(self, response_json, site, card_names):
-        """Extract card information directly from Hawk JSON response"""
-        if not response_json:
-            logger.warning(f"No JSON response from {site.name}")
-            return pd.DataFrame()
-            
-        cards = []
-        try:
-            # Process each search result
-            for search_result in response_json:
-                searched_card = search_result.get('searchName')
-                if not searched_card or searched_card not in card_names:
-                    continue
-                    
-                products = search_result.get('products', [])
-                for product in products:
-                    # Basic product info
-                    name = product.get('name')
-                    set_name = product.get('setName')
-                    variants = product.get('variants', [])
-                    
-                    for variant in variants:
-                        # Skip if no quantity available
-                        quantity = variant.get('quantity', 0)
-                        if quantity <= 0:
-                            continue
-                            
-                        # Get variant details
-                        price = float(variant.get('price', 0.0))
-                        
-                        # Parse condition and finish from title
-                        title = variant.get('title', '').lower()
-                        
-                        # Determine if foil
-                        is_foil = 'foil' in title
-                        
-                        # Extract condition
-                        quality = 'Near Mint'  # Default
-                        if 'near mint' in title or 'nm' in title:
-                            quality = 'Near Mint'
-                        elif 'lightly played' in title or 'lp' in title:
-                            quality = 'Lightly Played'
-                        elif 'moderately played' in title or 'mp' in title:
-                            quality = 'Moderately Played'
-                        elif 'heavily played' in title or 'hp' in title:
-                            quality = 'Heavily Played'
-                        elif 'damaged' in title or 'dmg' in title:
-                            quality = 'Damaged'
-                            
-                        card_info = {
-                            'name': name,
-                            'set_name': set_name,
-                            'foil': is_foil,
-                            'quality': quality,
-                            'language': 'English',  # Default for most stores
-                            'quantity': quantity,
-                            'price': price,
-                            'version': 'Standard',
-                            'set_code': product.get('setCode', ''),
-                            'collector_number': product.get('collectorNumber', '')
-                        }
-                        
-                        # Add to cards list if valid
-                        if all(key in card_info for key in ['name', 'set_name', 'quality', 'quantity', 'price']):
-                            cards.append(card_info)
-                        
-            if not cards:
-                logger.warning(f"No valid cards found in Hawk response for {site.name}")
-                return pd.DataFrame()
-                
-            # Convert to DataFrame
-            df = pd.DataFrame(cards)
-            
-            # Ensure standard column names and data types
-            standard_columns = {
-                'name': str,
-                'set_name': str,
-                'price': float,
-                'version': str,
-                'foil': bool,
-                'quality': str,
-                'language': str,
-                'quantity': int
-            }
-            
-            # Add missing columns with default values
-            for col, dtype in standard_columns.items():
-                if col not in df.columns:
-                    df[col] = dtype()
-                df[col] = df[col].astype(dtype)
-            
-            # Normalize quality and language values
-            df['quality'] = df['quality'].apply(CardQuality.normalize)
-            df['language'] = df['language'].apply(CardLanguage.normalize)
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error processing Hawk JSON for {site.name}: {str(e)}")
-            return pd.DataFrame()
+    # @staticmethod
+    # def strategy_crystal(card, variant):
+    #     if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
+    #         return None
+
+    #     form_element = variant.find("form", {"class": "add-to-cart-form"})
+    #     if not form_element:
+    #         return None
+
+    #     attributes = form_element.attrs
+    #     if "data-name" not in attributes:
+    #         return None
+
+    #     unclean_name, product_version, product_foil = ExternalDataSynchronizer.find_name_version_foil(attributes["data-name"])
+        
+    #     # Use unified foil detection
+    #     is_foil = ExternalDataSynchronizer.detect_foil(
+    #         product_foil=product_foil,
+    #         product_version=product_version,
+    #         variant_data=attributes.get("data-variant", "")
+
+    #     )
+
+    #     quality_language = ExternalDataSynchronizer.normalize_variant_description(attributes["data-variant"])
+    #     quality, language = quality_language[:2]
+    #     quality = CardQuality.normalize(quality)
+    #     language = CardLanguage.normalize(language)
+
+    #     select_tag = variant.find("select", {"class": "qty"}) or variant.find("input", {"class": "qty"})
+    #     qty_available = select_tag["max"] if select_tag and "max" in select_tag.attrs else "0"
+
+    #     if isinstance(card, dict):
+    #         card_data = card.copy()
+    #         card_data.update({
+    #             'quality': quality,
+    #             'language': language,
+    #             'quantity': int(qty_available),
+    #             'set_name': attributes["data-category"],
+    #             'price': normalize_price(attributes["data-price"]),
+    #             'foil': is_foil
+    #         })
+    #         return card_data
+    #     else:
+    #         card.quality = quality
+    #         card.language = language
+    #         card.quantity = int(qty_available)
+    #         card.set_name = attributes["data-category"]
+    #         card.price = normalize_price(attributes["data-price"])
+    #         card.foil = is_foil
+    #         return card
     
-    async def search_hawk(self, site, card_names):
-        """Submit decklist and get results from Hawk site"""
-        try:
-            # Format the decklist as expected by the site
-            decklist = "\n".join(card_names)
-            
-            # Prepare the form data
-            payload = {
-                'decklist': decklist,
-                'resultsSort': 'score',
-                'inStock': 'Y',
-                'inclBasicLands': 'N'  # Usually don't need basic lands
-            }
-            
-            # First make a GET request to get any necessary tokens/cookies
-            initial_url = site.url
-            response_text = await self.network.fetch_url(initial_url)
-            
-            if not response_text:
-                logger.error(f"Failed to get initial page for {site.name}")
-                return None
+    # @staticmethod
+    # def strategy_scrapper(card, variant):
+    #     """Modified to add error context"""
+    #     if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
+    #         return None
+
+    #     try:
+    #         quality, language = ExternalDataSynchronizer.extract_quality_language(
+    #             card, variant
+    #         )
+    #         if quality is None or language is None:
+    #             return None
                 
-            # Submit the decklist
-            submit_url = f"{site.url}/deck-results/"
-            response = await self.network.post_request(submit_url, payload)
-            
-            if not response:
-                logger.error(f"Failed to submit decklist to {site.name}")
-                return None
-                
-            try:
-                return json.loads(response)
-            except json.JSONDecodeError:
-                logger.error(f"Invalid JSON response from {site.name}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error searching Hawk site {site.name}: {str(e)}")
-            return None
+    #         quality = CardQuality.normalize(quality)  # Normalize quality here
+    #         language = CardLanguage.normalize(language)  # Add this line
+
+    #         quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
+    #         if quantity is None:
+    #             return None
+
+    #         price = ExternalDataSynchronizer.extract_price(card, variant)
+
+    #         # Create new card dict if input is dict, otherwise modify object
+    #         if isinstance(card, dict):
+    #             card_data = card.copy()
+    #             card_data.update({
+    #                 'quality': quality,      # Changed from 'Quality'
+    #                 'language': language,    # Changed from 'Language'
+    #                 'quantity': quantity,    # Changed from 'Quantity'
+    #                 'price': price          # Changed from 'Price'
+    #             })
+    #             logger.debug(f"Updated card data: {card_data}")
+    #             return card_data
+    #         else:
+    #             # Handle object-style card
+    #             card.quality = quality
+    #             card.language = language
+    #             card.quantity = quantity
+    #             card.price = price
+    #             return card
+
+    #     except Exception as e:
+    #         card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
+    #         logger.exception(f"Error in strategy_scrapper for {card_name}: {str(e)}")
+    #         return None
 
     @staticmethod
     def detect_foil(product_foil=None, product_version=None, variant_data=None):
@@ -836,103 +1045,61 @@ class ExternalDataSynchronizer:
         ]
         
         return any('foil' in s for s in check_strings)
-
-    @staticmethod
-    def strategy_crystal(card, variant):
-        if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
-            return None
-
-        form_element = variant.find("form", {"class": "add-to-cart-form"})
-        if not form_element:
-            return None
-
-        attributes = form_element.attrs
-        if "data-name" not in attributes:
-            return None
-
-        unclean_name, product_version, product_foil = ExternalDataSynchronizer.find_name_version_foil(attributes["data-name"])
-        
-        # Use unified foil detection
-        is_foil = ExternalDataSynchronizer.detect_foil(
-            product_foil=product_foil,
-            product_version=product_version,
-            variant_data=attributes.get("data-variant", "")
-        )
-
-        quality_language = ExternalDataSynchronizer.normalize_variant_description(attributes["data-variant"])
-        quality, language = quality_language[:2]
-        quality = CardQuality.normalize(quality)
-        language = CardLanguage.normalize(language)
-
-        select_tag = variant.find("select", {"class": "qty"}) or variant.find("input", {"class": "qty"})
-        qty_available = select_tag["max"] if select_tag and "max" in select_tag.attrs else "0"
-
-        if isinstance(card, dict):
-            card_data = card.copy()
-            card_data.update({
-                'quality': quality,
-                'language': language,
-                'quantity': int(qty_available),
-                'set_name': attributes["data-category"],
-                'price': normalize_price(attributes["data-price"]),
-                'foil': is_foil
-            })
-            return card_data
-        else:
-            card.quality = quality
-            card.language = language
-            card.quantity = int(qty_available)
-            card.set_name = attributes["data-category"]
-            card.price = normalize_price(attributes["data-price"])
-            card.foil = is_foil
-            return card
     
     @staticmethod
-    def strategy_scrapper(card, variant):
-        """Modified to add error context"""
-        if "no-stock" in variant.get("class", []) or "0 In Stock" in variant:
-            return None
+    def extract_price(variant):
+        """Modified to handle both dict and object card data"""
+        price_elem = variant.find("span", {"class": "regular price"})
+        if price_elem is not None:
+            price_text = price_elem.text
+            return normalize_price(price_text)
+        else:
+            return 0.0
 
-        try:
-            quality, language = ExternalDataSynchronizer.extract_quality_language(
-                card, variant
-            )
-            if quality is None or language is None:
-                return None
-                
-            quality = CardQuality.normalize(quality)  # Normalize quality here
-            language = CardLanguage.normalize(language)  # Add this line
+    @staticmethod
+    def extract_quality_language(variant):
+        """Extract and normalize quality and language from variant"""
 
-            quantity = ExternalDataSynchronizer.extract_quantity(card, variant)
-            if quantity is None:
-                return None
-
-            price = ExternalDataSynchronizer.extract_price(card, variant)
-
-            # Create new card dict if input is dict, otherwise modify object
-            if isinstance(card, dict):
-                card_data = card.copy()
-                card_data.update({
-                    'quality': quality,      # Changed from 'Quality'
-                    'language': language,    # Changed from 'Language'
-                    'quantity': quantity,    # Changed from 'Quantity'
-                    'price': price          # Changed from 'Price'
-                })
-                logger.debug(f"Updated card data: {card_data}")
-                return card_data
-            else:
-                # Handle object-style card
-                card.quality = quality
-                card.language = language
-                card.quantity = quantity
-                card.price = price
-                return card
-
-        except Exception as e:
-            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')  
-            logger.exception(f"Error in strategy_scrapper for {card_name}: {str(e)}")
-            return None
+        variant_description = variant.find(
+            "span", {"class": "variant-short-info variant-description"}
+        ) or variant.find("span", {"class": "variant-short-info"})
         
+        if variant_description:
+            quality_language = ExternalDataSynchronizer.normalize_variant_description(
+                variant_description.text
+            )
+            logger.debug(f"Raw quality_language parts: {quality_language}")
+            
+            if len(quality_language) >= 2:
+                raw_quality = quality_language[0]
+                raw_language = quality_language[1]
+                logger.debug(f"Before normalization - Quality: {raw_quality}, Language: {raw_language}")
+                
+                # Normalize both values
+                quality = CardQuality.normalize(raw_quality)
+                language = CardLanguage.normalize(raw_language)
+                
+                logger.debug(f"After normalization - Quality: {quality}, Language: {language}")
+                return quality, language
+            else:
+                logger.warning(f"Incomplete variant description: {variant_description.text}")
+                logger.debug("Using default values: 'NM', 'English'")
+                return 'NM', 'English'
+        else:
+            return None, None
+
+    @staticmethod
+    def extract_quantity(variant):
+        """Modified to handle both dict and object card data"""
+        variant_qty = variant.find(
+            "span", {"class": "variant-short-info variant-qty"}
+        ) or variant.find("span", {"class": "variant-short-info"})
+        if variant_qty:
+            variant_qty = variant_qty.text.strip()
+            return extract_numbers(variant_qty)
+        else:
+            return None
+
     @staticmethod
     def find_name_version_foil(place_holder):
         """Improved version/foil detection"""
@@ -956,75 +1123,48 @@ class ExternalDataSynchronizer:
         return product_name, product_version, product_foil
 
     @staticmethod
+    def log_cards_df_stat(site, cards_df):
+        summary = cards_df.groupby(['name', 'foil']).agg({
+            'set_name': 'count',
+            'price': ['min', 'max', 'mean'],
+            'quantity': 'sum'
+        }).round(2)
+        
+        logger.info(f"Results from {site.name} - {len(cards_df)} cards found:")
+        logger.info("=" * 100)
+        logger.info(f"{'Name':<40} {'Type':<8} {'Sets':>5} {'Min $':>8} {'Max $':>8} {'Avg $':>8} {'Qty':>5}")
+        logger.info("-" * 100)
+        
+        for (name, foil), row in summary.iterrows():
+            logger.info(
+                f"{name[:38]:<40} "
+                f"{'Foil' if foil else 'Regular':<8} "
+                f"{int(row[('set name', 'count')]):>5} "
+                f"{row[('price', 'min')]:>8.2f} "
+                f"{row[('price', 'max')]:>8.2f} "
+                f"{row[('price', 'mean')]:>8.2f} "
+                f"{int(row[('quantity', 'sum')]):>5}"
+            )
+        logger.info("=" * 100 + "\n")
+    
+    @staticmethod
+    def log_site_error(site_name, error_type, details=None):
+        """Standardized error logging for site processing"""
+        error_box_width = 80
+        logger.error("=" * error_box_width)
+        logger.error(f"Site Processing Error: {site_name}")
+        logger.error("-" * error_box_width)
+        logger.error(f"Error Type: {error_type}")
+        if details:
+            logger.error(f"Details: {details}")
+        logger.error("=" * error_box_width + "\n")
+
+    @staticmethod
     def normalize_variant_description(variant_description):
         cleaned_description = variant_description.split(":")[-1].strip()
         variant_parts = cleaned_description.split(",")
         return [part.strip() for part in variant_parts]
 
-    @staticmethod
-    def extract_quality_language(card, variant):
-        """Extract and normalize quality and language from variant"""
-        card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')
-        logger.debug(f"=== Extracting quality/language for card: {card_name} ===")
-        
-        variant_description = variant.find(
-            "span", {"class": "variant-short-info variant-description"}
-        ) or variant.find("span", {"class": "variant-short-info"})
-        
-        if variant_description:
-            quality_language = ExternalDataSynchronizer.normalize_variant_description(
-                variant_description.text
-            )
-            logger.debug(f"Raw quality_language parts: {quality_language}")
-            
-            if len(quality_language) >= 2:
-                raw_quality, raw_language = quality_language[:2]
-                logger.debug(f"Before normalization - Quality: {raw_quality}, Language: {raw_language}")
-                
-                # Normalize both values
-                quality = CardQuality.normalize(raw_quality)
-                language = CardLanguage.normalize(raw_language)
-                
-                logger.debug(f"After normalization - Quality: {quality}, Language: {language}")
-                return quality, language
-            else:
-                logger.warning(f"Incomplete variant description: {variant_description.text}")
-                logger.debug("Using default values: 'NM', 'English'")
-                return 'NM', 'English'
-        else:
-            logger.error(f"No variant description found for card: {card_name}")
-            return None, None
-
-    @staticmethod
-    def extract_quantity(card, variant):
-        """Modified to handle both dict and object card data"""
-        variant_qty = variant.find(
-            "span", {"class": "variant-short-info variant-qty"}
-        ) or variant.find("span", {"class": "variant-short-info"})
-        if variant_qty:
-            variant_qty = variant_qty.text.strip()
-            return extract_numbers(variant_qty)
-        else:
-            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '') 
-            logger.error(
-                f"Error in extract_quantity for {card_name}: variant-qty not found"
-            )
-            return None
-
-    @staticmethod
-    def extract_price(card, variant):
-        """Modified to handle both dict and object card data"""
-        price_elem = variant.find("span", {"class": "regular price"})
-        if price_elem is not None:
-            price_text = price_elem.text
-            return normalize_price(price_text)
-        else:
-            card_name = card.get('name', '') if isinstance(card, dict) else getattr(card, 'name', '')
-            logger.error(
-                f"Error in extract_price for {card_name}: Price element not found"
-            )
-            return 0.0
-        
 #old
     # @staticmethod
     # def convert_foil_to_bool(foil_value):
