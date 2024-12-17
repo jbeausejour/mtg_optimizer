@@ -344,18 +344,17 @@ def get_optimization_results():
     results = OptimizationService.get_optimization_results(limit)
     
     response = []
-    for scan, opt_result in results:
-        if opt_result:  # Only include results that have optimization data
-            response.append({
-                'id': scan.id,
-                'created_at': opt_result.created_at.isoformat(),
-                'solutions': opt_result.solutions,
-                'status': opt_result.status,
-                'message': opt_result.message,
-                'sites_scraped': opt_result.sites_scraped,
-                'cards_scraped': opt_result.cards_scraped,
-                'errors': opt_result.errors
-            })
+    for opt_result in results:
+        response.append({
+            'id': opt_result.scan_id,
+            'created_at': opt_result.created_at.isoformat(),
+            'solutions': opt_result.solutions,
+            'status': opt_result.status,
+            'message': opt_result.message,
+            'sites_scraped': opt_result.sites_scraped,
+            'cards_scraped': opt_result.cards_scraped,
+            'errors': opt_result.errors
+        })
     
     return jsonify(response)
 

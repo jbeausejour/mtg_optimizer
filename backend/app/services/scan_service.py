@@ -9,6 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ScanService:
+    
     @staticmethod
     @contextmanager
     def transaction_context():
@@ -51,6 +52,28 @@ class ScanService:
     def get_scan_by_id(scan_id):
         """Get a scan by ID, ensuring it's attached to the current session"""
         return db.session.get(Scan, scan_id)
+    
+    @staticmethod
+    def get_scan_by_id_and_sites(scan_id, site_ids):
+        """Get a scan by ID, ensuring it's attached to the current session"""
+        results = db.session.query(ScanResult).filter(
+                ScanResult.scan_id == scan_id).filter(
+                ScanResult.site_id.in_(site_ids)).all()
+        return results
+
+    @staticmethod
+    def get_latest_filtered_scan_results(card_name: str):
+        """Get latest scan result for a specific card name"""
+        try:
+            result = ScanResult.query.filter_by(
+                name=card_name
+            ).order_by(
+                ScanResult.updated_at.desc()
+            ).first()
+            return result
+        except Exception as e:
+            logger.error(f"Error getting latest filtered scan results for {card_name}: {str(e)}")
+            return None
 
     @staticmethod
     def save_scan_result(scan_id, result):
@@ -67,6 +90,7 @@ class ScanService:
                 site_id=result["site_id"],
                 price=result["price"],
                 set_name=result["set_name"],
+                set_code=result["set_code"],
                 version=result.get("version", "Standard"),
                 foil=result.get("foil", False),
                 quality=result.get("quality"),

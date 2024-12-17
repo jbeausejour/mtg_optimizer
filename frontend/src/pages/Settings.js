@@ -89,7 +89,7 @@ const Settings = () => {
         <Form.Item name="defaultOptimizationStrategy" label="Default Optimization Strategy">
           <Select>
             <Option value="milp">MILP</Option>
-            <Option value="nsga_ii">NSGA-II</Option>
+            <Option value="nsga-ii">NSGA-II</Option>
             <Option value="hybrid">Hybrid</Option>
           </Select>
         </Form.Item>

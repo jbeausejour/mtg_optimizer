@@ -1,5 +1,6 @@
 from threading import Lock
 from datetime import datetime, timedelta
+import re  # Add this import
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.extensions import db
 from app.models.card import UserBuylistCard
@@ -93,6 +94,23 @@ class CardService:
 
         name_lower = name.lower().strip()
         
+        # Enhanced patterns for numbered editions and catalog numbers
+        patterns_to_clean = [
+            (r'#\d+\s*-\s*', ''),           # Remove "#159 - " style prefixes
+            (r'\s*M\d+\s*$', ''),           # Remove "M58" style suffixes
+            (r'\(\d+\)\s*', ''),            # Remove "(16) " style prefixes
+            (r'\s+', ' '),                   # Normalize multiple spaces
+        ]
+
+        # Apply cleanup patterns
+        cleaned_name = name_lower
+        for pattern, replacement in patterns_to_clean:
+            cleaned_name = re.sub(pattern, replacement, cleaned_name)
+        cleaned_name = cleaned_name.strip()
+        
+        # Add both original and cleaned versions to results
+        results = [name_lower, cleaned_name]
+
         # Extra normalization patterns for numbered editions
         edition_patterns = {
             r'(\d+)(th|rd|nd|st) edition': lambda m: f'{m.group(1)}ed',
@@ -118,6 +136,11 @@ class CardService:
             'pre-release': ['pr', 'prerelease'],
             'kaldheim': ['khm'],
             'universe beyond': ['ub'],
+            'dungeons & dragons': ['d&d', 'dnd', 'forgotten realms', 'adventures in the forgotten realms', 'afr'],
+            'd&d': ['dnd', 'dungeons & dragons', 'forgotten realms', 'adventures in the forgotten realms', 'afr'],
+            'forgotten realms': ['d&d', 'dnd', 'dungeons & dragons', 'adventures in the forgotten realms', 'afr'],
+            'baldurs gate': ['clb', 'baldur\'s gate', 'baldurs', 'battle for baldurs gate'],
+            'commander legends': ['clb', 'battle for baldurs gate']
         }
 
         # Additional prefixes to remove
@@ -139,7 +162,6 @@ class CardService:
         results = [name_lower]
 
         # Apply edition pattern replacements
-        import re
         normalized = name_lower
         for pattern, replacement in edition_patterns.items():
             if callable(replacement):
@@ -263,6 +285,72 @@ class CardService:
         logger.warning(f"No match found for set: {set_name}")
         return "unknown"  # Default fallback when no match found
 
+    @classmethod
+    def get_closest_set_name(cls, unclean_set_name):
+        """Get the official set name from an unclean set name input.
+        
+        Args:
+            unclean_set_name (str): The potentially messy set name to clean
+            
+        Returns:
+            str: The official set name if found, or the original name if no match
+        """
+        if not unclean_set_name:
+            return None
+
+        sets_data = cls.get_sets_data()
+        if not sets_data:
+            return unclean_set_name
+
+        # Get normalized versions of the set name
+        normalized_names = cls._normalize_set_name(unclean_set_name)
+        
+        # Try exact matches first
+        for norm_name in normalized_names:
+            # Check against cached set names
+            for set_info in sets_data.values():
+                if norm_name == set_info["name"].lower():
+                    return set_info["name"]  # Return the official name
+
+        # If no exact match, try fuzzy matching
+        try:
+            best_match = process.extractOne(
+                unclean_set_name.lower(),
+                [s["name"].lower() for s in sets_data.values()],
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=75
+            )
+            
+            if best_match:
+                matched_name = best_match[0]
+                # Find and return the official name (with proper capitalization)
+                for set_info in sets_data.values():
+                    if set_info["name"].lower() == matched_name:
+                        return set_info["name"]
+                        
+        except Exception as e:
+            logger.error(f"Error during fuzzy matching of set name: {str(e)}")
+
+        return unclean_set_name  # Return original if no match found
+
+    @classmethod
+    def get_clean_set_code(cls, unclean_set_name):
+        """Get the official set code from an unclean set name input.
+        
+        Args:
+            unclean_set_name (str): The potentially messy set name to clean
+            
+        Returns:
+            str: The official set code if found, or 'unknown' if no match
+        """
+        # First get the proper set name
+        clean_set_name = cls.get_closest_set_name(unclean_set_name)
+        if not clean_set_name:
+            return 'unknown'
+
+        # Then get the set code using the existing method
+        return cls.get_set_code(clean_set_name)
+
     @contextmanager
     def transaction_context():
         """Context manager for database transactions"""
@@ -306,7 +394,7 @@ class CardService:
                 # Get set code if set_name is provided
                 set_code = None
                 if set_name:
-                    set_code = CardService.get_set_code(set_name)
+                    set_code = CardService.get_clean_set_code(set_name)
                     logger.info(f"Mapped set name '{set_name}' to code '{set_code}'")
 
                 if card_id:

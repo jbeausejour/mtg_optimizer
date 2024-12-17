@@ -19,6 +19,7 @@ const Optimize = () => {
   const [minStore, setMinStore] = useState(15);
   const [findMinStore, setFindMinStore] = useState(true);
   const [taskId, setTaskId] = useState(null);
+  const [taskState, setTaskState] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
   const [optimizationResult, setOptimizationResult] = useState(null);
   const { theme } = useTheme();
@@ -118,7 +119,8 @@ const Optimize = () => {
   const checkTaskStatus = async (id) => {
     try {
       const response = await api.get(`/task_status/${id}`);
-      setTaskStatus(response.data.state);
+      setTaskState(response.data.state);
+      setTaskStatus(response.data.status);
       setTaskProgress(response.data.progress ?? 0);
 
       if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
@@ -225,6 +227,28 @@ const Optimize = () => {
     console.log('Filtered sites:', filteredSites);
   }, [sites, siteType]);
 
+  const handleSelectAll = () => {
+    const newSelectedSites = {};
+    filteredSites.forEach(site => {
+      newSelectedSites[site.id] = true;
+    });
+    setSelectedSites(prev => ({
+      ...prev,
+      ...newSelectedSites
+    }));
+  };
+
+  const handleSelectNone = () => {
+    const newSelectedSites = {};
+    filteredSites.forEach(site => {
+      newSelectedSites[site.id] = false;
+    });
+    setSelectedSites(prev => ({
+      ...prev,
+      ...newSelectedSites
+    }));
+  };
+
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -266,9 +290,9 @@ const Optimize = () => {
         {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
       </Button>
 
-      {taskStatus && (
+      {taskState && (
         <div className="my-4">
-          <Text>Task Status: {taskStatus}</Text>
+          <Text>Task Status: {taskState}: {taskStatus}</Text>
           {taskProgress > 0 && taskProgress < 100 && (
             <Progress percent={taskProgress} status="active" />
           )}
@@ -304,41 +328,47 @@ const Optimize = () => {
         <Col span={12}>
           <Card 
             title={
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Site List ({filteredSites.length})</span>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <Select 
-                    value={countryFilter} 
-                    onChange={setCountryFilter} 
-                    style={{ width: 150 }}
-                    size="small"
-                  >
-                    <Option value="all">All Countries ({sites.filter(s => s.active).length})</Option>
-                    <Option value="usa">USA ({getCountryCounts().usa || 0})</Option>
-                    <Option value="canada">Canada ({getCountryCounts().canada || 0})</Option>
-                  </Select>
-                  <Select 
-                    mode="multiple"
-                    value={methodFilter}
-                    onChange={setMethodFilter}
-                    style={{ width: 200 }}
-                    size="small"
-                    maxTagCount="responsive"
-                  >
-                    <Option value="all">All Platforms</Option>
-                    <Option value="crystal">Crystal ({getMethodCounts().crystal || 0})</Option>
-                    <Option value="shopify">Shopify ({getMethodCounts().shopify || 0})</Option>
-                    <Option value="hawk">Hawk ({getMethodCounts().hawk || 0})</Option>
-                  </Select>
-                  <Select 
-                    value={siteType} 
-                    onChange={setSiteType} 
-                    style={{ width: 200 }}
-                    size="small"
-                  >
-                    <Option value="primary">Primary Sites</Option>
-                    <Option value="extended">Primary + Extended Sites</Option>
-                  </Select>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Site List ({filteredSites.length})</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <Select 
+                      value={countryFilter} 
+                      onChange={setCountryFilter} 
+                      style={{ width: 150 }}
+                      size="small"
+                    >
+                      <Option value="all">All Countries ({sites.filter(s => s.active).length})</Option>
+                      <Option value="usa">USA ({getCountryCounts().usa || 0})</Option>
+                      <Option value="canada">Canada ({getCountryCounts().canada || 0})</Option>
+                    </Select>
+                    <Select 
+                      mode="multiple"
+                      value={methodFilter}
+                      onChange={setMethodFilter}
+                      style={{ width: 200 }}
+                      size="small"
+                      maxTagCount="responsive"
+                    >
+                      <Option value="all">All Platforms</Option>
+                      <Option value="crystal">Crystal ({getMethodCounts().crystal || 0})</Option>
+                      <Option value="shopify">Shopify ({getMethodCounts().shopify || 0})</Option>
+                      <Option value="hawk">Hawk ({getMethodCounts().hawk || 0})</Option>
+                    </Select>
+                    <Select 
+                      value={siteType} 
+                      onChange={setSiteType} 
+                      style={{ width: 200 }}
+                      size="small"
+                    >
+                      <Option value="primary">Primary Sites</Option>
+                      <Option value="extended">Primary + Extended Sites</Option>
+                    </Select>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <Button size="small" onClick={handleSelectAll}>Select All</Button>
+                  <Button size="small" onClick={handleSelectNone}>Select None</Button>
                 </div>
               </div>
             } 

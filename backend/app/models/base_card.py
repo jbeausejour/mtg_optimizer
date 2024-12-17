@@ -1,4 +1,7 @@
 from datetime import datetime
+from venv import logger
+
+from cv2 import log
 from app.extensions import db
 from sqlalchemy.orm import validates
 from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion
@@ -30,6 +33,7 @@ class BaseCard(db.Model):
         normalized = CardLanguage.normalize(value)
         if normalized not in {lang.value for lang in CardLanguage}:
             valid_languages = sorted({lang.value for lang in CardLanguage})
+            logger.error(f"Invalid language : {value}")
             raise ValueError(f"Invalid language. Must be one of: {', '.join(valid_languages)}")
         return normalized
 
@@ -37,6 +41,7 @@ class BaseCard(db.Model):
     def validate_set_code(self, key, set_code):
         """Ensure set_code follows MTG standard format"""
         if set_code and not re.match(r'^[a-zA-Z0-9]{3,4}$', set_code):
+            logger.error(f"Invalid set code format: {set_code}")
             raise ValueError("Invalid set code format")
         return set_code.upper() if set_code else None
     

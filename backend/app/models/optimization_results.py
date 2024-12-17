@@ -10,8 +10,8 @@ class OptimizationResult(db.Model):
     message = db.Column(db.String(255))
     sites_scraped = db.Column(db.Integer)
     cards_scraped = db.Column(db.Integer)
-    solutions = db.Column(db.JSON)  # Changed from JSONB to JSON for SQLite compatibility
-    errors = db.Column(db.JSON)     # Changed from JSONB to JSON for SQLite compatibility
+    solutions = db.Column(db.JSON)
+    errors = db.Column(db.JSON)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     scan = db.relationship(
@@ -21,6 +21,7 @@ class OptimizationResult(db.Model):
     )
 
     def to_dict(self):
+        """Basic dictionary representation of the model"""
         return {
             'id': self.id,
             'scan_id': self.scan_id,
@@ -28,7 +29,7 @@ class OptimizationResult(db.Model):
             'message': self.message,
             'sites_scraped': self.sites_scraped,
             'cards_scraped': self.cards_scraped,
-            'solutions': self.solutions,  # Remove the unnecessary nesting
+            'solutions': self.solutions,
             'errors': self.errors,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

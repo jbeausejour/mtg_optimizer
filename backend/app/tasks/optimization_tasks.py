@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from typing import Dict, List, Optional
 import pandas as pd
 from sqlalchemy.orm import Query
 from flask import current_app
@@ -9,29 +10,29 @@ from app.models.site import Site
 
 from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer
 from app.utils.optimization import PurchaseOptimizer
+from app.services.optimization_service import OptimizationService
 from .celery_app import celery_app
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 import asyncio
 from sqlalchemy import select, text 
 from app.services.scan_service import ScanService
-from app.services.site_service import SiteService
-from app.dto.optimization_dto import OptimizationConfigDTO, OptimizationResultDTO, ScanResultDTO
+from app.dto.optimization_dto import CardInSolution, OptimizationConfigDTO, OptimizationResultDTO, OptimizationSolution, StoreInSolution
 from app.services.card_service import CardService 
 
 
 logger = logging.getLogger(__name__)
 
 def is_data_fresh(card_name):
-    """Check if the card data is fresh (less than 24 hours old)"""
-    scan_result = ScanResult.query.filter_by(name=card_name).order_by(ScanResult.updated_at.desc()).first()
+    """Check if the card data is fresh (less than 30 minutes old)"""
+    scan_result = ScanService.get_latest_filtered_scan_results(card_name)
     
     if not scan_result:
         return False
         
     now = datetime.now(timezone.utc).replace(microsecond=0)
     age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
-    return age.total_seconds() < 300  # 5 minutes
+    return age.total_seconds() < 1800  # 30 minutes
 
 
 class OptimizationTaskManager:
@@ -94,7 +95,7 @@ class OptimizationTaskManager:
                         'name': r.name,
                         'set_name': r.set_name,
                         'set_code': r.set_code,
-                        'price': float(r.price),
+                        'price': round(float(r.price), 2),
                         'version': getattr(r, 'version', 'Standard'),
                         'foil': bool(getattr(r, 'foil', False)),
                         'quality': r.quality,
@@ -148,12 +149,17 @@ class OptimizationTaskManager:
             card_listings = []
             
             if scraping_results:
+                logger.info(f"Processing {len(scraping_results)} scraping results")
                 card_listings = self._process_scraping_results(scraping_results)
+                logger.info(f"Processed {len(card_listings)} card listings results")
             else:
                 scan_id = self._get_scan_id()
                 if scan_id:
+                    logger.info(f"Using scan_id {scan_id} for optimization data")
                     results = self._fetch_scan_results(scan_id)
-                    card_listings = self._process_scraping_results(results)  # Use the same method for both cases
+                    logger.info(f"Fetched {len(results)} scan results")
+                    card_listings = self._process_scraping_results(results)
+                    logger.info(f"Processed {len(card_listings)} card listings results")
 
             if not card_listings:
                 logger.error("No card listings created")
@@ -161,7 +167,9 @@ class OptimizationTaskManager:
 
             card_listings_df = pd.DataFrame(card_listings)
             filtered_listings_df = self._process_listings_dataframe(card_listings_df)
+            logger.info(f"Filtered listings processed: {len(filtered_listings_df)}")
             user_wishlist_df = pd.DataFrame(self.card_list_from_frontend)
+            logger.info(f"User wishlist listings: {len(filtered_listings_df)}")
 
             # Ensure min_quality is included in user_wishlist_df
             if 'quality' in user_wishlist_df.columns:
@@ -182,12 +190,12 @@ class OptimizationTaskManager:
             site_info = self.site_data.get(r['site_id'])
             if site_info:
                 # Get set code from the set name using CardService
-                set_code = CardService.get_set_code(r['set_name']) if r['set_name'] else None
+                set_code = CardService.get_clean_set_code(r['set_name']) if r['set_name'] else None
                 
                 card_listings.append({
                     'name': r['name'],
                     'site_name': site_info['name'],
-                    'price': float(r['price']),
+                    'price': round(float(r['price']), 2),
                     'quality': r['quality'],
                     'quantity': int(r['quantity']),
                     'set_name': r['set_name'],
@@ -196,7 +204,7 @@ class OptimizationTaskManager:
                     'foil': bool(r.get('foil', False)),
                     'language': r.get('language', 'English'),
                     'site_id': r['site_id'],
-                    'weighted_price': float(r['price'])
+                    'weighted_price': round(float(r['price']), 2)
                 })
         return card_listings
 
@@ -204,15 +212,14 @@ class OptimizationTaskManager:
         """Get current or latest scan ID"""
         if self.current_scan_id:
             return self.current_scan_id
-        latest_scan = Scan.query.order_by(Scan.id.desc()).first()
+        latest_scan  = ScanService.get_latest_scan_results()
+        #latest_scan = Scan.query.order_by(Scan.id.desc()).first()
         return latest_scan.id if latest_scan else None
 
     def _fetch_scan_results(self, scan_id):
         """Fetch scan results from database"""
-        return (db.session.query(ScanResult)
-                .filter(ScanResult.scan_id == scan_id)
-                .filter(ScanResult.site_id.in_(self.site_ids))
-                .all())
+        scan_results = ScanService.get_scan_by_id_and_sites(scan_id, site_ids = self.site_ids)
+        return scan_results
 
     def _process_listings_dataframe(self, df):
         """Process and filter the card listings DataFrame"""
@@ -341,116 +348,182 @@ def serialize_results(obj):
     return obj
 
 @celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
-def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store):
-    config = OptimizationConfigDTO(strategy=strategy, min_store=min_store, find_min_store=find_min_store)
-    
-    with db.session() as session:
+def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store) -> Dict:
+    """
+    Execute optimization task for given cards and sites.
+    Returns serialized OptimizationResultDTO.
+    """
+    def update_progress(status: str, progress: int):
+        self.update_state(state="PROCESSING", meta={"status": status, "progress": progress})
+
+    try:
+        # Initialize configuration and managers
+        config = OptimizationConfigDTO(strategy=strategy, min_store=min_store, find_min_store=find_min_store)
         task_manager = OptimizationTaskManager(site_ids, card_list_from_frontend, config.strategy, 
                                              config.min_store, config.find_min_store)
         logger = task_manager.logger
-        try:
-            self.update_state(state="PROCESSING", meta={"status": "Task initialized", "progress": 0})
-            scraping_results = task_manager.handle_scraping()
+        # Scraping phase
+        update_progress("Starting scraping", 0)
+        scraping_results = task_manager.handle_scraping()
+        if not scraping_results:
+            return handle_failure("No scraping results found", task_manager)
             
-            if not scraping_results:
-                return OptimizationResultDTO(
-                    status="Failed",
-                    message="No scraping results found",
-                    sites_scraped=len(task_manager.sites),
-                    cards_scraped=len(card_list_from_frontend),
-                    solutions=[],
-                    progress=100
-                ).model_dump()
-            
-            self.update_state(state="PROCESSING", meta={"status": "Scraping complete", "progress": 25})
-            filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
-            
-            if filtered_listings_df is None or filtered_listings_df.empty:
-                return OptimizationResultDTO(
-                    status="Failed",
-                    message="No valid card listings found",
-                    sites_scraped=len(task_manager.sites),
-                    cards_scraped=len(card_list_from_frontend),
-                    solutions=[],
-                    progress=100
-                ).model_dump()
+        # Data preparation phase    
+        update_progress("Preparing data", 25)
+        filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
+        if filtered_listings_df is None or filtered_listings_df.empty:
+            return handle_failure("No valid card listings found", task_manager)
 
-            self.update_state(state="PROCESSING", meta={"status": "Running optimization", "progress": 50})
-            optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
-            self.update_state(state="PROCESSING", meta={"status": "Optimization complete", "progress": 75})
-            
-            if optimization_result and optimization_result.get("status") == "success":
-                
-                logger.info("Optimization Result received:")
-                logger.info(f"Solutions count: {len(optimization_result.get('best_solution', []))}")
-                logger.info(f"Iterations count: {len(optimization_result.get('iterations', []))}")
+        # Optimization phase
+        update_progress("Running optimization", 50)
+        optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
+        
+        # Result processing
+        update_progress("Processing results", 75)
+        if optimization_result and optimization_result.get("status") == "success":
+            logger.info("Optimization Result received:")
+            logger.info(f"Solution's card count: {len(optimization_result.get('best_solution', []))}")
+            logger.info(f"Iterations count: {len(optimization_result.get('iterations', []))}")
+
+            return handle_success(optimization_result, task_manager)
+        else:
+            return handle_failure("Optimization failed", task_manager, optimization_result)
+
+    except Exception as e:
+        logger.exception("Task execution failed")
+        self.update_state(state=states.FAILURE, 
+                         meta={"exc_type": type(e).__name__, "exc_message": str(e)})
+        raise
 
 
-                if optimization_result and optimization_result["status"] == "success":
-                    result_dto = OptimizationResultDTO(
-                        status="Completed",
-                        message="Optimization completed successfully",
-                        sites_scraped=len(task_manager.sites),
-                        cards_scraped=len(card_list_from_frontend),
-                        solutions=[],
-                        progress=100
-                    )
-                    
-                    # Format solutions based on the optimization type
-                    result_dto.format_solutions(
-                        optimization_result["best_solution"],
-                        optimization_result.get("iterations", [])
-                    )
-                    
-                    dumped_result = result_dto.model_dump()
-                    logger.info(f"Solutions count in DTO: {len(dumped_result['optimization']['solutions'])}")
+def handle_success(optimization_result: Dict, task_manager: OptimizationTaskManager) -> Dict:
+    """Handle successful optimization"""
+    logger.info(f"handle_success: received {len(optimization_result.get('solutions', []))} solutions")
+    result_dto = OptimizationResultDTO(
+        status="Completed",
+        message="Optimization completed successfully",
+        sites_scraped=len(task_manager.sites),
+        cards_scraped=len(task_manager.card_list_from_frontend),
+        solutions=create_solutions(optimization_result),
+        errors=optimization_result.get('errors', create_empty_errors())
+    )
     
-                    # Save to database and return result
-                    optimization_result_db = OptimizationResult(
-                        scan_id=task_manager.current_scan_id,
-                        status=dumped_result['status'],
-                        message=dumped_result['message'],
-                        sites_scraped=dumped_result['sites_scraped'],
-                        cards_scraped=dumped_result['cards_scraped'],
-                        solutions=dumped_result['optimization']['solutions'],
-                        errors=optimization_result['errors'],
-                        progress=100
-                    )
-                    db.session.add(optimization_result_db)
-                    db.session.commit()
-                        
-                    logger.info("start_scraping_task: Optimization completed")
-                    self.update_state(state="PROCESSING", meta={"status": "Task complete", "progress": 100})
-                    return dumped_result            
-            else:   
-                error_collector = ErrorCollector.get_instance()
-                failed_optimization = OptimizationResultDTO(
-                    status="Failed",
-                    message="Optimization failed or returned no valid results",
-                    sites_scraped=len(task_manager.sites),
-                    cards_scraped=len(card_list_from_frontend),
-                    solutions=[],
-                    errors=optimization_result.get('errors', error_collector.__dict__),
-                    progress=100
-                ).model_dump()
-                
-                failed_optimization_db = OptimizationResult(
-                    scan_id=task_manager.current_scan_id,
-                    status=failed_optimization['status'],
-                    message=failed_optimization['message'],
-                    sites_scraped=failed_optimization['sites_scraped'],
-                    cards_scraped=failed_optimization['cards_scraped'],
-                    solutions=failed_optimization['optimization']['solutions'],
-                    errors=failed_optimization['optimization']['errors']
-                )
-                
-                db.session.add(failed_optimization_db)
-                db.session.commit()
-                logger.info("start_scraping_task: Optimization failed")
-                self.update_state(state="PROCESSING", meta={"status": "Task Failed", "progress": 100})
-                return failed_optimization
+    OptimizationService.create_optimization_result(
+        scan_id=task_manager.current_scan_id,
+        result_dto=result_dto
+    )
+    logger.info(f"Saved optimization result with {len(result_dto.solutions)} solutions")
+    return result_dto.model_dump()
 
+def handle_failure(message: str, task_manager: OptimizationTaskManager, 
+                optimization_result: Optional[Dict] = None) -> Dict:
+    """Handle optimization failure"""
+    result_dto = OptimizationResultDTO(
+        status="Failed",
+        message=message,
+        sites_scraped=len(task_manager.sites),
+        cards_scraped=len(task_manager.card_list_from_frontend),
+        solutions=[],
+        errors=optimization_result.get('errors', create_empty_errors()) if optimization_result 
+            else create_empty_errors()
+    )
+    
+    OptimizationService.create_optimization_result(
+        scan_id=task_manager.current_scan_id,
+        result_dto=result_dto
+    )
+    logger.info("start_scraping_task: Optimization failed")
+    return result_dto.model_dump()
+
+def create_empty_errors() -> Dict[str, List[str]]:
+    """Create default empty error structure"""
+    return {
+        'unreachable_stores': [],
+        'unknown_languages': [],
+        'unknown_qualities': []
+    }
+
+def create_solutions(optimization_result: Dict) -> List[OptimizationSolution]:
+    """
+    Create a list of OptimizationSolution objects from the optimization result dictionary.
+    """
+    solutions = []
+
+    # Process best_solution
+    best_solution = optimization_result.get('best_solution', [])
+    if best_solution:
+        logger.info("Processing best solution...")
+        try:
+            stores = _process_solution_stores(best_solution)
+            solutions.append(OptimizationSolution(
+                total_price=sum(store.total_price for store in stores),
+                number_store=len(stores),
+                nbr_card_in_solution=len(best_solution),
+                total_qty=sum(card.quantity for store in stores for card in store.cards),
+                list_stores=", ".join(store.site_name for store in stores),
+                missing_cards=[],
+                missing_cards_count=0,
+                stores=stores,
+                is_best_solution=True
+            ))
         except Exception as e:
-            logger.exception("Error during task execution")
-            self.update_state(state=states.FAILURE, meta={"exc_type": type(e).__name__, "exc_message": str(e)})
-            raise
+            logger.error(f"Error processing best_solution: {str(e)}")
+
+    # Process iterations
+    iterations = optimization_result.get('iterations', [])
+    if iterations:
+        logger.info(f"Processing {len(iterations)} iterations...")
+        for iteration in iterations:
+            try:
+                iteration_results = iteration.get('sorted_results_df', [])
+                stores = _process_solution_stores(iteration_results)
+                solutions.append(OptimizationSolution(
+                    total_price=iteration.get('total_price', 0),
+                    number_store=iteration.get('number_store', 0),
+                    nbr_card_in_solution=iteration.get('nbr_card_in_solution', 0),
+                    total_qty=sum(card.quantity for store in stores for card in store.cards),
+                    list_stores=", ".join(store.site_name for store in stores),
+                    missing_cards=[],
+                    missing_cards_count=0,
+                    stores=stores,
+                    is_best_solution=False
+                ))
+            except Exception as e:
+                logger.error(f"Error processing iteration: {str(e)}")
+
+    if not solutions:
+        logger.warning("No valid solutions found in optimization result.")
+
+    return solutions
+
+def _process_solution_stores(solution_results: List[Dict]) -> List[StoreInSolution]:
+    """
+    Process the solution results and return a list of StoreInSolution objects.
+    """
+    store_map = {}
+    for record in solution_results:
+        site_id = record.get('site_id')
+        site_name = record.get('site_name', '')
+        card_data = CardInSolution(
+            name=record.get('name'),
+            site_name=site_name,
+            price=float(record.get('price', 0)),
+            quality=record.get('quality', 'NM'),
+            quantity=int(record.get('quantity', 0)),
+            set_name=record.get('set_name', ''),
+            set_code=record.get('set_code', ''),
+            version=record.get('version', 'Standard'),
+            foil=bool(record.get('foil', False)),
+            language=record.get('language', 'English'),
+            site_id=site_id
+        )
+        if site_id not in store_map:
+            store_map[site_id] = StoreInSolution(
+                site_id=site_id,
+                site_name=site_name,
+                cards=[card_data]
+            )
+        else:
+            store_map[site_id].cards.append(card_data)
+
+    return list(store_map.values())

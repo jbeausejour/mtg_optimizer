@@ -12,16 +12,11 @@ class NetworkDriver:
     """Enhanced base class for network operations with connection pooling"""
     def __init__(self, max_connections: int = 100, keepalive_timeout: int = 30):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Cache-Control": "max-age=0",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Content-Type": "application/x-www-form-urlencoded"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
         }
-        
         self.session = None
         self.connector = None
         self.max_connections = max_connections
@@ -79,25 +74,11 @@ class NetworkDriver:
     async def post_request(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
         """Enhanced POST request with detailed error tracking and Selenium fallback"""
         await self._ensure_session()
-        parsed_url = urlparse(url)
-        origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            
-        # Add dynamic headers
-        request_headers = {
-            **self.headers,
-            **(headers or {}),
-            "Origin": origin,
-            "Referer": url,
-            "Host": parsed_url.netloc,
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1"
-        }
-        
+
         max_retries = 5
         retry_count = 0
         backoff_factor = 1
+        wait_time = 1        
         
         while retry_count < max_retries:
             connection_info = {
@@ -110,10 +91,10 @@ class NetworkDriver:
                 
                 # Enhanced timeout configuration
                 timeout = aiohttp.ClientTimeout(
-                    total=60,
-                    connect=30,
+                    total=50,
+                    connect=15,
                     sock_read=50,
-                    sock_connect=20
+                    sock_connect=10
                 )
                 connection_info['timeout'] = str(timeout)
 
@@ -129,8 +110,7 @@ class NetworkDriver:
                 async with aiohttp.ClientSession(
                     connector=connector,
                     timeout=timeout,
-                    headers=request_headers,
-                    cookie_jar=aiohttp.CookieJar(unsafe=True)  # Allow handling of secure cookies
+                    headers=headers
                 ) as session:
                     try:
                         async with session.post(url, data=payload) as response:
@@ -183,7 +163,7 @@ class NetworkDriver:
                         elapsed = asyncio.get_event_loop().time() - start_time
                         logger.error(f"Timeout after {elapsed:.2f}s posting to {url} (attempt {retry_count}/{max_retries})")
                         connection_info['error'] = 'Timeout'
-                        logger.error(f"Request timeout: {connection_info}")
+                        #logger.error(f"Request timeout: {connection_info}")
                         await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
                         continue
                         
@@ -203,14 +183,9 @@ class NetworkDriver:
         
         return None    
     
-    async def fetch_url(self, url: str, headers: dict = None) -> Optional[str]:
+    async def fetch_url(self, url: str) -> Optional[str]:
         """Enhanced fetch URL with detailed diagnostics and Selenium fallback"""
         await self._ensure_session()
-        
-        if headers:
-            merged_headers = {**self.headers, **headers}
-        else:
-            merged_headers = self.headers
 
         max_retries = 5
         retry_count = 0
@@ -230,43 +205,25 @@ class NetworkDriver:
                 start_time = asyncio.get_event_loop().time()
                 
                 # Set timeout and connector with proper configuration
-                timeout = aiohttp.ClientTimeout(
-                    total=30,
-                    connect=10,
-                    sock_read=25,
-                    sock_connect=10
-                )
-
-                connector = TCPConnector(
-                    limit=10,
-                    force_close=True,
-                    enable_cleanup_closed=True
-                )
+                timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25, sock_connect=10)
+                connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
                 
                 async with aiohttp.ClientSession(
                     connector=connector,
-                    timeout=timeout,
-                    headers=merged_headers
+                    timeout=timeout
                 ) as session:
                     try:
                         async with session.get(url) as response:
                             elapsed_time = asyncio.get_event_loop().time() - start_time
-                            
+                            # Extract cookies
+
                             # Gather detailed connection information
-                            
-                            connection_info.update({
-                                'status': response.status,
-                                'elapsed_time': f"{elapsed_time:.2f}s",
-                                'headers': dict(response.headers)
-                            })
-
-                            if hasattr(response, 'connection') and response.connection:
-                                if hasattr(response.connection, 'transport') and response.connection.transport:
-
-                                    connection_info.update({
-                                        'peername': response.connection.transport.get_extra_info('peername', 'N/A'),
-                                        'ssl': bool(response.connection.transport.get_extra_info('ssl_object', None))
-                                    })                                    
+                            # Collect site-specific details
+                            site_details = {
+                                "status": response.status,
+                                "headers": response.headers,
+                                "elapsed_time": elapsed_time,
+                            }                          
 
                             if response.status == 200:
                                 content = await response.text()
@@ -278,7 +235,7 @@ class NetworkDriver:
                                     logger.warning(f"Empty response from {url}, attempting Selenium fallback")
                                     logger.info(f"GET connection details for {url}: {connection_info}")
                                     
-                                return content
+                                return {"content": content, "site_details": site_details}
                                 
                             elif response.status == 404:
                                 logger.error(f"URL not found: {url}")
@@ -287,13 +244,11 @@ class NetworkDriver:
                             elif response.status == 429:  # Rate limit
                                 wait_time = int(response.headers.get('Retry-After', 60))
                                 logger.warning(f"Rate limited on {url}, waiting {wait_time}s")
-                                logger.info(f"GET connection details for {url}: {connection_info}")
                                 await asyncio.sleep(wait_time)
                                 continue
                                 
                             else:
                                 logger.error(f"Error response from {url} (attempt {retry_count}/{max_retries})")
-                                logger.error(f"Connection details: {connection_info}")
                                 await asyncio.sleep(wait_time)
                                 continue
                                 
@@ -301,7 +256,6 @@ class NetworkDriver:
                         elapsed = asyncio.get_event_loop().time() - start_time
                         logger.error(f"Timeout after {elapsed:.2f}s fetching {url} (attempt {retry_count}/{max_retries})")
                         logger.error(f"Timeout configuration: {timeout}")
-                        logger.info(f"GET connection details for {url}: {connection_info}")
                         
                         wait_time = backoff_factor * (2 ** (retry_count - 1))
                         await asyncio.sleep(wait_time)
@@ -309,18 +263,14 @@ class NetworkDriver:
             except aiohttp.ClientError as e:
                 logger.error(f"Client error fetching {url} (attempt {retry_count}/{max_retries}):")
                 logger.error(f"Error type: {type(e).__name__}")
-                logger.error(f"Error details: {str(e)}")
-                logger.info(f"GET connection details for {url}: {connection_info}")
-                                
+                logger.error(f"Error details: {str(e)}")                                
                 await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
                 continue
                 
             except Exception as e:
                 logger.error(f"Unexpected error fetching {url} (attempt {retry_count}/{max_retries}):")
                 logger.error(f"Error type: {type(e).__name__}")
-                logger.error(f"Error details: {str(e)}")
-                logger.info(f"GET connection details for {url}: {connection_info}")
-                               
+                logger.error(f"Error details: {str(e)}")                
                 await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
                 continue
             
