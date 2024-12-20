@@ -119,7 +119,9 @@ class ExternalDataSynchronizer:
                     tasks.append(task)
                 
                 # Process tasks in batches with proper cleanup
-                BATCH_SIZE = min(max(len(sites) // 4, 3), 10)  # Between 3 and 10
+                # Aggressive batching settings
+                MAX_CONCURRENT = 20  # Much higher concurrent limit
+                BATCH_SIZE = min(max(len(sites) // 2, 10), 30)  # Larger batch size, between 10-30
                 total_batches = (len(tasks) + BATCH_SIZE - 1) // BATCH_SIZE
                 
                 for batch_num, i in enumerate(range(0, len(tasks), BATCH_SIZE), 1):

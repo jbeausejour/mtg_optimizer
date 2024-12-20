@@ -34,6 +34,10 @@ def is_data_fresh(card_name):
     age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
     return age.total_seconds() < 1800  # 30 minutes
 
+def get_fresh_scan_results(fresh_cards, site_ids):
+    """Get the latest scan results"""
+    return ScanService.get_fresh_scan_results(fresh_cards, site_ids)
+
 
 class OptimizationTaskManager:
     def __init__(self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store):
@@ -91,12 +95,7 @@ class OptimizationTaskManager:
             if fresh_cards:
                 # Convert fresh results to dictionaries immediately
                 if fresh_cards:
-                    fresh_query_results = (
-                        db.session.query(ScanResult)
-                        .filter(ScanResult.name.in_(fresh_cards))
-                        .filter(ScanResult.site_id.in_(self.site_ids))
-                        .all()
-                    )
+                    fresh_query_results = get_fresh_scan_results(fresh_cards, self.site_ids)
                     
                     # Process fresh results with deduplication
                     for r in fresh_query_results:

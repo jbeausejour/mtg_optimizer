@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from sqlalchemy import and_, func
 from sqlalchemy.exc import SQLAlchemyError
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
@@ -74,7 +75,50 @@ class ScanService:
         except Exception as e:
             logger.error(f"Error getting latest filtered scan results for {card_name}: {str(e)}")
             return None
+            
+    def get_fresh_scan_results(fresh_cards, site_ids):
+        """
+        Get latest scan results for multiple cards.
+        Uses window functions to efficiently get the most recent entry per card.
+        """
+        try:
+            # Subquery to get latest scan for each card
+            latest_scans = (
+                db.session.query(
+                    ScanResult.name,
+                    ScanResult.site_id,
+                    func.max(ScanResult.updated_at).label('max_updated_at')
+                )
+                .filter(
+                    and_(
+                        ScanResult.name.in_(fresh_cards),
+                        ScanResult.site_id.in_(site_ids)
+                    )
+                )
+                .group_by(ScanResult.name, ScanResult.site_id)
+                .subquery()
+            )
 
+            # Main query to get the full scan results
+            fresh_query_results = (
+                db.session.query(ScanResult)
+                .join(
+                    latest_scans,
+                    and_(
+                        ScanResult.name == latest_scans.c.name,
+                        ScanResult.site_id == latest_scans.c.site_id,
+                        ScanResult.updated_at == latest_scans.c.max_updated_at
+                    )
+                )
+                .all()
+            )
+
+            return fresh_query_results
+
+        except Exception as e:
+            logger.error(f"Error getting latest scan results: {str(e)}")
+            return []
+        
     @staticmethod
     def save_scan_result(scan_id, result):
         """Save a single scan result"""
