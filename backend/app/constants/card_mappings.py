@@ -66,6 +66,13 @@ QUALITY_WEIGHTS: Dict[str, float] = {
     "DMG": 999999
 }
 
+LANGUAGE_WEIGHTS: Dict[str, float] = {
+    'English': 1.0,      # No penalty for English
+    'French':  4.0,      # Medium penalty for French language
+    'Unknown': 5.0,      # Heavy penalty for unknown language
+    'default': 5.0       # Heavy penalty for all non-English languages
+}
+
 LANGUAGE_MAPPING: Dict[str, str] = {
     # English variants
     'en': 'English',

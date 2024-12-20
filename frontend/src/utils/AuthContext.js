@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { jwtDecode } from 'jwt-decode';
+import { jwtDecode }from 'jwt-decode';
 import api from './api';
 import SetupAxiosInterceptors from './AxiosConfig';
 
@@ -31,8 +31,10 @@ export const AuthProvider = ({ children }) => {
             logout();  // Log out if the token refresh fails
           }
         } else if (decodedToken.exp * 1000 > Date.now()) {
+          console.info('Token is valid, set user');
           setUser(decodedToken);  // Token is valid, set user
         } else {
+          console.info('Token expired, log out user');
           localStorage.removeItem('accessToken');
           logout();  // Token expired, log out user
         }
@@ -47,11 +49,11 @@ export const AuthProvider = ({ children }) => {
   const login = async (credentials) => {
     try {
       const response = await api.post('/login', credentials);
-      const { access_token } = response.data;
+      const { access_token, userId } = response.data; // Assume the response contains userId
       localStorage.setItem('accessToken', access_token);
       const decodedToken = jwtDecode(access_token);
-      setUser(decodedToken);
-      return decodedToken;
+      setUser({ ...decodedToken, userId }); // Set user with userId
+      return userId; // Return userId
     } catch (error) {
       console.error('Login error:', error);
       throw error;

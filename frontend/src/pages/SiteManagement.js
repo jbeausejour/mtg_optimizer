@@ -6,7 +6,7 @@ import api from '../utils/api';
 
 const { Title } = Typography;
 
-const SiteManagement = () => {
+const SiteManagement = ({ userId }) => {
   const [sites, setSites] = useState([]);
   const [loading, setLoading] = useState(true);
   const { theme } = useTheme();
@@ -24,7 +24,9 @@ const SiteManagement = () => {
 
   const fetchSites = async () => {
     try {
-      const response = await api.get('/sites');
+      const response = await api.get('/sites', {
+        params: { user_id: userId } // Add user ID
+      });
       setSites(response.data);
     } catch (error) {
       console.error('Error fetching sites:', error);
@@ -58,7 +60,7 @@ const SiteManagement = () => {
   const handleEditSubmit = async () => {
     try {
       const values = await editForm.validateFields();
-      const response = await api.put(`/sites/${editingRecord.id}`, values);
+      const response = await api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }); // Add user ID
       
       // Handle different response statuses
       switch (response.data.status) {
@@ -91,7 +93,7 @@ const SiteManagement = () => {
   const handleAddSubmit = async () => {
     try {
       const values = await addForm.validateFields();
-      const response = await api.post('/sites', values);
+      const response = await api.post('/sites', { ...values, user_id: userId }); // Add user ID
       if (response.data) {
         setSites([...sites, response.data]);
         message.success('Site added successfully');
@@ -104,7 +106,9 @@ const SiteManagement = () => {
 
   const handleDelete = async (id) => {
     try {
-      await api.delete(`/sites/${id}`);
+      await api.delete(`/sites/${id}`, {
+        params: { user_id: userId } // Add user ID
+      });
       setSites(sites.filter(site => site.id !== id));
       message.success('Site deleted successfully');
     } catch (error) {
@@ -165,6 +169,7 @@ const SiteManagement = () => {
             onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
             onPressEnter={confirm}
             style={{ width: 188, marginBottom: 8, display: 'block' }}
+            autoFocus
           />
           <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
           <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
@@ -233,6 +238,7 @@ const SiteManagement = () => {
             onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
             onPressEnter={confirm}
             style={{ width: 188, marginBottom: 8, display: 'block' }}
+            autoFocus
           />
           <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
           <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>

@@ -6,7 +6,7 @@ import api from '../utils/api';
 
 const { Option } = Select;
 
-const Settings = () => {
+const Settings = ({ userId }) => {
   const [form] = Form.useForm();
   const [settings, setSettings] = useState({});
   const navigate = useNavigate();
@@ -18,11 +18,8 @@ const Settings = () => {
 
   const fetchSettings = async () => {
     try {
-      const token = localStorage.getItem('accessToken');
       const response = await api.get('/settings', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        params: { user_id: userId }
       });
       console.log('Fetched settings:', response.data);
       setSettings(response.data);
@@ -53,7 +50,7 @@ const Settings = () => {
   const onFinish = async (values) => {
     try {
       const token = localStorage.getItem('accessToken');
-      await api.post(`/settings`, values, {
+      await api.post(`/settings`, { ...values, user_id: userId }, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

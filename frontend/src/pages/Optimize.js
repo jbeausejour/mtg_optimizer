@@ -1,17 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import ScryfallCard from '../components/CardManagement/ScryfallCard'; 
-import CardListInput from '../components/CardManagement/CardListInput';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
 
 const { Title, Text } = Typography;
 
-const Optimize = () => {
+const Optimize = ({ userId }) => {
   const [cards, setCards] = useState([]);
   const [cardData, setCardData] = useState(null);
-  const [cardList, setCardList] = useState([]);
   const [selectedCard, setSelectedCard] = useState({});
   const [sites, setSites] = useState([]);
   const [selectedSites, setSelectedSites] = useState({});
@@ -30,11 +28,14 @@ const Optimize = () => {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [siteType, setSiteType] = useState('extended');
   const [countryFilter, setCountryFilter] = useState('canada'); 
-  const [methodFilter, setMethodFilter] = useState(['all']);  // Change to array
+  const [methodFilter, setMethodFilter] = useState(['all']); 
+  const [selectedSiteCount, setSelectedSiteCount] = useState(0); 
+  const [buylists, setBuylists] = useState([]); 
+  const [selectedBuylist, setSelectedBuylist] = useState(null); 
 
   useEffect(() => {
-    fetchCards();
     fetchSites();
+    fetchBuylists(); // Fetch buylists on component mount
   }, []);
 
   useEffect(() => {
@@ -47,22 +48,18 @@ const Optimize = () => {
     }
   }, [taskId]);
 
-  const fetchCards = async () => {
-    try {
-      const response = await api.get('/cards');
-      setCards(response.data);
-      setCardList(response.data);
-    } catch (error) {
-      console.error('Error fetching cards:', error);
-      message.error('Failed to fetch cards');
+  useEffect(() => {
+    if (buylists.length > 0 && !selectedBuylist) {
+      setSelectedBuylist(buylists[0].buylist_id);
+      handleSelectBuylist(buylists[0].buylist_id);
     }
-  };
+  }, [buylists]);
 
-  // Update fetchSites to ensure type is set
   const fetchSites = async () => {
     try {
-      const response = await api.get('/sites');
-      // Ensure each site has a type property, default to 'primary' if not set
+      const response = await api.get('/sites', {
+        params: { user_id: 'your_user_id' } // Add user ID
+      });
       const sitesWithTypes = response.data.map(site => ({
         ...site,
         type: site.type || 'primary'
@@ -79,17 +76,21 @@ const Optimize = () => {
     }
   };
 
+  const fetchBuylists = async () => {
+    try {
+      const response = await api.get('/buylists', { params: { user_id: userId } });
+      setBuylists(response.data);
+    } catch (error) {
+      console.error('Error fetching buylists:', error);
+      message.error('Failed to fetch buylists');
+    }
+  };
+
   const handleOptimize = async () => {
     try {
-      // Use the already filtered sites list and only select those that are enabled
       const sitesToOptimize = filteredSites
         .filter(site => selectedSites[site.id])
         .map(site => site.id.toString());
-
-      // Debug log to verify what's being sent
-      console.log('Sites being sent for optimization:', sitesToOptimize);
-      console.log('Total filtered sites:', filteredSites.length);
-      console.log('Total selected sites:', sitesToOptimize.length);
 
       if (sitesToOptimize.length === 0) {
         message.warning('Please select at least one site to optimize');
@@ -101,7 +102,7 @@ const Optimize = () => {
         strategy: optimizationStrategy,
         min_store: minStore,
         find_min_store: findMinStore,
-        card_list: cardList.map(card => ({
+        card_list: cards.map(card => ({
           name: card.name,
           quantity: card.quantity,
           set_name: card.set_name,
@@ -140,14 +141,15 @@ const Optimize = () => {
     }
   };
 
-  const handleCardListSubmit = async (newCardList) => {
+  const handleSelectBuylist = async (buylistId) => {
     try {
-      await api.post('/card_list', { cardList: newCardList });
-      setCards(newCardList);
-      setCardList(newCardList);
-      message.success('Card list submitted successfully');
+      const response = await api.get(`/buylists/${buylistId}`, {
+        params: { user_id: userId }
+      });
+      setCards(response.data);
+      message.success('Buylist selected successfully');
     } catch (error) {
-      message.error('Failed to submit card list');
+      message.error('Failed to select buylist');
     }
   };
 
@@ -167,36 +169,30 @@ const Optimize = () => {
   };
 
   const handleSiteSelect = (siteId) => {
-    setSelectedSites(prev => ({
-      ...prev,
-      [siteId]: !prev[siteId]
-    }));
+    setSelectedSites(prev => {
+      const newSelectedSites = {
+        ...prev,
+        [siteId]: !prev[siteId]
+      };
+      setSelectedSiteCount(filteredSites.filter(site => newSelectedSites[site.id]).length);
+      return newSelectedSites;
+    });
   };
 
-  // Update the filteredSites logic
   const filteredSites = sites.filter(site => {
-    // First check if site is active
     if (!site.active) return false;
-    
-    // Apply country filtering
     if (countryFilter !== 'all' && site.country?.toLowerCase() !== countryFilter) {
       return false;
     }
-
-    // Apply type filtering - always return true for 'extended' type
     if (siteType === 'primary' && site.type?.toLowerCase() !== 'primary') {
       return false;
     }
-
-    // Apply platform filtering - allow if 'all' is selected or method matches any selected method
     if (!methodFilter.includes('all') && !methodFilter.includes(site.method?.toLowerCase())) {
       return false;
     }
-
     return true;
   });
 
-  // Get country counts for the selector
   const getCountryCounts = () => {
     const counts = sites.reduce((acc, site) => {
       if (site.active) {
@@ -208,7 +204,6 @@ const Optimize = () => {
     return counts;
   };
 
-  // Add platform counts helper
   const getMethodCounts = () => {
     const counts = sites.reduce((acc, site) => {
       if (site.active) {
@@ -220,12 +215,15 @@ const Optimize = () => {
     return counts;
   };
 
-  // Add useEffect to debug site filtering
   useEffect(() => {
     console.log('Current sites:', sites);
     console.log('Site type:', siteType);
     console.log('Filtered sites:', filteredSites);
-  }, [sites, siteType]);
+  }, [sites, siteType, selectedSites]);
+
+  useEffect(() => {
+    setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
+  }, [filteredSites, selectedSites]);
 
   const handleSelectAll = () => {
     const newSelectedSites = {};
@@ -252,7 +250,6 @@ const Optimize = () => {
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
-      <CardListInput onSubmit={handleCardListSubmit} />
       
       <Row gutter={16} className="mb-4">
         <Col span={8}>
@@ -261,7 +258,16 @@ const Optimize = () => {
             <Option value="nsga-ii">NSGA-II</Option>
             <Option value="hybrid">Hybrid</Option>
           </Select>
+          <Button 
+            type="primary" 
+            onClick={handleOptimize} 
+            className={`optimize-button ${theme}`}
+            disabled={isOptimizing}
+          >
+            {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
+          </Button>
         </Col>
+        
         <Col span={8}>
           <InputNumber
             min={1}
@@ -271,7 +277,7 @@ const Optimize = () => {
             addonBefore="Min Store"
           />
         </Col>
-        <Col span={8}>
+        <Col span={6}>
           <Switch
             checked={findMinStore}
             onChange={setFindMinStore}
@@ -280,15 +286,6 @@ const Optimize = () => {
           />
         </Col>
       </Row>
-
-      <Button 
-        type="primary" 
-        onClick={handleOptimize} 
-        className={`optimize-button ${theme}`}
-        disabled={isOptimizing}
-      >
-        {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
-      </Button>
 
       {taskState && (
         <div className="my-4">
@@ -305,12 +302,50 @@ const Optimize = () => {
             result={optimizationResult} 
             onCardClick={handleCardClick}
           />
+          <div className="mt-4">
+            <Title level={4}>Best Solution</Title>
+            <Space>
+              <Tag color="blue">{`${optimizationResult.best_solution.number_store} Stores`}</Tag>
+              <Tag color={optimizationResult.best_solution.completeness ? 'green' : 'orange'}>
+                {optimizationResult.best_solution.completeness ? 'Complete' : `${optimizationResult.best_solution.percentage}%`}
+              </Tag>
+              <Text>${optimizationResult.best_solution.total_price.toFixed(2)}</Text>
+            </Space>
+          </div>
+          <div className="mt-4">
+            <Title level={4}>Iteration</Title>
+            <Space>
+              <Tag color="blue">{`Iteration ${optimizationResult.best_solution.iteration}`}</Tag>
+            </Space>
+          </div>
         </div>
       )}
 
       <Row gutter={16} className="mt-8">
         <Col span={12}>
-          <Card title="MTG Card List" className={`ant-card ${theme}`}>
+          <Card 
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>MTG Card List</span>
+                <Select 
+                  value={selectedBuylist} 
+                  onChange={(value) => {
+                    setSelectedBuylist(value);
+                    handleSelectBuylist(value);
+                  }} 
+                  style={{ width: 200 }}
+                  placeholder="Select Buylist"
+                >
+                  {buylists.map(buylist => (
+                    <Option key={buylist.buylist_id} value={buylist.buylist_id}>
+                      {buylist.buylist_name}
+                    </Option>
+                  ))}
+                </Select>
+              </div>
+            } 
+            className={`ant-card ${theme}`}
+          >
             <List
               bordered
               dataSource={cards}
@@ -330,7 +365,7 @@ const Optimize = () => {
             title={
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Site List ({filteredSites.length})</span>
+                  <span>Site List ({selectedSiteCount})</span>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <Select 
                       value={countryFilter} 

@@ -4,7 +4,8 @@ from .card_mappings import (
     CardVersion,
     QUALITY_MAPPING,
     QUALITY_WEIGHTS,
-    LANGUAGE_MAPPING
+    LANGUAGE_MAPPING,
+    LANGUAGE_WEIGHTS
 )
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     'CardVersion',
     'QUALITY_MAPPING',
     'QUALITY_WEIGHTS',
-    'LANGUAGE_MAPPING'
+    'LANGUAGE_MAPPING',
+    'LANGUAGE_WEIGHTS'
 ]

@@ -30,8 +30,9 @@ export const getStandardTableColumns = (onCardClick) => [
           placeholder="Search card name"
           value={selectedKeys[0] || ''}
           onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-          onPressEnter={confirm}
+          onKeyDown={e => e.key === 'Enter' && confirm()}
           style={{ width: 188, marginBottom: 8, display: 'block' }}
+          autoFocus
         />
         <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
         <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
@@ -70,6 +71,20 @@ export const getStandardTableColumns = (onCardClick) => [
     dataIndex: 'quantity',
     key: 'quantity',
     sorter: (a, b) => (a.quantity || 0) - (b.quantity || 0),
+  },
+  {
+    title: 'Language',
+    dataIndex: 'language',
+    key: 'language',
+    sorter: (a, b) => a.language?.localeCompare(b.language),
+    filters: [
+      { text: 'English', value: 'English' },
+      { text: 'Japanese', value: 'Japanese' },
+      { text: 'German', value: 'German' },
+      { text: 'French', value: 'French' },
+      // Add more languages as needed
+    ],
+    onFilter: (value, record) => record.language === value,
   }
 ];
 

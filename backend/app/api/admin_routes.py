@@ -17,6 +17,7 @@ admin_routes = Blueprint("admin_routes", __name__)
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required()
 def get_settings():
+    logger.info("Getting all settings")
     settings = AdminService.get_all_settings()
     return jsonify([setting.to_dict() for setting in settings])
 
@@ -47,7 +48,7 @@ def login():
     if user and user.check_password(data["password"]):
         access_token = create_access_token(identity=user.id)
         current_app.logger.info(f"Login successful for user: {user.username}")
-        return jsonify(access_token=access_token), 200
+        return jsonify(access_token=access_token, userId=user.id), 200  # Return userId
 
     current_app.logger.warning(f"Failed login attempt for user: {data.get('username')}")
     return jsonify({"message": "Invalid username or password"}), 401

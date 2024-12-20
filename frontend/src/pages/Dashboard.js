@@ -8,7 +8,7 @@ import CardDetail from '../components/CardDetail';
 
 const { Title } = Typography;
 
-const Dashboard = () => {
+const Dashboard = ({ userId }) => {
   const [totalSites, setTotalSites] = useState(0);
   const [totalCards, setTotalCards] = useState(0);
   const [latestScans, setLatestScans] = useState([]);
@@ -35,10 +35,10 @@ const Dashboard = () => {
       try {
         setLoading(true);
         const [sitesRes, cardsRes, scansRes, optimizationsRes] = await Promise.all([
-          api.get('/sites'),
-          api.get('/cards'),
-          api.get('/scans?limit=5'),
-          api.get('/results?limit=5')
+          api.get('/sites', { params: { user_id: userId } }), // Add user ID
+          api.get('/cards', { params: { user_id: userId } }), // Add user ID
+          api.get('/scans?limit=5', { params: { user_id: userId } }), // Add user ID
+          api.get('/results?limit=5', { params: { user_id: userId } }) // Add user ID
         ]);
 
         setTotalSites(sitesRes.data.length);
@@ -60,7 +60,7 @@ const Dashboard = () => {
     };
 
     fetchData();
-  }, []);
+  }, [userId]);
 
   const handleCardClick = (card) => {
     setSelectedCard(card);
@@ -72,7 +72,7 @@ const Dashboard = () => {
   };
 
   const renderOptimizationSummary = (result) => {
-    console.log('Processing result:', result);
+    //console.log('Processing result:', result);
     const solutions = result.solutions;
     if (!solutions || solutions.length === 0) {
         console.log('No valid solutions found');

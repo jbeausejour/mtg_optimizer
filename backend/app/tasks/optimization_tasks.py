@@ -68,6 +68,7 @@ class OptimizationTaskManager:
             if not self.current_scan_id:
                 self.create_new_scan()
 
+            processed_combinations = set()
             # Check which cards need updating
             outdated_cards = []
             fresh_cards = []
@@ -89,24 +90,29 @@ class OptimizationTaskManager:
             fresh_results = []
             if fresh_cards:
                 # Convert fresh results to dictionaries immediately
-                fresh_results = [
-                    {
-                        'site_id': r.site_id,
-                        'name': r.name,
-                        'set_name': r.set_name,
-                        'set_code': r.set_code,
-                        'price': round(float(r.price), 2),
-                        'version': getattr(r, 'version', 'Standard'),
-                        'foil': bool(getattr(r, 'foil', False)),
-                        'quality': r.quality,
-                        'language': r.language,
-                        'quantity': int(r.quantity)
-                    }
-                    for r in db.session.query(ScanResult)
-                    .filter(ScanResult.name.in_(fresh_cards))
-                    .filter(ScanResult.site_id.in_(self.site_ids))
-                    .all()
-                ]
+                if fresh_cards:
+                    fresh_query_results = (
+                        db.session.query(ScanResult)
+                        .filter(ScanResult.name.in_(fresh_cards))
+                        .filter(ScanResult.site_id.in_(self.site_ids))
+                        .all()
+                    )
+                    
+                    # Process fresh results with deduplication
+                    for r in fresh_query_results:
+                        # Create unique key for card-site-condition combination
+                        fresh_results.append({
+                            'site_id': r.site_id,
+                            'name': r.name,
+                            'set_name': r.set_name,
+                            'set_code': r.set_code,
+                            'price': round(float(r.price), 2),
+                            'version': getattr(r, 'version', 'Standard'),
+                            'foil': bool(getattr(r, 'foil', False)),
+                            'quality': r.quality,
+                            'language': r.language,
+                            'quantity': int(r.quantity)
+                        })
             
             if not outdated_cards:
                 logger.info("All cards have fresh data, skipping scraping :)")
@@ -129,13 +135,31 @@ class OptimizationTaskManager:
                         [card['name'] for card in outdated_cards]
                     )
                 )
+                # Deduplicate new results before saving
+                deduplicated_new_results = []
                 if new_results:
                     for result in new_results:
-                        ScanService.save_scan_result(scan_id, result)
-                    logger.info(f"Saved {len(new_results)} results with scan_id {scan_id}")
+                        combo_key = (
+                            result['site_id'],
+                            result['name'],
+                            result['set_name'],
+                            result['set_code'],
+                            result['price'],
+                            result['version'],
+                            result['foil'],
+                            result['quality'],
+                            result['language']
+                        )
+                        if combo_key not in processed_combinations:
+                            processed_combinations.add(combo_key)
+                            deduplicated_new_results.append(result)
+                            ScanService.save_scan_result(scan_id, result)
+                    
+                    logger.info(f"Saved {len(deduplicated_new_results)} unique results with scan_id {scan_id}")
                 
-                # Combine fresh and new results
-                all_results = fresh_results + (new_results if new_results else [])
+                # Combine fresh and deduplicated new results
+                all_results = fresh_results + deduplicated_new_results
+                logger.info(f"Total unique card-site combinations in final results: {len(processed_combinations)}")
                 return all_results
             finally:
                 loop.close()
@@ -169,7 +193,7 @@ class OptimizationTaskManager:
             filtered_listings_df = self._process_listings_dataframe(card_listings_df)
             logger.info(f"Filtered listings processed: {len(filtered_listings_df)}")
             user_wishlist_df = pd.DataFrame(self.card_list_from_frontend)
-            logger.info(f"User wishlist listings: {len(filtered_listings_df)}")
+            logger.info(f"User wishlist listings: {len(user_wishlist_df)}")
 
             # Ensure min_quality is included in user_wishlist_df
             if 'quality' in user_wishlist_df.columns:
@@ -241,35 +265,61 @@ class OptimizationTaskManager:
         filtered_df = df[df['quantity'] > 0].copy()
         return filtered_df.sort_values(['name', 'weighted_price'])
 
+    @staticmethod
+    def display_statistics(filtered_listings_df):
+
+        sites_stats = {}
+        # Populate site_stats with the required keys
+        for site in filtered_listings_df['site_name'].unique():
+            site_data = filtered_listings_df[filtered_listings_df['site_name'] == site]
+            nbr_cards_in_buylist = site_data['name'].nunique()
+            total_cards = site_data['quantity'].sum()
+            min_price = site_data['price'].min()
+            max_price = site_data['price'].max()
+            avg_price = site_data['price'].mean()
+            sum_cheapest = site_data.groupby('name')['price'].min().sum()
+            
+            sites_stats[site] = {
+                'nbr_cards_in_buylist': nbr_cards_in_buylist,
+                'total_cards': total_cards,
+                'min_price': min_price,
+                'max_price': max_price,
+                'avg_price': avg_price,
+                'sum_cheapest': sum_cheapest
+            }
+
+        logger.info("Available Sites Statistics:")
+        logger.info("=" * 90)
+        logger.info("Site                      # Cards  Total Cards  Min $   Max $   Avg $   Sum $")
+        logger.info("-" * 90)
+        
+        for site, stats in sorted(sites_stats.items(), key=lambda item: item[1]['nbr_cards_in_buylist'], reverse=True):
+            try:
+                nbr_cards_in_buylist = stats['nbr_cards_in_buylist']
+                total_cards = stats['total_cards']
+                min_price = stats['min_price']
+                max_price = stats['max_price']
+                avg_price = stats['avg_price']
+                sum_cheapest = stats['sum_cheapest']
+                
+                logger.info(f"{site:<25} {nbr_cards_in_buylist:<8} {total_cards:<12} {min_price:<7.2f} {max_price:<7.2f} {avg_price:<7.2f} {sum_cheapest:<6.2f}")
+            except KeyError as e:
+                logger.error(f"Missing key {e} in site stats for {site}")
+        
+        logger.info("=" * 80)
+
+        return len(sites_stats)
+
     def run_optimization(self, filtered_listings_df, user_wishlist_df):
         """Run optimization with the prepared data"""
 
-        logger.info("\n=== Starting Optimization Process ===")
+        logger.info("=== Starting Optimization Process ===")
         
         # Add site statistics debugging
         if not filtered_listings_df.empty:
-            logger.info(f"Total filtered listings: {len(filtered_listings_df)}")
-            site_stats = filtered_listings_df.groupby('site_name').agg({
-                'name': 'count',
-                'price': ['min', 'max', 'mean'],
-                'quantity': 'sum'
-            }).round(2)
+            logger.info(f"Total filtered listings: {len(filtered_listings_df)}")    
             
-            logger.info("Available Sites Statistics:")
-            logger.info("=" * 80)
-            logger.info(f"{'Site':<24} {'Cards':<6} {'Min $':>8} {'Max $':>8} {'Avg $':>8} {'Total Qty':>10}")
-            logger.info("-" * 80)
-            
-            for site_name, stats in site_stats.iterrows():
-                logger.info(
-                    f"{site_name:<24} "
-                    f"{stats[('name', 'count')]:<6} "
-                    f"{stats[('price', 'min')]:>8.2f} "
-                    f"{stats[('price', 'max')]:>8.2f} "
-                    f"{stats[('price', 'mean')]:>8.2f} "
-                    f"{stats[('quantity', 'sum')]:>10}"
-                )
-            logger.info("=" * 80)
+            max_store = self.display_statistics(filtered_listings_df)
 
         try:
             if filtered_listings_df is None or user_wishlist_df is None:
@@ -287,7 +337,7 @@ class OptimizationTaskManager:
                 "hybrid_strat": self.strategy == "hybrid",
                 "min_store": self.min_store,
                 "find_min_store": self.find_min_store,
-                "max_store": len(site_stats)  # Introduce a maximum number of stores to use
+                "max_store": max_store  # Introduce a maximum number of stores to use
             }
             
             optimizer = PurchaseOptimizer(
@@ -322,7 +372,7 @@ class OptimizationTaskManager:
                 for quality in sorted(error_collector.unknown_qualities):
                     logger.warning(f"  - {quality}")
 
-            logger.info("\n=== Optimization Process Completed ===")
+            logger.info("=== Optimization Process Completed ===")
             return optimization_results
                 
         except Exception as e:
@@ -363,30 +413,35 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                                              config.min_store, config.find_min_store)
         logger = task_manager.logger
         # Scraping phase
-        update_progress("Starting scraping", 0)
+        update_progress("Scrapping started", 20)
         scraping_results = task_manager.handle_scraping()
         if not scraping_results:
             return handle_failure("No scraping results found", task_manager)
             
         # Data preparation phase    
-        update_progress("Preparing data", 25)
+        update_progress("Preparing data", 40)
         filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
         if filtered_listings_df is None or filtered_listings_df.empty:
             return handle_failure("No valid card listings found", task_manager)
 
         # Optimization phase
-        update_progress("Running optimization", 50)
+        update_progress("Running optimization", 60)
         optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
         
         # Result processing
-        update_progress("Processing results", 75)
+        update_progress("Processing results", 80)
         if optimization_result and optimization_result.get("status") == "success":
+            best_solution = optimization_result.get('best_solution', {})
+            iterations = optimization_result.get('iterations', [])
+            
             logger.info("Optimization Result received:")
-            logger.info(f"Solution's card count: {len(optimization_result.get('best_solution', []))}")
-            logger.info(f"Iterations count: {len(optimization_result.get('iterations', []))}")
+            logger.info(f"Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}")
+            logger.info(f"Iterations count: {len(iterations)}")
 
+            update_progress("Optimization completed successfully", 100)
             return handle_success(optimization_result, task_manager)
         else:
+            update_progress("Optimization failed", 100)
             return handle_failure("Optimization failed", task_manager, optimization_result)
 
     except Exception as e:
@@ -398,13 +453,56 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
 
 def handle_success(optimization_result: Dict, task_manager: OptimizationTaskManager) -> Dict:
     """Handle successful optimization"""
-    logger.info(f"handle_success: received {len(optimization_result.get('solutions', []))} solutions")
+    best_solution = optimization_result.get('best_solution', {})
+    iterations = optimization_result.get('iterations', [])
+    
+    logger.info(f"handle_success: processing solution with {len(iterations) + 1} total solutions")
+    
+    # Convert solutions to DTO format
+    solutions = []
+    
+    # Process best solution
+    if best_solution:
+        solutions.append(OptimizationSolution(
+            total_price=best_solution['total_price'],
+            number_store=best_solution['number_store'],
+            nbr_card_in_solution=best_solution['nbr_card_in_solution'],
+            total_qty=best_solution['total_qty'],
+            list_stores=best_solution['list_stores'],
+            missing_cards=best_solution['missing_cards'],
+            missing_cards_count=best_solution['missing_cards_count'],
+            stores=[StoreInSolution(
+                site_id=store.get('site_id'),
+                site_name=store['site_name'],
+                cards=[CardInSolution(**card) for card in store['cards']]
+            ) for store in best_solution['stores']],
+            is_best_solution=True
+        ))
+    
+    # Process iterations
+    for iteration in iterations:
+        solutions.append(OptimizationSolution(
+            total_price=iteration['total_price'],
+            number_store=iteration['number_store'],
+            nbr_card_in_solution=iteration['nbr_card_in_solution'],
+            total_qty=iteration['total_qty'],
+            list_stores=iteration['list_stores'],
+            missing_cards=iteration['missing_cards'],
+            missing_cards_count=iteration['missing_cards_count'],
+            stores=[StoreInSolution(
+                site_id=store.get('site_id'),
+                site_name=store['site_name'],
+                cards=[CardInSolution(**card) for card in store['cards']]
+            ) for store in iteration['stores']],
+            is_best_solution=False
+        ))
+
     result_dto = OptimizationResultDTO(
         status="Completed",
         message="Optimization completed successfully",
         sites_scraped=len(task_manager.sites),
         cards_scraped=len(task_manager.card_list_from_frontend),
-        solutions=create_solutions(optimization_result),
+        solutions=solutions,
         errors=optimization_result.get('errors', create_empty_errors())
     )
     
@@ -442,88 +540,3 @@ def create_empty_errors() -> Dict[str, List[str]]:
         'unknown_languages': [],
         'unknown_qualities': []
     }
-
-def create_solutions(optimization_result: Dict) -> List[OptimizationSolution]:
-    """
-    Create a list of OptimizationSolution objects from the optimization result dictionary.
-    """
-    solutions = []
-
-    # Process best_solution
-    best_solution = optimization_result.get('best_solution', [])
-    if best_solution:
-        logger.info("Processing best solution...")
-        try:
-            stores = _process_solution_stores(best_solution)
-            solutions.append(OptimizationSolution(
-                total_price=sum(store.total_price for store in stores),
-                number_store=len(stores),
-                nbr_card_in_solution=len(best_solution),
-                total_qty=sum(card.quantity for store in stores for card in store.cards),
-                list_stores=", ".join(store.site_name for store in stores),
-                missing_cards=[],
-                missing_cards_count=0,
-                stores=stores,
-                is_best_solution=True
-            ))
-        except Exception as e:
-            logger.error(f"Error processing best_solution: {str(e)}")
-
-    # Process iterations
-    iterations = optimization_result.get('iterations', [])
-    if iterations:
-        logger.info(f"Processing {len(iterations)} iterations...")
-        for iteration in iterations:
-            try:
-                iteration_results = iteration.get('sorted_results_df', [])
-                stores = _process_solution_stores(iteration_results)
-                solutions.append(OptimizationSolution(
-                    total_price=iteration.get('total_price', 0),
-                    number_store=iteration.get('number_store', 0),
-                    nbr_card_in_solution=iteration.get('nbr_card_in_solution', 0),
-                    total_qty=sum(card.quantity for store in stores for card in store.cards),
-                    list_stores=", ".join(store.site_name for store in stores),
-                    missing_cards=[],
-                    missing_cards_count=0,
-                    stores=stores,
-                    is_best_solution=False
-                ))
-            except Exception as e:
-                logger.error(f"Error processing iteration: {str(e)}")
-
-    if not solutions:
-        logger.warning("No valid solutions found in optimization result.")
-
-    return solutions
-
-def _process_solution_stores(solution_results: List[Dict]) -> List[StoreInSolution]:
-    """
-    Process the solution results and return a list of StoreInSolution objects.
-    """
-    store_map = {}
-    for record in solution_results:
-        site_id = record.get('site_id')
-        site_name = record.get('site_name', '')
-        card_data = CardInSolution(
-            name=record.get('name'),
-            site_name=site_name,
-            price=float(record.get('price', 0)),
-            quality=record.get('quality', 'NM'),
-            quantity=int(record.get('quantity', 0)),
-            set_name=record.get('set_name', ''),
-            set_code=record.get('set_code', ''),
-            version=record.get('version', 'Standard'),
-            foil=bool(record.get('foil', False)),
-            language=record.get('language', 'English'),
-            site_id=site_id
-        )
-        if site_id not in store_map:
-            store_map[site_id] = StoreInSolution(
-                site_id=site_id,
-                site_name=site_name,
-                cards=[card_data]
-            )
-        else:
-            store_map[site_id].cards.append(card_data)
-
-    return list(store_map.values())

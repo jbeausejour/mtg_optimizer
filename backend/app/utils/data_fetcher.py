@@ -13,6 +13,8 @@ from threading import Lock
 from pyparsing import cpp_style_comment
 import urllib
 
+from torch import cat
+
 from app.extensions import db
 from app.constants import CardLanguage, CardQuality, CardVersion
 from app.services import CardService
@@ -117,7 +119,7 @@ class ExternalDataSynchronizer:
                     tasks.append(task)
                 
                 # Process tasks in batches with proper cleanup
-                BATCH_SIZE = 5
+                BATCH_SIZE = min(max(len(sites) // 4, 3), 10)  # Between 3 and 10
                 total_batches = (len(tasks) + BATCH_SIZE - 1) // BATCH_SIZE
                 
                 for batch_num, i in enumerate(range(0, len(tasks), BATCH_SIZE), 1):
@@ -131,6 +133,7 @@ class ExternalDataSynchronizer:
                                 logger.error(f"Batch processing error: {str(result)}")
                             elif result:
                                 results.extend(result)
+                                #logger.info(f"Processed batch {batch_num}/{total_batches} ({len(result)}/{len(results)})")
                                 
                     except Exception as e:
                         logger.error(f"Error processing batch {batch_num}: {str(e)}")
@@ -206,7 +209,7 @@ class ExternalDataSynchronizer:
                 #self.log_cards_df_stat(site, cards_df)
                 total_cards = len(card_names)
                 found_cards = cards_df['name'].nunique()
-                logger.info(f"Successfully processed {found_cards} cards out of {total_cards} for {site.name}")
+                logger.info(f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name}")
                 
                 # if found_cards < total_cards:
                 #     missing_cards = set(card_names) - set(cards_df['name'].unique())
@@ -239,6 +242,7 @@ class ExternalDataSynchronizer:
             self.log_site_error(site.name, "Processing Error", str(e))
             return None
 
+    @staticmethod
     def extract_magic_set(url):
         try:
             # Split the URL into parts
@@ -285,8 +289,16 @@ class ExternalDataSynchronizer:
             "token colorless",
             "scan other",
             "books",
+            "pbook",
             "dice",
             "pathfinder",
+            "promos: miscellaneous",
+            "brawl",
+        }
+        promo_set_mappings = {
+            'CBL Bundle Promo': 'Commander Legends: Battle for Baldur\'s Gate',
+            'Treasure Chest Promo': 'ixalan promos',
+            'Bundle Promo': 'Promo Pack',  # Generic bundle promos
         }
 
         if soup is None:
@@ -300,45 +312,26 @@ class ExternalDataSynchronizer:
             # Form-based extraction focusing on add-to-cart forms
             forms = soup.find_all("form", {"class": "add-to-cart-form"})
             if not forms:
-                logger.warning(f"No add-to-cart forms found for site {site.name}: \n\nSoup {soup}\n\n")
+                logger.warning(f"No add-to-cart forms found for site {site.name}")
                 forms = soup.find_all("form", {"class": "add-to-cart-form"})
+
             for form in forms:
-                try:
+                try:                
+                    product = form.find_parent("li", {"class": "product"})
+                    if not product:
+                        logger.info(f"Could not find parent product container for form {form}")
+                        continue
+                        
+                    # Check if it's a Magic card
+                    if not self.is_magic_card(product):
+                        logger.debug(f"Skipping non-Magic card product")
+                        continue
                     # Extract data from form attributes
                     data = form.attrs
                     
                     # Skip if required attributes are missing
                     required_attrs = ['data-name', 'data-price', 'data-category', 'data-variant']
                     if not all(attr in data for attr in required_attrs):
-                        continue
-                    
-                    category = data.get('data-category')
-                    set_name = category
-                    # logger.info(f"after data.get('data-category') form: {set_name} ")
-
-
-                    if any(test in category.lower() for test in excluded_categories):
-                        if category == 'Brawl':
-                            product_link = form.find_previous("a", itemprop="url")
-
-                            if product_link:
-                                product_url = product_link.get("href")
-                                set_name = self.extract_magic_set(product_url)
-                        continue
-
-                    # Try to match with closest set name using CardService
-                    set_name = CardService.get_closest_set_name(set_name)
-                    # logger.info(f"after get_closest_set_name form: {set_name} ")
-                    set_code = CardService.get_clean_set_code(set_name)
-                    # logger.info(f"after get_clean_set_code form: {set_code} ")
-
-                        
-                    if not set_name:
-                        logger.info(f"after get_closest_set_name: {set_elem}")
-                        continue
-                    set_code = CardService.get_clean_set_code(set_name)
-                    if not set_name:
-                        logger.info(f"after get_clean_set_code: {set_name}")
                         continue
 
                     current_card = parse_card_string(data['data-name'])
@@ -351,6 +344,43 @@ class ExternalDataSynchronizer:
                     # logger.info(f"after clean_card_name form: {name} ")
                     if not name or (name not in card_names and name.split(" // ")[0].strip() not in card_names):
                         continue
+
+                    category = data.get('data-category')
+                    set_name = category
+                    # logger.info(f"after data.get('data-category') form: {set_name} ")
+
+                    if any(test in category.lower() for test in excluded_categories):
+                        if category == 'Brawl':
+                            product_link = form.find_previous("a", itemprop="url")
+                            # logger.info(f"product_link: {product_link} for site: {site.name}\n {category}")
+                        
+                            if product_link:
+                                product_url = product_link.get("href")
+                                set_name = self.extract_magic_set(product_url)
+                                # logger.info(f"product_url: {product_url} for site: {site.name}\n {set_name}")
+                        elif category == 'Promos: Miscellaneous':
+                            card_name = data.get('data-name', '')
+                            name_parts = card_name.split(' - ')
+                            promo_suffix = name_parts[-1] if len(name_parts) > 1 else None
+                            if promo_suffix and promo_suffix in promo_set_mappings:
+                             set_name =  promo_set_mappings[promo_suffix]
+
+                        continue
+
+                    # Try to match with closest set name using CardService
+                    set_name = CardService.get_closest_set_name(set_name)
+                    if not set_name or set_name.lower() == "unknown":
+                        logger.info(f"after get_closest_set_name: {set_name} for site: {site.name}\n {data}")
+                        continue
+                    # logger.info(f"after get_closest_set_name form: {set_name} ")
+                    set_code = CardService.get_clean_set_code(set_name)
+                    if not set_code or set_code.lower() == "unknown":
+                        logger.info(f"after get_clean_set_code: {set_code} for site: {site.name}\n {data}")
+                        continue
+                    if set_code.lower() == "pbook":
+                        logger.info(f"after pbook: {set_code} name:{set_name} for site: {site.name}\n data: {data}\n {data}")
+                        continue
+                    # logger.info(f"after get_clean_set_code form: {set_code} ")
 
                     test = data.get('data-variant', '').strip()
                     if not test:
@@ -435,6 +465,31 @@ class ExternalDataSynchronizer:
                             if not variant_data:
                                 continue
                             
+                            # Get set name
+                            meta_div = product.find("div", {"class": "meta"})
+                            if not meta_div:
+                                logger.warning(f"Meta div not found for variant")
+                                continue
+
+                            # Get and validate name
+                            name_header = meta_div.find("h4", {"class": "name"}) if meta_div else None
+                            if not name_header:
+                                logger.warning(f"Name header not found for variant")
+                                continue
+
+                            parsed_card = parse_card_string(name_header.text)
+                            if not parsed_card:
+                                logger.warning(f"Failed to parse card name: {name_header.text}")
+                                continue
+
+                            clean_name = clean_card_name(parsed_card.get('Name', name_header.text), card_names)
+                            if not clean_name or (
+                                clean_name not in card_names and 
+                                clean_name.split(" // ")[0].strip() not in card_names
+                                ):
+                                logger.warning(f"Invalid card name: {clean_name}")
+                                continue
+
                             # Extract and validate quality and language
                             quality_language = ExternalDataSynchronizer.normalize_variant_description(
                                 variant_data.text
@@ -458,11 +513,6 @@ class ExternalDataSynchronizer:
                                 logger.warning(f"Invalid price for variant: {price}")
                                 continue
 
-                            # Get set name
-                            meta_div = product.find("div", {"class": "meta"})
-                            if not meta_div:
-                                logger.warning(f"Meta div not found for variant")
-                                continue
                             set_elem = meta_div.find("span", {"class": "category"}) if meta_div else None
                             if not set_elem:
                                 logger.warning(f"Set element not found for variant")
@@ -470,25 +520,6 @@ class ExternalDataSynchronizer:
                             
                             if any(cat in set_elem.text.lower() for cat in excluded_categories):
                                 logger.warning(f"Excluded category found: {set_elem.text}")
-                                continue
-
-                            # Get and validate name
-                            name_header = meta_div.find("h4", {"class": "name"}) if meta_div else None
-                            if not name_header:
-                                logger.warning(f"Name header not found for variant")
-                                continue
-
-                            parsed_card = parse_card_string(name_header.text)
-                            if not parsed_card:
-                                logger.warning(f"Failed to parse card name: {name_header.text}")
-                                continue
-
-                            clean_name = clean_card_name(parsed_card.get('Name', name_header.text), card_names)
-                            if not clean_name or (
-                                clean_name not in card_names and 
-                                clean_name.split(" // ")[0].strip() not in card_names
-                                ):
-                                logger.warning(f"Invalid card name: {clean_name}")
                                 continue
 
                             set_name = CardService.get_closest_set_name(set_elem.text.lower())
@@ -1137,7 +1168,7 @@ class ExternalDataSynchronizer:
             )
             
             if not qty_elem:
-                logger.info(f"No quantity element found in variant {variant}")
+                # logger.info(f"No quantity element found in variant {variant}")
                 return None
             
             # Convert to integer and validate
@@ -1255,8 +1286,12 @@ class ExternalDataSynchronizer:
                 category_link = meta_div.find("a", href=True)
                 if category_link:
                     href = category_link.get("href", "").lower()
-                    # Check if it's in magic singles section
-                    return "magic_singles" in href
+                    if ("magic_singles" in href or 
+                        "cartes_individuelles_magic" in href or
+                        "magic_the_gathering_singles" in href or
+                        "unfinity" in href or
+                        "commander_fallout" in href):
+                        return True
             return False
         except Exception as e:
             logger.error(f"Error checking if product is Magic card: {str(e)}")

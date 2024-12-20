@@ -1,4 +1,5 @@
 import logging
+from cv2 import log
 from flask import Blueprint, jsonify, request, current_app
 from app.services.card_service import CardService
 from app.services.scan_service import ScanService
@@ -14,6 +15,55 @@ logger = logging.getLogger(__name__)
 # Defining Blueprint for Card Routes
 card_routes = Blueprint("card_routes", __name__)
 
+# Buylist Operations
+@card_routes.route("/buylists", methods=["GET"])
+def get_buylists():
+    """Get all saved buylists for a specific user."""
+    try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            logger.error("User ID is missing in the request")
+            return jsonify({"error": "User ID is required"}), 400
+
+        buylists = CardService.get_all_buylists(user_id)
+        logger.info(f"Found {len(buylists)} buylists for user {user_id}: data={buylists}")
+        return jsonify(buylists)
+    except Exception as e:
+        current_app.logger.error(f"Error fetching buylists: {str(e)}")
+        return jsonify({"error": "Failed to fetch buylists"}), 500
+
+@card_routes.route("/buylists", methods=["POST"])
+def save_buylist():
+    """Save a new buylist or update an existing one."""
+    try:
+        data = request.json
+        buylist_id = data.get("buylist_id")
+        buylist_name = data.get("buylist_name")
+        user_id = data.get("user_id")
+        cards = data.get("cards")
+
+        if not buylist_name or not user_id or not cards:
+            return jsonify({"error": "Buylist name, user ID, and cards are required"}), 400
+
+        buylist = CardService.save_buylist(buylist_id, buylist_name, user_id, cards)
+        return jsonify(buylist.to_dict()), 201
+    except Exception as e:
+        current_app.logger.error(f"Error saving buylist: {str(e)}")
+        return jsonify({"error": "Failed to save buylist"}), 500
+
+@card_routes.route("/buylists/<int:buylist_id>", methods=["GET"])
+def load_buylist(buylist_id):
+    """Load a saved buylist by ID."""
+    try:
+        buylist_cards = CardService.get_buylist_cards_by_id(buylist_id)
+        if not buylist_cards:
+            return jsonify({"error": "Buylist not found"}), 404
+
+        return jsonify([card.to_dict() for card in buylist_cards])
+    except Exception as e:
+        current_app.logger.error(f"Error loading buylist: {str(e)}")
+        return jsonify({"error": "Failed to load buylist"}), 500 
+    
 # Card Operations
 @card_routes.route("/cards", methods=["GET"])
 def get_user_buylist_cards():
@@ -62,12 +112,14 @@ def add_user_buylist_card():
             "language": data.get("language", "English"),
             "quantity": data.get("quantity", 0),
             "version": data.get("version", "Standard"),
-            "foil": data.get("foil", False)
+            "foil": data.get("foil", False),
+            "buylist_id": data.get("buylist_id"),  # Use buylist_id
+            "user_id": data.get("user_id")  # Use user_id
         }
 
         # Validate card data
         validation_errors = CardService.validate_card_data(card_data)
-        if validation_errors:
+        if (validation_errors):
             return jsonify({
                 "error": "Validation failed",
                 "details": validation_errors
@@ -198,15 +250,14 @@ def start_scraping():
     #current_app.logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
-    current_app.logger.info(f"Received site_ids: {site_ids}")
     card_list_from_frontend = data.get("card_list", [])
-    #current_app.logger.info(f"Received card_list_from_frontend: {card_list_from_frontend}")
     strategy = data.get("strategy", "milp")
-    current_app.logger.info(f"Received strategy: {strategy}")
     min_store = data.get("min_store", 1)
-    current_app.logger.info(f"Received min_store: {min_store}")
     find_min_store = data.get("find_min_store", False)
-    current_app.logger.info(f"Received find_min_store: {find_min_store}")
+    # current_app.logger.info(f"Received site_ids: {site_ids}")
+    # current_app.logger.info(f"Received strategy: {strategy}")
+    # current_app.logger.info(f"Received min_store: {min_store}")
+    # current_app.logger.info(f"Received find_min_store: {find_min_store}")
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
@@ -215,6 +266,36 @@ def start_scraping():
         args=[site_ids, card_list_from_frontend, strategy, min_store, find_min_store]
     )
     return jsonify({"task_id": task.id}), 202
+
+@card_routes.route('/results', methods=['GET'])
+def get_optimization_results():
+    """Get recent optimization results"""
+    limit = request.args.get('limit', 5, type=int)
+    results = OptimizationService.get_optimization_results(limit)
+    
+    response = []
+    for opt_result in results:
+        response.append({
+            'id': opt_result.scan_id,
+            'created_at': opt_result.created_at.isoformat(),
+            'solutions': opt_result.solutions,
+            'status': opt_result.status,
+            'message': opt_result.message,
+            'sites_scraped': opt_result.sites_scraped,
+            'cards_scraped': opt_result.cards_scraped,
+            'errors': opt_result.errors
+        })
+    
+    return jsonify(response)
+
+@card_routes.route('/purchase_order', methods=['POST'])
+def purchase_order():
+    purchase_data = request.json
+    if not isinstance(purchase_data, dict):
+        return jsonify({"error": "Invalid input format. Expected a dictionary."}), 400
+
+    results = CardService.purchase_order(purchase_data)
+    return jsonify(results)
 
 # Set Operations
 @card_routes.route("/sets", methods=["GET"])
@@ -335,28 +416,6 @@ def update_site(site_id):
             "status": "error",
             "message": "An unexpected error occurred while updating the site"
         }), 500
-
-# Optimization Operations
-@card_routes.route('/results', methods=['GET'])
-def get_optimization_results():
-    """Get recent optimization results"""
-    limit = request.args.get('limit', 5, type=int)
-    results = OptimizationService.get_optimization_results(limit)
-    
-    response = []
-    for opt_result in results:
-        response.append({
-            'id': opt_result.scan_id,
-            'created_at': opt_result.created_at.isoformat(),
-            'solutions': opt_result.solutions,
-            'status': opt_result.status,
-            'message': opt_result.message,
-            'sites_scraped': opt_result.sites_scraped,
-            'cards_scraped': opt_result.cards_scraped,
-            'errors': opt_result.errors
-        })
-    
-    return jsonify(response)
 
 # Fix duplicate function name
 @card_routes.route('/results/<int:scan_id>', methods=['GET'])

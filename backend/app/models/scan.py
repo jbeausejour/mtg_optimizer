@@ -49,6 +49,7 @@ class ScanResult(BaseCard):
             'quantity': self.quantity,
             'set_name': self.set_name,
             'set_code': self.set_code,
+            'language': self.language,
             'version': self.version,
             'site_name': self.site.name if self.site else None
         }

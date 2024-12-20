@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Table, Card, Typography, Tag, Button, Spin, Modal, message } from 'antd';
+import { Table, Card, Typography, Tag, Button, Spin, Modal, message, Select } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import api from '../utils/api';
 import CardDetail from '../components/CardDetail';
@@ -8,7 +8,7 @@ import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title } = Typography;
 
-const PriceTracker = () => {
+const PriceTracker = ({ userId }) => {
   const [scans, setScans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedScan, setSelectedScan] = useState(null);
@@ -32,7 +32,9 @@ const PriceTracker = () => {
 
   const fetchScans = async () => {
     try {
-      const response = await api.get('/scans');
+      const response = await api.get('/scans', {
+        params: { user_id: userId } // Add user ID
+      });
       setScans(response.data);
     } catch (error) {
       console.error('Error fetching scans:', error);
@@ -43,7 +45,9 @@ const PriceTracker = () => {
 
   const fetchScanDetails = async (scanId) => {
     try {
-      const response = await api.get(`/scans/${scanId}`);
+      const response = await api.get(`/scans/${scanId}`, {
+        params: { user_id: userId } // Add user ID
+      });
       console.log('Scan details:', response.data);
       setSelectedScanDetails(response.data);
     } catch (error) {
@@ -85,6 +89,33 @@ const PriceTracker = () => {
       dataIndex: 'site_name',
       key: 'site_name',
       sorter: (a, b) => a.site_name?.localeCompare(b.site_name),
+      filters: getUniqueValues(scans, 'site_name'),
+      onFilter: (value, record) => record.site_name === value,
+      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+        <div style={{ padding: 8 }}>
+          <Select
+            mode="multiple"
+            value={selectedKeys}
+            onChange={keys => setSelectedKeys(keys)}
+            style={{ width: '100%', marginBottom: 8 }}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                confirm();
+              }
+            }}
+          >
+            {getUniqueValues(scans, 'site_name').map(option => (
+              <Select.Option key={option.value} value={option.value}>
+                {option.text}
+              </Select.Option>
+            ))}
+          </Select>
+          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
+          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
+        </div>
+      ),
+      onFilter: (value, record) => record.site_name === value,
     },
     {
       title: 'Last Updated',
@@ -140,6 +171,7 @@ const PriceTracker = () => {
             value={selectedKeys[0]}
             onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
             style={{ width: 188, marginBottom: 8, display: 'block' }}
+            autoFocus
           />
           <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
           <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
@@ -184,7 +216,8 @@ const PriceTracker = () => {
         name: record.name,
         set: setCode,
         language: record.language || 'en',
-        version: record.version || 'Normal'
+        version: record.version || 'Normal',
+        user_id: userId // Add user ID
       };
       
       console.log('3. Request params:', params);

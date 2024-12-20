@@ -40,7 +40,7 @@ class BaseCard(db.Model):
     @validates('set_code')
     def validate_set_code(self, key, set_code):
         """Ensure set_code follows MTG standard format"""
-        if set_code and not re.match(r'^[a-zA-Z0-9]{3,4}$', set_code):
+        if set_code and not re.match(r'^[a-zA-Z0-9]{3,5}$', set_code):
             logger.error(f"Invalid set code format: {set_code}")
             raise ValueError("Invalid set code format")
         return set_code.upper() if set_code else None

@@ -1,56 +1,56 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Table, Spin, Card, Tag, Typography, Button, Space, Modal, message } from 'antd';
+import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
-import api from '../utils/api';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
+import api from '../utils/api';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
-const Results = () => {
-  const [opt_results, setScans] = useState([]);
+const Results = ({ userId }) => {
+  const [optimizationResults, setOptimizationResults] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedOptimizationResult, setSelectedOptimizationResult] = useState(null);
-  const { theme } = useTheme();
-  const navigate = useNavigate();
-  const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [selectedResult, setSelectedResult] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const { theme } = useTheme();
 
   useEffect(() => {
-    fetchScans();
+    fetchResults();
   }, []);
 
-  const fetchScans = async () => {
+  const fetchResults = async () => {
     try {
-      const response = await api.get('/results');
-      console.log('Optimization results:', response.data);
-      setScans(response.data);
+      const response = await api.get('/results', {
+        params: { user_id: userId } // Add user ID
+      });
+      setOptimizationResults(response.data);
     } catch (error) {
-      console.error('Error fetching optmization results:', error);
+      console.error('Error fetching optimization results:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCardClick = async (record) => {
-    setSelectedCard(record);
+  const handleCardClick = async (card) => {
+    setSelectedCard(card);
     setIsLoading(true);
     try {
       const response = await api.get('/fetch_card', {
         params: {
-          name: record.name,
-          set: record.set || record.set_code,
-          language: record.language,
-          version: record.version
+          name: card.name,
+          set: card.set_code || card.set_name,
+          language: card.language || 'English',
+          version: card.version || 'Normal',
+          user_id: userId // Add user ID
         }
       });
 
       if (!response.data?.scryfall) {
-        throw new Error('Invalid data structure received from backend');
+        throw new Error('Invalid card data received');
       }
 
       setCardData(response.data.scryfall);
@@ -63,35 +63,62 @@ const Results = () => {
     }
   };
 
-  const handleModalClose = () => {
-    setIsModalVisible(false);
-    setSelectedCard(null);
-    setCardData(null);
-  };
-
   const columns = [
     {
-      title: 'Scan ID',
+      title: 'ID',
       dataIndex: 'id',
       key: 'id',
+      width: 80,
     },
     {
       title: 'Date',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (text) => new Date(text).toLocaleString(),
+      render: text => new Date(text).toLocaleString(),
+      sorter: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+    },
+    {
+      title: 'Stats',
+      key: 'stats',
+      render: (_, record) => (
+        <Space>
+          <Tag color="blue">{`${record.sites_scraped} Sites`}</Tag>
+          <Tag color="purple">{`${record.cards_scraped} Cards`}</Tag>
+        </Space>
+      ),
     },
     {
       title: 'Best Solution',
       key: 'best_solution',
       render: (_, record) => {
-        const solution = record.solutions?.[0];
-        if (!solution) return 'No solution found';
-        
+        const bestSolution = record.solutions?.find(s => s.is_best_solution);
+        if (!bestSolution) return <Tag color="red">No solution</Tag>;
+
+        const completeness = bestSolution.nbr_card_in_solution === bestSolution.total_qty;
+        const percentage = ((bestSolution.nbr_card_in_solution / bestSolution.total_qty) * 100).toFixed(1);
+
         return (
-          <span>
-            {solution.number_store} stores at ${solution.total_price.toFixed(2)} ({solution.nbr_card_in_solution}/{solution.total_qty || solution.nbr_card_in_solution} cards)
-          </span>
+          <Space>
+            <Tag color="blue">{`${bestSolution.number_store} Stores`}</Tag>
+            <Tag color={completeness ? 'green' : 'orange'}>
+              {completeness ? 'Complete' : `${percentage}%`}
+            </Tag>
+            <Text>${bestSolution.total_price.toFixed(2)}</Text>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Iteration',
+      key: 'iteration',
+      render: (_, record) => {
+        const iterationCount = record.solutions?.filter(s => !s.is_best_solution).length;
+        if (!iterationCount) return <Tag color="red">No iteration</Tag>;
+
+        return (
+          <Space>
+            <Tag color="blue">{`Iteration ${iterationCount}`}</Tag>
+          </Space>
         );
       },
     },
@@ -99,33 +126,14 @@ const Results = () => {
       title: 'Status',
       key: 'status',
       render: (_, record) => {
-        const solution = record.solutions?.[0];
-        if (!solution) return <Tag color="red">Failed</Tag>;
+        const bestSolution = record.solutions?.find(s => s.is_best_solution);
+        if (!bestSolution) return <Tag color="red">Failed</Tag>;
         
-        const completeness = solution.nbr_card_in_solution === (solution.total_qty || solution.nbr_card_in_solution);
-        const percentage = ((solution.nbr_card_in_solution / (solution.total_qty || solution.nbr_card_in_solution)) * 100).toFixed(2);
-        
-        let color = 'green';
-        let status = 'COMPLETE';
-
-        if (record.status === 'failed') {
-          color = 'red';
-          status = 'FAILED';
-        } else if (!completeness) {
-          color = 'orange';
-          status = `${percentage}% (${solution.nbr_card_in_solution}/${solution.total_qty || solution.nbr_card_in_solution})`;
+        if (record.status === 'Completed') {
+          return <Tag color="green" icon={<CheckCircleOutlined />}>Success</Tag>;
         }
         
-        return (
-          <Space>
-            <Tag color={color}>{status}</Tag>
-            {record.message && (
-              <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
-                {record.message}
-              </Typography.Text>
-            )}
-          </Space>
-        );
+        return <Tag color="red" icon={<WarningOutlined />}>{record.status}</Tag>;
       },
     }
   ];
@@ -135,56 +143,55 @@ const Results = () => {
   return (
     <div className={`results section ${theme}`}>
       <Title level={2}>Optimization History</Title>
-      {selectedOptimizationResult ? (
+      
+      {selectedResult ? (
         <>
-          <div className="mb-4">
-            <Button onClick={() => setSelectedOptimizationResult(null)} type="link">
-              ← Back to History
-            </Button>
-          </div>
+          <Button 
+            type="link" 
+            onClick={() => setSelectedResult(null)} 
+            className="mb-4"
+          >
+            ← Back to History
+          </Button>
           <OptimizationSummary 
-            result={selectedOptimizationResult} 
+            result={selectedResult}
             onCardClick={handleCardClick}
           />
         </>
       ) : (
         <Card>
           <Table
-            dataSource={opt_results}
+            dataSource={optimizationResults}
             columns={columns}
             rowKey="id"
-            onRow={(record) => ({
-              onClick: () => setSelectedOptimizationResult(record),
+            onRow={record => ({
+              onClick: () => setSelectedResult(record),
               style: { cursor: 'pointer' }
             })}
           />
         </Card>
       )}
+
       <Modal
         title={selectedCard?.name}
         open={isModalVisible}
-        onCancel={handleModalClose}
+        onCancel={() => {
+          setIsModalVisible(false);
+          setSelectedCard(null);
+          setCardData(null);
+        }}
         width={800}
-        destroyOnClose={true}
-        footer={[
-          <Button key="close" onClick={handleModalClose}>
-            Close
-          </Button>
-        ]}
+        footer={null}
       >
         {isLoading ? (
-          <Spin size="large" />
-        ) : cardData ? (
-          <ScryfallCardView 
-            key={`${selectedCard?.id}-${cardData.id}`}
-            cardData={cardData}
-            mode="view"
-          />
-        ) : (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin />
-            <p>Loading card details...</p>
+          <div className="text-center p-4">
+            <Spin size="large" />
+            <Text className="mt-4">Loading card details...</Text>
           </div>
+        ) : cardData ? (
+          <ScryfallCardView cardData={cardData} mode="view" />
+        ) : (
+          <Text>No card data available</Text>
         )}
       </Modal>
     </div>

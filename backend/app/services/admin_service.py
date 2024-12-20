@@ -41,3 +41,7 @@ class AdminService:
             db.session.add(setting)
         db.session.commit()
         return setting
+
+    @staticmethod
+    def get_all_settings():
+        return Settings.query.all()

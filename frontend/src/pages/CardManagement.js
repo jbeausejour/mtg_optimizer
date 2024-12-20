@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Input, Modal, Button, message, Spin, Space, Popconfirm, Form, List, Tooltip } from 'antd';
-import { EditOutlined, DeleteOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Form, List, Tooltip, Input, Select } from 'antd';
+import { EditOutlined, DeleteOutlined, EyeOutlined, SaveOutlined, FolderOpenOutlined, SearchOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import CardDetail from '../components/CardDetail';
 import api from '../utils/api';
 import { getStandardTableColumns } from '../utils/tableConfig';
-import ScryfallCard from '../components/CardManagement/ScryfallCard'; // Add this import if missing
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
+import debounce from 'lodash/debounce';
 
-const CardManagement = () => {
+const { Option } = Select;
+
+const CardManagement = ({ userId }) => {
   const [cards, setCards] = useState([]);
   const [filteredCards, setFilteredCards] = useState([]);
   const [searchText, setSearchText] = useState('');
@@ -20,18 +22,70 @@ const CardManagement = () => {
   const [form] = Form.useForm();
   const { theme } = useTheme();
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
+  const [buylistName, setBuylistName] = useState('');
+  const [savedBuylists, setSavedBuylists] = useState([]);
+  const [currentBuylistId, setCurrentBuylistId] = useState(null); // Add state for current buylist ID
+  const [suggestions, setSuggestions] = useState([]);
+  const [cardVersions, setCardVersions] = useState(null);
+  const [sets, setSets] = useState([]);
 
   useEffect(() => {
-    fetchCards();
-  }, []);
+    console.log('CardManagement component mounted with userId:', userId);
+    if (userId) {
+      fetchSavedBuylists();
+    }
+  }, [userId]);
 
-  const fetchCards = async () => {
+  useEffect(() => {
+    if (savedBuylists.length > 0 && !currentBuylistId) {
+      setCurrentBuylistId(savedBuylists[0].buylist_id);
+    }
+  }, [savedBuylists]);
+
+  useEffect(() => {
+    if (currentBuylistId) {
+      handleLoadBuylist(currentBuylistId);
+    }
+  }, [currentBuylistId]);
+
+  const fetchSavedBuylists = async () => {
     try {
-      const response = await api.get('/cards'); 
-      setCards(response.data);
-      setFilteredCards(response.data);  // Initialize the filtered list
+      const response = await api.get('/buylists', { params: { user_id: userId } });
+      setSavedBuylists(response.data);
     } catch (error) {
-      message.error('Failed to fetch user buylist');
+      message.error('Failed to fetch saved buylists');
+    }
+  };
+
+  const handleSaveBuylist = async () => {
+    if (!buylistName && !currentBuylistId) {
+      message.error('Please enter a name for the buylist');
+      return;
+    }
+
+    try {
+      console.log('Saving buylist for userId:', userId);
+      const response = await api.post('/buylists', { buylist_id: currentBuylistId, buylist_name: buylistName, user_id: userId, cards });
+      message.success('Buylist saved successfully');
+      fetchSavedBuylists();
+      setCurrentBuylistId(response.data.buylist_id); // Set the current buylist ID
+    } catch (error) {
+      message.error(`Failed to save buylist: ${error.message}`);
+    }
+  };
+
+  const handleLoadBuylist = async (buylistId) => {
+    try {
+      const response = await api.get(`/buylists/${buylistId}`, {
+        params: { user_id: userId }
+      });
+      setCards(response.data);
+      setFilteredCards(response.data);
+      setCurrentBuylistId(buylistId); 
+      setBuylistName(response.data[0]?.buylist_name || ''); 
+      message.success('Buylist loaded successfully');
+    } catch (error) {
+      message.error(`Failed to load buylist: ${error.message}`);
     }
   };
 
@@ -44,25 +98,26 @@ const CardManagement = () => {
       set_code: card.set_code,
       full_record: card
     });
-  
+
     setSelectedCard(card);
     setModalMode('view');
     setIsLoading(true);
     try {
       const params = {
         name: card.name,
-        set: card.set || card.set_code || card.set_name, // Try all possible set identifiers
+        set: card.set || card.set_code || card.set_name,
         language: card.language || 'en',
-        version: card.version || 'Normal'
+        version: card.version || 'Normal',
+        user_id: userId // Add user ID
       };
       console.log('Request params:', params);
-  
+
       const response = await api.get('/fetch_card', { params });
       console.log('Response:', response.data);
       if (!response.data?.scryfall) {
         throw new Error('Invalid data structure received from backend');
       }
-  
+
       setCardData(response.data.scryfall);
       setIsModalVisible(true);
     } catch (error) {
@@ -82,9 +137,10 @@ const CardManagement = () => {
       const response = await api.get('/fetch_card', {
         params: {
           name: card.name,
-          set: card.set,  // Use set code instead of set_name
+          set: card.set,
           language: card.language,
-          version: card.version
+          version: card.version,
+          user_id: userId // Add user ID
         }
       });
 
@@ -102,55 +158,6 @@ const CardManagement = () => {
     }
   };
 
-  const handleCardClick = async (card) => {
-    console.group('Card Click Flow');
-    console.log('1. Initial card data:', card);
-  
-    if (!card.name) {
-      console.error('Card name missing');
-      console.groupEnd();
-      message.error('Card name is missing');
-      return;
-    }
-  
-    setSelectedCard(card);
-    setIsLoading(true);
-  
-    try {
-      console.log('2. Fetching card with params:', {
-        name: card.name,
-        set: card.set || card.set_code, // Try both set and set_code
-        language: card.language,
-        version: card.version
-      });
-  
-      const response = await api.get('/fetch_card', {
-        params: {
-          name: card.name,
-          set: card.set || card.set_code, // Try both set and set_code
-          language: card.language,
-          version: card.version
-        }
-      });
-  
-      console.log('3. Raw API response:', response);
-      console.log('4. Response data:', response.data);
-  
-      if (!response.data?.scryfall) {
-        throw new Error('Invalid data structure received from backend');
-      }
-  
-      setCardData(response.data.scryfall);
-      setIsModalVisible(true);
-    } catch (error) {
-      console.error('5. Error details:', error);
-      message.error(`Failed to fetch card details: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-      console.groupEnd();
-    }
-  };
-
   const handleModalClose = () => {
     console.log('Modal closing, clearing states');
     setIsModalVisible(false);
@@ -163,36 +170,35 @@ const CardManagement = () => {
     console.group('Save Edit Flow');
     console.log('1. Selected printing:', selectedPrinting);
     console.log('2. Selected card:', selectedCard);
-  
+
     if (!selectedCard || !selectedPrinting) {
       console.error('Missing required data');
       console.groupEnd();
       message.error('No card or printing selected');
       return;
     }
-  
+
     const updatedCard = {
       id: selectedCard.id,
       name: selectedPrinting.name,
-      set: selectedPrinting.set,        // This will be mapped to set_code in backend
+      set: selectedPrinting.set,
       set_name: selectedPrinting.set_name,
       language: selectedPrinting.lang || selectedCard.language,
       quantity: selectedCard.quantity,
       version: selectedPrinting.version || selectedCard.version,
       foil: selectedCard.foil
     };
-  
+
     console.log('3. Updating card with:', updatedCard);
-  
+
     try {
-      const response = await api.put(`/cards/${selectedCard.id}`, updatedCard);
+      const response = await api.put(`/cards/${selectedCard.id}`, { ...updatedCard, user_id: userId }); // Add user ID
       console.log('4. Update response:', response);
-  
+
       if (!response.data) {
         throw new Error('No data received from update');
       }
-  
-      // Update local state
+
       setCards((prevCards) =>
         prevCards.map((card) =>
           card.id === response.data.id ? response.data : card
@@ -203,7 +209,7 @@ const CardManagement = () => {
           card.id === response.data.id ? response.data : card
         )
       );
-  
+
       message.success('Card updated successfully');
       handleModalClose();
     } catch (error) {
@@ -216,7 +222,9 @@ const CardManagement = () => {
 
   const handleDeleteCard = async (cardId) => {
     try {
-      await api.delete(`/cards/${cardId}`);
+      await api.delete(`/cards/${cardId}`, {
+        params: { user_id: userId } // Add user ID
+      });
       message.success('Card deleted successfully');
       setCards((prev) => prev.filter((card) => card.id !== cardId));
       setFilteredCards((prev) => prev.filter((card) => card.id !== cardId));
@@ -227,10 +235,7 @@ const CardManagement = () => {
 
   const handleSearch = (value) => {
     setSearchText(value);
-    const filtered = cards.filter((card) =>
-      card.name?.toLowerCase().includes(value.toLowerCase())
-    );
-    setFilteredCards(filtered);
+    debouncedFetchSuggestions(value);
   };
 
   const handleSetClick = async (setCode) => {
@@ -243,8 +248,62 @@ const CardManagement = () => {
     }
   };
 
+  const handleNewBuylist = () => {
+    setBuylistName('');
+    setCards([]);
+    setFilteredCards([]);
+    setCurrentBuylistId(null); // Reset current buylist ID
+    message.success('New buylist created. Please add cards and save.');
+  };
+
+  const fetchSuggestions = async (query) => {
+    if (query.length > 2) {
+      try {
+        const response = await api.get(`/card_suggestions?query=${query}`, {
+          params: { user_id: userId } // Add user ID
+        });
+        console.log('Suggestions received:', response.data);
+        setSuggestions(response.data.map(name => ({ value: name })));
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        setSuggestions([]);
+      }
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const fetchCardVersions = async (cardName) => {
+    try {
+      const response = await api.get(`/card_versions?name=${encodeURIComponent(cardName)}`, {
+        params: { user_id: userId } // Add user ID
+      });
+      console.log('Card versions received:', response.data);
+      setCardVersions(response.data);
+      setSets(response.data.sets);
+    } catch (error) {
+      console.error('Error fetching card versions:', error);
+      setCardVersions(null);
+      setSets([]);
+    }
+  };
+
+  const debouncedFetchSuggestions = debounce(fetchSuggestions, 300);
+
+  const handleSelectCard = (value) => {
+    const newCard = {
+      name: value,
+      quantity: 1,
+      set_name: '',
+      quality: 'NM'
+    };
+    setCards([...cards, newCard]);
+    setFilteredCards([...filteredCards, newCard]);
+    setSearchText('');
+  };
+
   const columns = [
-    ...getStandardTableColumns(handleViewCard), // Use handleViewCard instead of handleCardClick
+    ...getStandardTableColumns(handleViewCard),
     {
       title: 'Actions',
       key: 'actions',
@@ -277,23 +336,78 @@ const CardManagement = () => {
   return (
     <div className="card-management">
       <h1>Card Management</h1>
-      <Input
-        placeholder="Search cards..."
+      {currentBuylistId && <h2>Editing Buylist: {buylistName}</h2>} {/* Indicate current buylist */}
+      <AutoComplete
         value={searchText}
-        onChange={(e) => handleSearch(e.target.value)}
+        options={suggestions}
+        onSearch={(text) => {
+          setSearchText(text);
+          handleSearch(text);
+        }}
+        onSelect={handleSelectCard}
+        placeholder="Search cards..."
         style={{ 
           marginBottom: 16,
-          width: '300px'  // Set a fixed width for the search box
+          width: '300px'
         }}
         prefix={<SearchOutlined />}
       />
+      <Input
+        placeholder="Buylist name..."
+        value={buylistName}
+        onChange={(e) => setBuylistName(e.target.value)}
+        style={{ 
+          marginBottom: 16,
+          width: '300px'
+        }}
+        prefix={<SaveOutlined />}
+      />
+      <Button
+        type="primary"
+        icon={<SaveOutlined />}
+        onClick={handleSaveBuylist}
+        style={{ marginBottom: 16, marginRight: 8 }}
+      >
+        Save Buylist
+      </Button>
+      <Button
+        type="default"
+        icon={<FolderOpenOutlined />}
+        onClick={handleNewBuylist}
+        style={{ marginBottom: 16 }}
+      >
+        New Buylist
+      </Button>
+      <h3 style={{ fontWeight: 'bold', marginTop: 24 }}>Saved Buylists</h3>
+      <List
+        bordered
+        dataSource={savedBuylists}
+        renderItem={item => (
+          <List.Item
+            actions={[
+              <Button
+                type="link"
+                icon={<FolderOpenOutlined />}
+                onClick={() => handleLoadBuylist(item.buylist_id)}
+              >
+                Load
+              </Button>
+            ]}
+            style={item.buylist_id === currentBuylistId ? { fontWeight: 'bold' } : {}}
+          >
+            {item.buylist_name}
+          </List.Item>
+        )}
+        style={{ marginBottom: 16 }}
+      />
+      <h3 style={{ fontWeight: 'bold', marginTop: 24 }}>Buylist Cards</h3>
       <Table
         dataSource={filteredCards}
         columns={columns}
         rowKey="id"
         className={`ant-table ${theme}`}
         onRow={(record) => ({
-          onClick: () => handleViewCard(record), // Use handleViewCard for row clicks
+          onClick: () => handleViewCard(record),
         })}
         pagination={false}
       />

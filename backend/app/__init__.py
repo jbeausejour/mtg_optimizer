@@ -3,7 +3,8 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from flask import Flask
+from flask import Flask, jsonify
+from flask_jwt_extended import JWTManager
 
 from config import get_config
 
@@ -64,6 +65,14 @@ def create_app(config_class=get_config()):
     app.config.from_object(config_class)
 
     init_extensions(app)
+    
+    jwt = JWTManager(app)
+    @jwt.expired_token_loader
+    def expired_token_callback(jwt_header, expired_token):
+        return jsonify({
+            "msg": "Token has expired",
+            "token_type": expired_token['type']
+        }), 401
 
     celery_app.conf.update(app.config)
 

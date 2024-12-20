@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../utils/AuthContext';
 import './Login.css';  // Using the global CSS
 
-const Login = () => {
+const Login = ({ onLogin }) => { // Add onLogin as a prop
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -28,8 +28,9 @@ const Login = () => {
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      await login(values);
+      const userId = await login(values); // Assume login returns userId
       message.success('Login successful');
+      onLogin(userId); // Call onLogin with userId
       navigate('/');
     } catch (error) {
       message.error('Login failed: ' + (error.response?.data?.message || error.message));

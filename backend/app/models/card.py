@@ -11,6 +11,8 @@ class UserBuylistCard(BaseCard):
     __tablename__ = "user_buylist_card"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    buylist_id = db.Column(db.Integer, nullable=False)
+    buylist_name = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
@@ -31,7 +33,7 @@ class UserBuylistCard(BaseCard):
         base_dict = super().to_dict()
         base_dict.update({
             "id": self.id,
-            "name": self.name, 
+            "buylist_name": self.buylist_name, 
             "set_code": self.set_code, 
             "set_name": self.set_name,
             "language": self.language,

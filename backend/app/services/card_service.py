@@ -1,7 +1,6 @@
-from threading import Lock
-from datetime import datetime, timedelta
+from datetime import datetime
 import re  # Add this import
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from app.extensions import db
 from app.models.card import UserBuylistCard
 from mtgsdk import Card, Set
@@ -11,7 +10,6 @@ from fuzzywuzzy import fuzz, process
 from flask import current_app
 from contextlib import contextmanager
 from app.constants.card_mappings import CardLanguage, CardVersion
-import json
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -32,6 +30,24 @@ class CardService:
         """Initialize the sets cache during class creation"""
         cls._refresh_sets_cache()
     
+    @contextmanager
+    def transaction_context():
+        """Context manager for database transactions"""
+        try:
+            yield
+            db.session.commit()
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logger.error(f"Database error: {str(e)}")
+            raise
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error in transaction: {str(e)}")
+            raise
+        finally:
+            db.session.close()
+
+    # Cache realted functions
     @classmethod
     def _refresh_sets_cache(cls):
         """Internal method to refresh the sets cache"""
@@ -45,8 +61,11 @@ class CardService:
                 raise ValueError("Invalid response format from Scryfall API")
 
             sets_data = {}
+            excluded_set_types = {"minigame", "alchemy", "box", "memorabilia", "treasure_chest"}
             for set_data in data["data"]:
                 try:
+                    if set_data["set_type"] in excluded_set_types:
+                        continue
                     set_name = set_data["name"].lower()
                     sets_data[set_name] = {
                         "code": set_data["code"],
@@ -79,12 +98,30 @@ class CardService:
         session.mount('https://', HTTPAdapter(max_retries=retries))
         return session
 
+    # Set Operations
     @classmethod
     def get_sets_data(cls, force_refresh=False):
         """Get sets data from cache or refresh if needed"""
         if force_refresh or not cls._sets_cache:
             cls._refresh_sets_cache()
         return cls._sets_cache
+    
+    @staticmethod
+    def fetch_all_sets():
+        try:
+            sets = Set.all()
+            sets_data = [
+                {
+                    "set": card_set.code,
+                    "name": card_set.name,
+                    "released_at": card_set.release_date,
+                }
+                for card_set in sets
+            ]
+            return sets_data
+        except Exception as e:
+            current_app.logger.error(f"Error fetching sets data: {str(e)}")
+            return []
 
     @classmethod
     def _normalize_set_name(cls, name):
@@ -94,6 +131,55 @@ class CardService:
 
         name_lower = name.lower().strip()
         
+        # Special handling for "Extras" suffix
+        extras_pattern = re.compile(r'^([^:]+)(?::|-)?\s*extras$')
+        extras_match = extras_pattern.match(name_lower)
+        if extras_match:
+            base_set = extras_match.group(1).strip()
+            # Get base set name if it exists
+            full_set_name = cls._find_full_set_name(base_set)
+            extras_variants = [
+                name_lower,                    # Original form
+                base_set,                      # Base set code
+                f"{base_set} extras",          # Space format
+                f"{base_set}: extras",         # Colon format
+                f"{base_set}:extras",          # No space format
+            ]
+            if full_set_name:
+                extras_variants.extend([
+                    full_set_name,                     # Full name
+                    f"{full_set_name} extras",         # Full name with extras
+                    f"{full_set_name}: extras"         # Full name with colon extras
+                ])
+            return list(set(var for var in extras_variants if var))
+
+        # Special promo and product mappings
+        promo_mappings = {
+            'cbl bundle promo': 'Commander Legends: Battle for Baldur\'s Gate',
+            'treasure chest promo': 'Treasure Chest',
+            'ikoria: extras': 'ikoria: lair of behemoths',
+            'znr: extras': 'zendikar rising',
+            'afr extras': 'adventures in the forgotten realms',
+            'promos: miscellaneous': 'Judge Gift Cards',
+            'brawl deck exclusive': 'Commander Collection',
+            'brawl': 'Commander Collection',
+            'the list': 'Mystery Booster: The List',
+            'set boosters reserved list': 'Mystery Booster: The List'
+        }
+
+        # Handle catalog numbers first
+        catalog_match = re.match(r'#\d+\s*-\s*(.*)', name_lower)
+        if catalog_match:
+            cleaned_catalog = catalog_match.group(1).strip()
+            if cleaned_catalog in promo_mappings:
+                normalized = promo_mappings[cleaned_catalog]
+                return [name_lower, cleaned_catalog, normalized, normalized.lower()]
+        
+        # Direct promo mapping check
+        if name_lower in promo_mappings:
+            normalized = promo_mappings[name_lower]
+            return [name_lower, normalized, normalized.lower()]
+
         # Enhanced patterns for numbered editions and catalog numbers
         patterns_to_clean = [
             (r'#\d+\s*-\s*', ''),           # Remove "#159 - " style prefixes
@@ -120,31 +206,95 @@ class CardService:
 
         # Common set name mappings
         set_mappings = {
-            'lord of the rings': ['ltr', 'lotr', 'middle earth'],
-            'mystery booster': ['mb1', 'mystery', 'the list'],
-            'promotional': ['promo', 'p'],
-            'universes beyond': ['ub'],
-            'warhammer 40': ['40k', 'warhammer', '40,000'],
-            'doctor who': ['who', 'dr who', 'dr. who'],
-            'origins': ['ori'],
-            'expeditions': ['exp', 'mps', 'zne'],
-            'battle for zendikar expeditions': ['exp', 'zne'],
-            'judge rewards': ['j', 'judge', 'judge gift'],
-            'promo pack': ['plist'],
-            'extended art': ['ea'],
+            # D&D Universe sets
+            'adventures in the forgotten realms': [
+                'afr',
+                'afr extras',
+                'afr: extras',
+                'afr:extras',
+                'forgotten realms',
+                'd&d',
+                'dungeons & dragons'
+            ],
+            
+            # Zendikar sets
+            'zendikar rising': [
+                'znr',
+                'znr extras',
+                'znr: extras',
+                'znr:extras',
+                'zendikar',
+                'zendikar rising extras'
+            ],
+            
+            # Other Modern Sets with Extras
+            'innistrad midnight hunt': [
+                'mid',
+                'mid extras',
+                'mid: extras',
+                'mid:extras'
+            ],
+            'innistrad crimson vow': [
+                'vow',
+                'vow extras',
+                'vow: extras',
+                'vow:extras'
+            ],
+            'kamigawa neon dynasty': [
+                'neo',
+                'neo extras',
+                'neo: extras',
+                'neo:extras'
+            ],
+            
+            # Lord of the Rings sets
+            'tales of middle-earth': ['ltr', 'lotr', 'lord of the rings', 'middle earth'],
+            
+            # D&D Universe sets - separated by specific set
+            'commander legends: battle for baldurs gate': ['clb', 'baldurs gate', 'baldur\'s gate'],
+            'commander legends': ['cmr'],  # Original Commander Legends
+            # Mystery Booster variants
+            'mystery booster': ['mb1'],
+            'mystery booster: the list': ['the list', 'set boosters reserved list'],
+            
+            # Promotional sets
+            'promotional': ['promo'],
+            'judge gift cards': ['j', 'judge', 'judge gift', 'promos: miscellaneous'],
+            'pre-release promos': ['pr', 'prerelease', 'pre-release'],
+            
+            # Special products
+            'commander collection': ['cc1', 'cc2'],
             'modern event deck': ['md1'],
-            'pre-release': ['pr', 'prerelease'],
+            
+            # Expeditions/Special sets
+            'zendikar expeditions': ['exp', 'zne'],
+            'masterpiece series': ['mps'],
+            
+            # Universe Beyond
+            'universes beyond': ['ub'],
+            'warhammer 40,000': ['40k', 'warhammer 40k'],
+            'doctor who': ['who', 'dr who', 'dr. who'],
+            
+            # Standard sets
             'kaldheim': ['khm'],
-            'universe beyond': ['ub'],
-            'dungeons & dragons': ['d&d', 'dnd', 'forgotten realms', 'adventures in the forgotten realms', 'afr'],
-            'd&d': ['dnd', 'dungeons & dragons', 'forgotten realms', 'adventures in the forgotten realms', 'afr'],
-            'forgotten realms': ['d&d', 'dnd', 'dungeons & dragons', 'adventures in the forgotten realms', 'afr'],
-            'baldurs gate': ['clb', 'baldur\'s gate', 'baldurs', 'battle for baldurs gate'],
-            'commander legends': ['clb', 'battle for baldurs gate']
+            'origins': ['ori']
         }
 
         # Additional prefixes to remove
-        extra_prefixes = [
+        prefixes = [
+            'promo pack:', 'promo packs:', 
+            'commander:', 'commander ',
+            'token:', 'tokens:', 
+            'minigame:', 'minigames:',
+            'art series:', 'art cards:',
+            'promos:', 'promo:', 
+            'extras:', 'extra:',
+            'box:', 'box set:',
+            'game day:', 'gameday:',
+            'prerelease:', 'pre-release:',
+            'release:', 'release event:',
+            'buy-a-box:', 'bundle:', 
+            'media:', 'media insert:',
             'universes beyond:', 'universe beyond:',
             'singles:', 'singles',
             'non-foil:', 'non-foil',
@@ -158,8 +308,6 @@ class CardService:
             'commander: universe beyond:',
             'commander: universes beyond:',
         ]
-
-        results = [name_lower]
 
         # Apply edition pattern replacements
         normalized = name_lower
@@ -179,24 +327,6 @@ class CardService:
                     results.append(f"commander {variant}")
                     results.append(f"universe beyond {variant}")
                     results.append(f"universes beyond {variant}")
-
-        # Remove standard prefixes (from existing code)
-        prefixes = [
-            'promo pack:', 'promo packs:', 
-            'commander:', 'commander ',
-            'token:', 'tokens:', 
-            'minigame:', 'minigames:',
-            'art series:', 'art cards:',
-            'promos:', 'promo:', 
-            'extras:', 'extra:',
-            'box:', 'box set:',
-            'game day:', 'gameday:',
-            'prerelease:', 'pre-release:',
-            'release:', 'release event:',
-            'buy-a-box:', 'bundle:', 
-            'media:', 'media insert:'
-        ]
-        prefixes.extend(extra_prefixes)
 
         # Remove prefixes and add results
         for prefix in prefixes:
@@ -282,7 +412,8 @@ class CardService:
             logger.error(f"Error during fuzzy matching: {str(e)}")
             return "unknown"  # Fallback on error
 
-        logger.warning(f"No match found for set: {set_name}")
+        logger.warning(f"No match found for set: {set_name}.")
+        logger.warning(f"Normalized names tried: {normalized_names}.")
         return "unknown"  # Default fallback when no match found
 
     @classmethod
@@ -331,6 +462,12 @@ class CardService:
         except Exception as e:
             logger.error(f"Error during fuzzy matching of set name: {str(e)}")
 
+        # Check for "promo" in the name and match against promo sets
+        if "promo" in unclean_set_name.lower():
+            for set_info in sets_data.values():
+                if set_info["set_type"] == "promo":
+                    return set_info["name"]
+
         return unclean_set_name  # Return original if no match found
 
     @classmethod
@@ -350,24 +487,73 @@ class CardService:
 
         # Then get the set code using the existing method
         return cls.get_set_code(clean_set_name)
+    
+    @classmethod
+    def _find_full_set_name(cls, code):
+        """Find full set name from a set code."""
+        # Common set code to full name mappings
+        known_sets = {
+            'znr': 'zendikar rising',
+            'afr': 'adventures in the forgotten realms',
+            'neo': 'kamigawa neon dynasty',
+            'dmu': 'dominaria united',
+            'one': 'phyrexia all will be one',
+            'mom': 'march of the machine',
+            'ltr': 'lord of the rings',
+            'bro': 'the brothers war',
+            'woe': 'wilds of eldraine',
+            'lci': 'lost caverns of ixalan',
+            'mkm': 'murders at karlov manor',
+            'who': 'doctor who',
+            'mat': 'march of the machine aftermath',
+            'mid': 'innistrad midnight hunt',
+            'vow': 'innistrad crimson vow',
+            'snc': 'streets of new capenna',
+            'ncc': 'new capenna commander',
+            'clb': 'commander legends battle for baldurs gate',
+            '40k': 'warhammer 40000',
+            'dmc': 'dominaria united commander',
+            'brc': 'brother\'s war commander',
+            # Add more as needed
+        }
+        return known_sets.get(code.lower())
 
-    @contextmanager
-    def transaction_context():
-        """Context manager for database transactions"""
-        try:
-            yield
-            db.session.commit()
-        except SQLAlchemyError as e:
-            db.session.rollback()
-            logger.error(f"Database error: {str(e)}")
-            raise
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error in transaction: {str(e)}")
-            raise
-        finally:
-            db.session.close()
-
+    @classmethod
+    def _get_all_set_variants(cls, set_name):
+        """Get all possible variants of a set name including extras versions."""
+        variants = []
+        name_lower = set_name.lower()
+        
+        # Base variants
+        variants.extend([
+            name_lower,
+            name_lower.replace(' ', ''),
+            name_lower.replace(':', ''),
+            name_lower.replace(':', ' '),
+        ])
+        
+        # Add extras variants
+        extras_variants = [
+            f"{name_lower} extras",
+            f"{name_lower}: extras",
+            f"{name_lower}:extras",
+        ]
+        variants.extend(extras_variants)
+        
+        # If it's a known set code, add full name variants
+        full_name = cls._find_full_set_name(name_lower)
+        if full_name:
+            full_variants = [
+                full_name,
+                f"{full_name} extras",
+                f"{full_name}: extras",
+                full_name.replace(' ', ''),
+                full_name.replace(':', ''),
+            ]
+            variants.extend(full_variants)
+        
+        # Remove duplicates and empty strings
+        return list(set(v for v in variants if v))
     # Card Operations
     @staticmethod
     def get_user_buylist_cards():
@@ -381,7 +567,7 @@ class CardService:
         return Card.query.filter_by(id=card_id).first()
     
     @staticmethod
-    def add_user_buylist_card(card_id=None, name=None, set_name=None, language="English", quantity=1, version="Standard", foil=False):
+    def add_user_buylist_card(card_id=None, name=None, set_name=None, language="English", quantity=1, version="Standard", foil=False, buylist_id=None, user_id=None):
         """Save a new card or update an existing card with proper validation and error handling"""
         try:
             with CardService.transaction_context():
@@ -409,6 +595,8 @@ class CardService:
                     card.quantity = quantity
                     card.version = version
                     card.foil = foil
+                    card.buylist_id = buylist_id  
+                    card.user_id = user_id 
                 else:
                     card = UserBuylistCard(
                         name=name,
@@ -418,6 +606,8 @@ class CardService:
                         quantity=quantity,
                         version=version,
                         foil=foil,
+                        buylist_id=buylist_id,
+                        user_id=user_id
                     )
                     db.session.add(card)
                 
@@ -445,6 +635,7 @@ class CardService:
             card.quantity = data.get("quantity", card.quantity)
             card.version = data.get("version", card.version)
             card.foil = data.get("foil", card.foil)
+            card.buylist_name = data.get("buylist_name", card.buylist_name)  # Add this line
 
             current_app.logger.info(f"Updated card data: {card.to_dict()}")
             db.session.commit()
@@ -454,36 +645,78 @@ class CardService:
             current_app.logger.error(f"Error updating card: {str(e)}")
             db.session.rollback()
             raise
+    
+    @staticmethod
+    def get_all_buylists(user_id):
+        """Get all saved buylists for a specific user."""
+        try:
+            buylists = UserBuylistCard.query.with_entities(UserBuylistCard.buylist_id, UserBuylistCard.buylist_name).filter_by(user_id=user_id).distinct().all()
+            return [{"buylist_id": buylist[0], "buylist_name": buylist[1]} for buylist in buylists]
+        except Exception as e:
+            logger.error(f"Error fetching buylists: {str(e)}")
+            raise
 
     @staticmethod
-    def fetch_scryfall_card_data(card_name, set_code=None, language=None, version=None):
+    def save_buylist(buylist_id, buylist_name, user_id, cards):
+        """Save a new buylist or update an existing one."""
         try:
-            data = CardService.fetch_scryfall_data(card_name, set_code, language, version)
-            if not data:
-                current_app.logger.debug(f"No data found for card '{card_name}'")
-                return None
-            return data
+            with CardService.transaction_context():
+                buylist = UserBuylistCard.query.filter_by(buylist_id=buylist_id, user_id=user_id).first()
+                if buylist:
+                    # Update existing buylist
+                    buylist.cards = cards
+                    db.session.add(buylist)  # Ensure the buylist is added to the session
+                else:
+                    # Create new buylist
+                    max_buylist_id = db.session.query(db.func.max(UserBuylistCard.buylist_id)).filter_by(user_id=user_id).scalar() or 0
+                    new_buylist_id = max_buylist_id + 1
+                    for card in cards:
+                        new_card = UserBuylistCard(
+                            name=card['name'],
+                            set_code=card.get('set_code'),
+                            set_name=card.get('set_name'),
+                            language=card.get('language', 'English'),
+                            quantity=card.get('quantity', 1),
+                            version=card.get('version', 'Standard'),
+                            foil=card.get('foil', False),
+                            buylist_id=new_buylist_id,
+                            buylist_name=buylist_name,
+                            user_id=user_id
+                        )
+                        db.session.add(new_card)  # Ensure each new card is added to the session
+                db.session.commit()  # Commit the session after adding all cards
+                return buylist or new_card
         except Exception as e:
-            current_app.logger.error(f"Error in fetch_card_data: {str(e)}")
-            return None
-        
-    # Set Operations
+            logger.error(f"Error saving buylist: {str(e)}")
+            db.session.rollback()
+            raise
+
     @staticmethod
-    def fetch_all_sets():
+    def get_buylist_by_id(buylist_id):
+        """Get a saved buylist by ID."""
         try:
-            sets = Set.all()
-            sets_data = [
-                {
-                    "set": card_set.code,
-                    "name": card_set.name,
-                    "released_at": card_set.release_date,
-                }
-                for card_set in sets
-            ]
-            return sets_data
+            return UserBuylistCard.query.get(buylist_id)
         except Exception as e:
-            current_app.logger.error(f"Error fetching sets data: {str(e)}")
-            return []
+            logger.error(f"Error fetching buylist: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_buylist_by_name(buylist_name):
+        """Get a saved buylist by name."""
+        try:
+            return UserBuylistCard.query.filter_by(buylist_name=buylist_name).all()
+        except Exception as e:
+            logger.error(f"Error fetching buylist: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_buylist_cards_by_id(buylist_id):
+        """Get all cards for a specific buylist by ID."""
+        try:
+            return UserBuylistCard.query.filter_by(buylist_id=buylist_id).all()
+        except Exception as e:
+            logger.error(f"Error fetching buylist cards: {str(e)}")
+            raise
 
     # Scryfall section
     @staticmethod
@@ -551,6 +784,18 @@ class CardService:
             current_app.logger.error(f"Error in fetch_scryfall_data: {str(e)}", exc_info=True)
             return None
 
+    @staticmethod
+    def fetch_scryfall_card_data(card_name, set_code=None, language=None, version=None):
+        try:
+            data = CardService.fetch_scryfall_data(card_name, set_code, language, version)
+            if not data:
+                current_app.logger.debug(f"No data found for card '{card_name}'")
+                return None
+            return data
+        except Exception as e:
+            current_app.logger.error(f"Error in fetch_card_data: {str(e)}")
+            return None
+     
     @staticmethod
     def fetch_all_printings(prints_search_uri):
         all_printings = []
@@ -633,3 +878,19 @@ class CardService:
             errors.append("Foil must be a boolean value")
             
         return errors
+
+    @staticmethod
+    def purchase_order(purchase_data):
+        """Create GET requests to each site with the corresponding card name."""
+        results = []
+        for card_name, site_id in purchase_data.items():
+            try:
+                # Construct the URL for the GET request
+                url = f"https://example.com/api/{site_id}/cards/{card_name}"
+                response = requests.get(url)
+                response.raise_for_status()
+                results.append(response.json())
+            except requests.RequestException as e:
+                logger.error(f"Error fetching data for {card_name} from site {site_id}: {str(e)}")
+                results.append({"card_name": card_name, "site_id": site_id, "error": str(e)})
+        return results
