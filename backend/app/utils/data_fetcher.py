@@ -3,17 +3,14 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 import json
-from json import JSONDecodeError
 import uuid 
 from cv2 import log
 import pandas as pd
 from bs4 import BeautifulSoup
 from threading import Lock
 
-from pyparsing import cpp_style_comment
 import urllib
 
-from torch import cat
 
 from app.extensions import db
 from app.constants import CardLanguage, CardQuality, CardVersion
@@ -893,6 +890,7 @@ class ExternalDataSynchronizer:
             logger.error(f"Error in crystal commerce search for {site.name}: {str(e)}", exc_info=True)
             return None
        
+    
     async def search_hawk(self, site, card_names):
         """Submit individual card searches to Hawk API with proper name formatting"""
         try:
@@ -908,40 +906,10 @@ class ExternalDataSynchronizer:
                 'Connection': 'keep-alive'
             }
             
-            api_url = "https://essearchapi-na.hawksearch.com/api/v2/search"
             
             for card_name in card_names:
-                # Format query based on card name type
-                if "//" in card_name:
-                    # Handle double-faced cards
-                    front, back = map(str.strip, card_name.split("//"))
-                    query = f'card\\ name.text: "{front}" AND card\\ name\\ 2.text: "{back}"'
-                else:
-                    # Handle regular cards including those with quotes or special characters
-                    # Keep any existing quotes in the name
-                    escaped_name = card_name.replace('"', '\\"')  # Escape any existing quotes
-                    if '"' in card_name:
-                        # Card already has quotes, use as is
-                        query = f'card\\ name.text: "{escaped_name}"'
-                    else:
-                        # Regular card name
-                        query = f'card\\ name.text: "{escaped_name}"'
                 
-                payload = {
-                    "ClientData": {
-                        "VisitorId": str(uuid.uuid4())
-                    },
-                    "ClientGuid": "30c874915d164f71bf6f84f594bf623f",
-                    "FacetSelections": {
-                        "tab": ["Magic"],
-                        "child_inventory_level": ["1"]
-                    },
-                    "query": query,
-                    "SortBy": "score"
-                }
-                
-                json_payload = json.dumps(payload)
-                
+                api_url, json_payload = CardService.create_hawk_url_and_payload(site, card_name)
                 # Debug logging
                 logger.debug(f"Hawk API Request for {card_name}:")
                 logger.debug(f"URL: {api_url}")
@@ -998,37 +966,25 @@ class ExternalDataSynchronizer:
             logger.error(f"Error in Hawk search: {str(e)}")
             return None
     
+
     async def search_shopify(self, site, card_names):
         """Get card data from Shopify via Binder API"""
         try:
             _, relevant_headers, cookie_str = await self.get_site_details(site, auth_required=False)
-            
+            api_url, json_payload = CardService.create_shopify_url_and_payload(site, card_names)
             relevant_headers.update({
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Cookie": cookie_str,
             })
-            
-            #logger.info(f"Headers for {site.name}: {relevant_headers}")
-
-            # Format the payload
-            payload = [{"card": name, "quantity": 1} for name in card_names]
-            
-            # Construct API URL
-            api_url = "https://api.binderpos.com/external/shopify/decklist"
-            if hasattr(site, 'api_url') and site.api_url:
-                api_url += f"?storeUrl={site.api_url}&type=mtg"
-            
-            # Make the request
-            json_payload = json.dumps(payload)  # Convert list to JSON string
+        
             response = await self.network.post_request(api_url, json_payload, headers=relevant_headers)
             
             if not response:
                 logger.error(f"Failed to get response from Binder API for {site.name}")
                 return None
-                
-            #logger.info(f"response from Binder API for {site.name}  : {len(response)}")
+            
             try:
                 return json.loads(response)
             except json.JSONDecodeError as e:
@@ -1298,394 +1254,3 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error checking if product is Magic card: {str(e)}")
             return False
-#old
-    # @staticmethod
-    # def convert_foil_to_bool(foil_value):
-    #     """Convert foil value to boolean based on CardVersion"""
-    #     if isinstance(foil_value, bool):
-    #         return foil_value
-    #     if isinstance(foil_value, str):
-    #         return foil_value.lower() in [CardVersion.FOIL.value.lower(), 'true', '1', 'yes']
-    #     return False
-
-    # @classmethod
-    # async def update_all_cards(cls):
-    #     card_query = (
-    #         UserBuylistCard.query.with_entities(
-    #             UserBuylistCard.name).distinct().all()
-    #     )
-    #     card_names = [card.name for card in card_query]
-    #     sites = Site.query.filter_by(active=True).all()
-
-    #     async with cls() as fetcher:
-    #         tasks = [fetcher.process_site(site, card_names) for site in sites]
-    #         await asyncio.gather(*tasks)
-
-    # @staticmethod
-    # def extract_info(soup, site, card_names, strategy=STRATEGY_CRYSTAL):
-    #     """Extract card info from the provided HTML soup using the given strategy."""
-    #     if soup is None:
-    #         logger.warning(f"Soup is None for site {site.name}")
-    #         return pd.DataFrame()
-
-    #     cards = []
-    #     seen_variants = set()
-
-    #     excluded_categories = {
-    #         "playmats",
-    #         "booster packs",
-    #         "booster box",
-    #         "mtg booster boxes",
-    #         "art series",
-    #         "fat packs and bundles",
-    #         "mtg booster packs",
-    #         "magic commander deck",
-    #         "world championship deck singles",
-    #         "The Crimson Moon's Fairy Tale",
-    #         "rpg accessories",
-    #         "scan other",
-    #         "intro packs and planeswalker decks",
-    #         "wall scrolls",
-    #     }
-
-    #     content = soup.find(
-    #         "div", {"class": ["content", "content clearfix",
-    #                           "content inner clearfix"]}
-    #     )
-    #     if content is None:
-    #         logger.error(f"Content div not found for site {site.name}")
-    #         return pd.DataFrame()
-
-    #     products_containers = content.find_all(
-    #         "div", {"class": "products-container browse"}
-    #     )
-    #     if not products_containers:
-    #         logger.warning(f"No products container found for site {site.name}")
-    #         return pd.DataFrame()
-
-    #     required_fields = {
-    #         'name',
-    #         'set_name',
-    #         'quality',
-    #         'language',
-    #         'quantity',
-    #         'price',
-    #         'version',
-    #         'foil'
-    #     }
-
-    #     logger.info(f"Processing container for {site.name}")
-    #     for container in products_containers:
-    #         logger.debug(f"Container HTML: {container.prettify()}")
-            
-    #         items = container.find_all("li", {"class": "product"})
-    #         logger.debug(f"Found {len(items)} product items in {site.name}")
-            
-    #         for item in items:
-    #             try:
-    #                 logger.debug(f"Processing item in {site.name}: {item.get('id', 'no-id')}")
-    #                 card_attrs = ExternalDataSynchronizer.process_product_item(
-    #                     item, site, card_names, excluded_categories
-    #                 )
-    #                 if card_attrs:
-    #                     logger.debug(f"Valid card found in {site.name}: {card_attrs['name']}") 
-    #                     if all(key in card_attrs for key in required_fields):
-    #                         ExternalDataSynchronizer.process_variants(
-    #                             item, card_attrs, cards, seen_variants, strategy
-    #                         )
-    #                     else:
-    #                         missing = required_fields - set(card_attrs.keys())
-    #                         logger.warning(f"Missing fields {missing} for card in {site.name}")
-    #                 else:
-    #                     logger.debug(f"Invalid card item in {site.name}")
-    #             except Exception as e:
-    #                 logger.exception(f"Error processing item in {site.name}")
-    #                 continue
-
-    #     if not cards:
-    #         logger.warning(f"No valid cards found in container for {site.name}")
-    #         return pd.DataFrame()
-
-    #     try:
-    #         df = pd.DataFrame(cards)
-    #         # Ensure standard column names and data types
-    #         standard_columns = {
-    #             'name': str,
-    #             'set_name': str,
-    #             'price': float,
-    #             'version': str,
-    #             'foil': bool,
-    #             'quality': str,
-    #             'language': str,
-    #             'quantity': int
-    #         }
-            
-    #         # Add missing columns with default values
-    #         for col, dtype in standard_columns.items():
-    #             if col not in df.columns:
-    #                 df[col] = dtype()
-    #             df[col] = df[col].astype(dtype)
-            
-    #         # Normalize quality and language values
-    #         df['quality'] = df['quality'].apply(CardQuality.normalize)
-    #         df['language'] = df['language'].apply(CardLanguage.normalize)
-    #         df['version'] = df['version'].apply(CardVersion.normalize)
-            
-    #         return df
-            
-    #     except Exception as e:
-    #         logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
-    #         return pd.DataFrame()
-
-    # @staticmethod
-    # def extract_info_shopify(soup, site, card_names):
-    #     """Extract card info from Shopify site HTML structure including variants."""
-    #     if soup is None:
-    #         logger.warning(f"Soup is None for site {site.name}")
-    #         return pd.DataFrame()
-
-    #     cards = []
-    #     seen_variants = set()
-
-    #     results_container = soup.find("div", {"class": "results-container "})
-    #     if not results_container:
-    #         logger.warning(f"No results container found for site {site.name} \n\n\n{soup}  \n\n\n")
-    #         return pd.DataFrame()
-
-    #     result_wrappers = results_container.find_all("div", {"class": "result-found-wrapper"})
-    #     if not result_wrappers:
-    #         logger.warning(f"No result wrappers found for site {site.name} \n\n\n{soup}\n\n\n")
-    #         return pd.DataFrame()
-
-    #     for wrapper in result_wrappers:
-    #         try:
-    #             card_title = wrapper.find("p", {"class": "result-card-title"}).text.strip()
-
-    #             # Process each item container
-    #             for item_container in wrapper.find_all("div", {"class": "result-item-container"}):
-    #                 # Find variant switch container
-    #                 variant_container = item_container.find("div", {"class": "item-switch-add-container"})
-    #                 if variant_container:
-    #                     # Process each variant option
-    #                     for variant_option in variant_container.find_all("div", {"class": "variant-switch-add-option"}):
-    #                         try:
-    #                             # Extract variant details
-    #                             title = variant_option.find("p").get("title", "").strip()
-    #                             quantity = variant_option.find_all("p")[1].text.strip()
-    #                             price = variant_option.find_all("p")[2].text.strip()
-
-    #                             # Parse quantity (format: "xN")
-    #                             qty = int(re.search(r'x(\d+)', quantity).group(1))
-                                
-    #                             # Parse price (format: "$X.XX CAD")
-    #                             price_value = float(re.search(r'\$(\d+\.\d+)', price).group(1))
-
-    #                             # Extract card name (everything before the first '[')
-    #                             card_name = title.split('[')[0].strip()
-                                
-    #                             # Skip if card not in requested list
-    #                             if card_name not in card_names:
-    #                                 continue
-
-    #                             # Parse variant title
-    #                             parsed_info = ExternalDataSynchronizer.parse_shopify_variant_title(title)
-    #                             if not parsed_info:
-    #                                 continue
-                                    
-    #                             set_name, quality, is_foil = parsed_info
-
-    #                             card_info = {
-    #                                 'name': card_name,
-    #                                 'set_name': set_name,
-    #                                 'foil': is_foil,
-    #                                 'quality': quality,
-    #                                 'language': 'English',  # Assuming English
-    #                                 'quantity': qty,
-    #                                 'price': price_value,
-    #                                 'version': 'Standard'
-    #                             }
-
-    #                             # Create variant key
-    #                             variant_key = (
-    #                                 card_info['name'],
-    #                                 card_info['set_name'],
-    #                                 card_info['quality'],
-    #                                 card_info['language'],
-    #                                 card_info['foil'],
-    #                                 card_info['version']
-    #                             )
-
-    #                             if variant_key not in seen_variants:
-    #                                 cards.append(card_info)
-    #                                 seen_variants.add(variant_key)
-
-    #                         except Exception as e:
-    #                             logger.error(f"Error processing variant option in {site.name}: {str(e)}")
-    #                             continue
-
-    #         except Exception as e:
-    #             logger.exception(f"Error processing wrapper in {site.name}")
-    #             continue
-
-    #     if not cards:
-    #         logger.warning(f"No valid cards found in container for {site.name}")
-    #         return pd.DataFrame()
-
-    #     try:
-    #         df = pd.DataFrame(cards)
-    #         # Ensure standard column names and data types
-    #         standard_columns = {
-    #             'name': str,
-    #             'set_name': str,
-    #             'price': float,
-    #             'version': str,
-    #             'foil': bool,
-    #             'quality': str,
-    #             'language': str,
-    #             'quantity': int
-    #         }
-            
-    #         # Add missing columns with default values
-    #         for col, dtype in standard_columns.items():
-    #             if col not in df.columns:
-    #                 df[col] = dtype()
-    #             df[col] = df[col].astype(dtype)
-            
-    #         # Normalize quality and language values
-    #         df['quality'] = df['quality'].apply(CardQuality.normalize)
-    #         df['language'] = df['language'].apply(CardLanguage.normalize)
-            
-    #         return df
-            
-    #     except Exception as e:
-    #         logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
-    #         return pd.DataFrame()
-
-    # @staticmethod
-    # def process_product_item(item, site, card_names, excluded_categories):
-    #     """Fixed dict handling with better HTML inspection"""
-    #     try:
-    #         logger.debug(f"Starting process_product_item for {site.name}")
-            
-    #         if ExternalDataSynchronizer.is_yugioh_card(item):
-    #             logger.debug(f"Skipping Yugioh card in {site.name}")
-    #             return None
-
-    #         # Debug HTML structure
-    #         logger.debug(f"Product HTML in {site.name}: {item.prettify()}")
-
-    #         meta = item.find("div", {"class": "meta"})
-    #         if not meta:
-    #             logger.warning(f"No meta div found for item in {site.name}")
-    #             return None
-            
-    #         logger.debug(f"Meta div in {site.name}: {meta.prettify()}")
-                
-    #         category_span = meta.find("span", {"class": "category"})
-    #         name_header = meta.find("h4", {"class": "name"})
-            
-    #         if not category_span or not name_header:
-    #             logger.warning(f"Missing category or name header in {site.name}")
-    #             logger.debug(f"Category span: {category_span}")
-    #             logger.debug(f"Name header: {name_header}")
-    #             return None
-                
-    #         test_category = category_span.text.strip()
-    #         test_title = name_header.text.strip()
-            
-    #         logger.debug(f"Found card: '{test_title}' in category: '{test_category}' for {site.name}")
-
-    #         if any(cat in test_category.lower() for cat in excluded_categories):
-    #             logger.debug(f"Category {test_category} is in excluded list for {site.name}")
-    #             return None
-
-    #         # Create a dictionary with standardized keys (all lowercase)
-    #         card_info = {
-    #             'name': '',
-    #             'set_name': test_category,
-    #             'foil': False,
-    #             'quality': 'Near Mint',
-    #             'language': 'English',
-    #             'quantity': 0,
-    #             'price': 0.0,
-    #             'version': 'Standard'
-    #         }
-
-    #         parsed_card = parse_card_string(test_title)
-    #         logger.debug(f"Parsed card result for {site.name}: {parsed_card}")
-            
-    #         if isinstance(parsed_card, dict):
-    #             # Update key mapping to handle both old and new formats
-    #             key_mapping = {
-    #                 'Name': 'name',
-    #                 'Foil': 'foil',
-    #                 'Edition': 'set_name',
-    #                 'Quality': 'quality',
-    #                 'Language': 'language',
-    #                 'Quantity': 'quantity',
-    #                 'Price': 'price',
-    #                 'Version': 'version'
-    #             }
-                
-    #             for old_key, new_key in key_mapping.items():
-    #                 if old_key in parsed_card:
-    #                     card_info[new_key] = parsed_card[old_key]
-    #         else:
-    #             logger.debug(f"Parsed card is object with name: {getattr(parsed_card, 'name', None)}")
-    #             # Handle object-style parsing result
-    #             card_info['name'] = getattr(parsed_card, 'name', test_title)
-    #             card_info['foil'] = getattr(parsed_card, 'foil', False)
-
-    #         # Clean and validate card name
-    #         original_name = card_info['name']  
-    #         card_info['name'] = clean_card_name(card_info['name'], card_names)  
-    #         logger.debug(f"Card name cleaned from '{original_name}' to '{card_info['name']}' for {site.name}")
-
-    #         if not card_info['name']: 
-    #             logger.warning(f"Card name cleaned to empty string in {site.name}")
-    #             return None
-                
-    #         if (card_info['name'] not in card_names and  
-    #             card_info['name'].split(" // ")[0].strip() not in card_names):
-    #             logger.debug(f"Card '{card_info['name']}' not in requested list for {site.name}")
-    #             logger.debug(f"Available card names: {card_names}")
-    #             return None
-
-    #         logger.debug(f"Successfully processed card '{card_info['name']}' for {site.name}")  
-    #         return card_info
-
-    #     except Exception as e:
-    #         logger.exception(f"Error in process_product_item for {site.name}")
-    #         logger.error(f"Full error: {str(e)}")
-    #         logger.error(f"Item HTML: {item.prettify() if item else 'None'}")
-    #         return None
-
-    # @staticmethod
-    # def process_variants(item, card, cards, seen_variants, strategy):
-    #     variants = item.find("div", {"class": "variants"})
-    #     for variant in variants.find_all("div", {"class": "variant-row"}):
-            
-    #         card_variant = (
-    #             ExternalDataSynchronizer.strategy_crystal(card, variant)
-    #             if strategy == ExternalDataSynchronizer.STRATEGY_CRYSTAL
-    #             else ExternalDataSynchronizer.strategy_scrapper(card, variant)
-    #         )
-    #         if card_variant is not None:
-    #             # Create a hashable key from the variant's relevant data
-    #             variant_key = (
-    #                 card_variant.get('name', ''),
-    #                 card_variant.get('set_name', ''),
-    #                 card_variant.get('quality', ''),
-    #                 card_variant.get('language', ''),
-    #                 card_variant.get('foil', False),
-    #                 card_variant.get('version', 'Standard')
-    #             )
-    #             if variant_key not in seen_variants:
-    #                 cards.append(card_variant)
-    #                 seen_variants.add(variant_key)
-
-    # @staticmethod
-    # def is_yugioh_card(item):
-    #     image = item.find("div", {"class": "image"})
-    #     a_tag = image and image.find("a", href=True)
-    #     return a_tag and "yugioh" in a_tag["href"]

@@ -1,22 +1,28 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Table, Card, Typography, Tag, Button, Spin, Modal, message, Select } from 'antd';
+import { Table, Card, Typography, Popconfirm, Button, Spin, Modal, message, Select } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import api from '../utils/api';
 import CardDetail from '../components/CardDetail';
 import { getStandardTableColumns } from '../utils/tableConfig';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
+import { DeleteOutlined } from '@ant-design/icons'; // Add this line
 
 const { Title } = Typography;
 
 const PriceTracker = ({ userId }) => {
   const [scans, setScans] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedScan, setSelectedScan] = useState(null);
   const { theme } = useTheme();
+
+  const [selectedScan, setSelectedScan] = useState(null);
   const [selectedScanDetails, setSelectedScanDetails] = useState(null);
+  const [isFetchingScanDetails, setIsFetchingScanDetails] = useState(false);
+
+
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
+
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -25,10 +31,11 @@ const PriceTracker = ({ userId }) => {
   }, []);
 
   useEffect(() => {
-    if (selectedScan) {
+    if (selectedScan?.id && !isFetchingScanDetails) {
+      setIsFetchingScanDetails(true);
       fetchScanDetails(selectedScan.id);
     }
-  }, [selectedScan]);
+  }, [selectedScan?.id]); // Only depend on the ID
 
   const fetchScans = async () => {
     try {
@@ -46,12 +53,39 @@ const PriceTracker = ({ userId }) => {
   const fetchScanDetails = async (scanId) => {
     try {
       const response = await api.get(`/scans/${scanId}`, {
-        params: { user_id: userId } // Add user ID
+        params: { user_id: userId }
       });
-      console.log('Scan details:', response.data);
       setSelectedScanDetails(response.data);
     } catch (error) {
       console.error('Error fetching scan details:', error);
+      // Important: Reset view on error
+      setSelectedScan(null);
+      setSelectedScanDetails(null);
+    } finally {
+      setIsFetchingScanDetails(false);
+    }
+  };
+  
+
+  const handleDelete = async (scanId, e) => {
+    try {
+      // First, reset the view state
+      setSelectedScan(null);
+      setSelectedScanDetails(null);
+      setIsFetchingScanDetails(false);
+      
+      // Then perform deletion
+      await api.delete(`/scans/${scanId}`);
+      
+      // Finally refresh the list
+      await fetchScans();
+      
+      message.success('Scan deleted successfully.');
+    } catch (error) {
+      console.error('Error deleting scan:', error);
+      message.error('Failed to delete scan.');
+      // Refresh scans list even on error to ensure consistent state
+      await fetchScans();
     }
   };
 
@@ -193,6 +227,26 @@ const PriceTracker = ({ userId }) => {
       dataIndex: 'sites_scraped',
       key: 'sites_scraped',
       sorter: (a, b) => a.sites_scraped - b.sites_scraped,
+    },
+    {
+      title: 'Action',
+      key: 'action',
+      render: (text, record) => (
+        <Popconfirm
+          title="Are you sure you want to delete this scan?"
+          onConfirm={() => handleDelete(record.id)}
+          okText="Yes"
+          cancelText="No"
+        >
+          <Button
+            type="link"
+            icon={<DeleteOutlined />}
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+          />
+        </Popconfirm>
+      ),
     }
   ], [scans]);
 
@@ -252,26 +306,38 @@ const PriceTracker = ({ userId }) => {
       <Title level={2}>Price History</Title>
       {selectedScan ? (
         <>
-          <Button onClick={() => setSelectedScan(null)} type="link" className="mb-4">
+          <Button 
+            onClick={() => {
+              setSelectedScan(null);
+              setSelectedScanDetails(null);
+            }} 
+            type="link" 
+            className="mb-4"
+          >
             ← Back to Scans
           </Button>
           <Card>
+          {isFetchingScanDetails ? (
+              <Spin size="large" />
+            ) : (
             <Table
               dataSource={selectedScanDetails?.scan_results || []}
               columns={getColumnFilters}
               rowKey="id"
             />
-          </Card>
-        </>
+          )}
+        </Card>
+      </>
       ) : (
         <Card>
           <Table
             dataSource={scans}
             columns={scanColumns}
             rowKey="id"
+            loading={loading}
             onRow={(record) => ({
-              onClick: () => setSelectedScan(record),
-              style: { cursor: 'pointer' }
+              onClick: () => !loading && setSelectedScan(record),
+              style: { cursor: loading ? 'not-allowed' : 'pointer' }
             })}
           />
         </Card>

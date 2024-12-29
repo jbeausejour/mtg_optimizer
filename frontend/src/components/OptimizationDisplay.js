@@ -1,18 +1,106 @@
-import React from 'react';
-import { Row, Col, Card, Table, Collapse, Typography, Tag, Space, Tooltip } from 'antd';
-import { WarningOutlined, CheckCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Row, Col, Card, Table, Collapse, Typography, Tag, Space, Button, message } from 'antd';
+import { WarningOutlined, ShoppingCartOutlined } from '@ant-design/icons';
 import { getStandardTableColumns } from '../utils/tableConfig';
+import PurchaseUrls from './PurchaseUrls';
+import api from '../utils/api';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
+
 
 export const OptimizationSummary = ({ result, onCardClick }) => {
   const solutions = result?.solutions || [];
   const errors = result?.errors || {};
   
-  // Separate best solution from other solutions
-  const bestSolution = solutions.find(s => s.is_best_solution);
-  const otherSolutions = solutions.filter(s => !s.is_best_solution);
+  const sortedSolutions = [...solutions].sort((a, b) => {
+    if (a.is_best_solution) return -1;
+    if (b.is_best_solution) return 1;
+    if (a.missing_cards_count !== b.missing_cards_count) {
+      return a.missing_cards_count - b.missing_cards_count;
+    }
+    if (a.total_price !== b.total_price) {
+      return a.total_price - b.total_price;
+    }
+    return a.number_store - b.number_store;
+  });
+
+  const bestSolution = sortedSolutions.find(s => s.is_best_solution);
+  const otherSolutions = sortedSolutions.filter(s => !s.is_best_solution);
+
+  const StoreDistribution = ({ solution }) => {
+    const [purchaseData, setPurchaseData] = useState(null);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    
+    
+    const handlePurchase = async () => {
+      try {
+
+        const response = await api.post('/purchase_order', { 
+          purchase_data: solution.stores,
+        });
+        
+        setPurchaseData(response.data);
+        setIsModalOpen(true);
+        
+      } catch (error) {
+        console.error('Error submitting purchase order:', error);
+        message.error('Failed to submit purchase order. Please try again.');
+      }
+    };
+  
+    const storeData = solution.list_stores.split(', ')
+      .map(store => {
+        const [name, count] = store.split(': ');
+        return { name, count: parseInt(count) };
+      })
+      .filter(store => store.count > 0);
+  
+    return (
+      <>
+        <Card 
+          title={
+            <div className="flex justify-between items-center">
+              <span>Store Distribution</span>
+              <Button 
+                type="primary"
+                icon={<ShoppingCartOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePurchase();
+                }}
+              >
+                Buy It Now
+              </Button>
+            </div>
+          } 
+          size="small" 
+          className="mb-4"
+        >
+          <Row gutter={[16, 16]}>
+            {storeData.map(({ name, count }, index) => (
+              <Col span={8} key={index}>
+                <Card size="small" bordered={false} className="bg-gray-50">
+                  <Text strong>{name}</Text>
+                  <div>
+                    <Text type="secondary">{count} cards</Text>
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+        
+        {purchaseData && (
+          <PurchaseUrls 
+            purchaseData={purchaseData}
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+          />
+        )}
+      </>
+    );
+  };
 
   return (
     <div className="w-full space-y-4">
@@ -74,33 +162,44 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
       )}
 
       {bestSolution && (
-        <Card title="Best Solution" className="bg-white">
-          <Space direction="vertical" className="w-full">
-            <Space>
-              <Text strong>{`${bestSolution.number_store} Stores`}</Text>
-              <Tag color="green">Best Solution</Tag>
-              <Tag color={bestSolution.nbr_card_in_solution === bestSolution.total_qty ? 'blue' : 'orange'}>
-                {bestSolution.nbr_card_in_solution === bestSolution.total_qty ? 'Complete' : `${((bestSolution.nbr_card_in_solution / bestSolution.total_qty) * 100).toFixed(1)}% Complete`}
-              </Tag>
-              <Text>${bestSolution.total_price.toFixed(2)}</Text>
-            </Space>
-            <Space>
-              {bestSolution.missing_cards_count > 0 && (
-                <Tag color="red" icon={<WarningOutlined />}>
-                  {bestSolution.missing_cards_count} Missing Cards
-                </Tag>
-              )}
-              <Text type="secondary">
-                {`${bestSolution.nbr_card_in_solution}/${bestSolution.total_qty} Cards Found`}
-              </Text>
-            </Space>
+        <Collapse
+          defaultActiveKey={['best-solution']}
+          className="bg-white"
+        >
+          <Panel
+            key="best-solution"
+            header={
+              <div className="flex justify-between items-center w-full">
+                <Space>
+                  <Text strong>{`${bestSolution.number_store} Stores`}</Text>
+                  <Tag color="green">Best Solution</Tag>
+                  <Tag color={bestSolution.nbr_card_in_solution === bestSolution.total_qty ? 'blue' : 'orange'}>
+                    {bestSolution.missing_cards_count === 0
+                      ? 'Complete'
+                      : `${((1 -(bestSolution.missing_cards_count / bestSolution.total_qty)) * 100).toFixed(1)}% Complete`}
+                  </Tag>
+                  <Text>${bestSolution.total_price.toFixed(2)}</Text>
+                </Space>
+                <Space>
+                  {bestSolution.missing_cards_count > 0 && (
+                    <Tag color="red" icon={<WarningOutlined />}>
+                      {bestSolution.missing_cards_count} Missing Cards
+                    </Tag>
+                  )}
+                  <Text type="secondary">
+                    {`${bestSolution.nbr_card_in_solution-bestSolution.missing_cards_count}/${bestSolution.total_qty} Cards Found`}
+                  </Text>
+                </Space>
+              </div>
+            }
+          >
             <StoreDistribution solution={bestSolution} />
             {bestSolution.missing_cards?.length > 0 && (
               <Card title="Missing Cards" size="small" className="mb-4">
                 <Space wrap>
                   {bestSolution.missing_cards.map(card => (
-                    <Tag 
-                      key={card} 
+                    <Tag
+                      key={card}
                       color="red"
                       className="cursor-pointer"
                       onClick={() => onCardClick({ name: card })}
@@ -112,8 +211,8 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
               </Card>
             )}
             <SolutionDetails solution={bestSolution} onCardClick={onCardClick} />
-          </Space>
-        </Card>
+          </Panel>
+        </Collapse>
       )}
 
       {otherSolutions.length > 0 ? (
@@ -141,7 +240,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                         </Tag>
                       )}
                       <Text type="secondary">
-                        {`${solution.nbr_card_in_solution}/${solution.total_qty} Cards Found`}
+                        {`${solution.nbr_card_in_solution}/${bestSolution.nbr_card_in_solution} Cards Found`}
                       </Text>
                     </Space>
                   </div>
@@ -178,35 +277,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
   );
 };
 
-const StoreDistribution = ({ solution }) => {
-  // Parse list_stores string into array of objects
-  const storeData = solution.list_stores.split(', ')
-    .map(store => {
-      const [name, count] = store.split(': ');
-      return { name, count: parseInt(count) };
-    })
-    .filter(store => store.count > 0);
-
-  return (
-    <Card title="Store Distribution" size="small" className="mb-4">
-      <Row gutter={[16, 16]}>
-        {storeData.map(({ name, count }, index) => (
-          <Col span={8} key={index}>
-            <Card size="small" bordered={false} className="bg-gray-50">
-              <Text strong>{name}</Text>
-              <div>
-                <Text type="secondary">{count} cards</Text>
-              </div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-    </Card>
-  );
-};
-
 const SolutionDetails = ({ solution, onCardClick }) => {
-  // Transform stores data into flat array for table
   const dataSource = solution.stores.flatMap(store => 
     store.cards.map(card => ({
       key: `${card.name}-${store.site_name}`,

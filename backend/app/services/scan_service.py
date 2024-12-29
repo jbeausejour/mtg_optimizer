@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from sqlalchemy import and_, func
 from sqlalchemy.exc import SQLAlchemyError
+from sympy import li
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
 from app.services.site_service import SiteService
@@ -187,4 +188,21 @@ class ScanService:
 
     @staticmethod
     def get_all_scan_results(limit=5):
+        if limit == 0:
+            return Scan.query.order_by(Scan.created_at.desc()).all()
         return Scan.query.order_by(Scan.created_at.desc()).limit(limit).all()
+
+    @staticmethod
+    def delete_scan(scan_id):
+        """Delete a scan by its ID."""
+        try:
+            scan = db.session.get(Scan, scan_id)
+            if not scan:
+                return False
+            db.session.delete(scan)
+            db.session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting scan: {str(e)}")
+            db.session.rollback()
+            return False

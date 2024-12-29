@@ -128,7 +128,7 @@ class PurchaseOptimizer:
 
     def run_optimization(self, card_names, config):
         try:
-
+            error_collector = ErrorCollector.get_instance()  # Initialize error_collector
             milp_result = None
             # Debug incoming data
             logger.debug(f"Input DataFrame columns: {self.filtered_listings_df.columns.tolist()}")
@@ -237,7 +237,6 @@ class PurchaseOptimizer:
                     logger.warning("NSGA-II optimization returned no results")
 
             if final_result and final_result.get("status") == "success":
-                error_collector = ErrorCollector.get_instance()
                 final_result["errors"] = {
                     'unreachable_stores': list(error_collector.unreachable_stores),
                     'unknown_languages': list(error_collector.unknown_languages),
@@ -488,8 +487,8 @@ class PurchaseOptimizer:
             # Create store distribution string
             store_usage_str = ", ".join(f"{store}: {len(cards)}" for store, cards in stores_data.items())
             
-            # Create final store structure
-            stores = [{"site_name": store, "cards": cards} for store, cards in stores_data.items()]
+            # Create final store structure ICI 
+            stores = [{"site_name": store, "site_id": cards[0]["site_id"], "cards": cards} for store, cards in stores_data.items()]
             
             # Create sorted DataFrame
             sorted_results_df = pd.DataFrame(purchasing_plan).sort_values(by=["site_name", "name"])
@@ -537,7 +536,7 @@ class PurchaseOptimizer:
         for card in purchasing_plan:
             stores_data[card["site_name"]].append(card)
         
-        stores = [{"site_name": store, "cards": cards} for store, cards in stores_data.items()]
+        stores = [{"site_name": store, "site_id": cards[0]["site_id"], "cards": cards} for store, cards in stores_data.items()]
         sorted_results_df = pd.DataFrame(purchasing_plan).sort_values(by=["site_name", "name"])
 
         # Identify missing cards
@@ -1045,7 +1044,7 @@ class PurchaseOptimizer:
         for card in results:
             stores_data[card['site_name']].append(card)
 
-        stores = [{'site_name': store, 'cards': cards} for store, cards in stores_data.items()]
+        stores = [{'site_name': store, 'site_id': cards[0]["site_id"], 'cards': cards} for store, cards in stores_data.items()]
 
         return {
             "nbr_card_in_solution": int(total_card_nbr),

@@ -25,7 +25,7 @@ const Results = ({ userId }) => {
   const fetchResults = async () => {
     try {
       const response = await api.get('/results', {
-        params: { user_id: userId } // Add user ID
+        params: { user_id: userId }
       });
       setOptimizationResults(response.data);
     } catch (error) {
@@ -45,7 +45,7 @@ const Results = ({ userId }) => {
           set: card.set_code || card.set_name,
           language: card.language || 'English',
           version: card.version || 'Normal',
-          user_id: userId // Add user ID
+          user_id: userId
         }
       });
 
@@ -94,7 +94,7 @@ const Results = ({ userId }) => {
         const bestSolution = record.solutions?.find(s => s.is_best_solution);
         if (!bestSolution) return <Tag color="red">No solution</Tag>;
 
-        const completeness = bestSolution.nbr_card_in_solution === bestSolution.total_qty;
+        const completeness = bestSolution.missing_cards_count === 0;
         const percentage = ((bestSolution.nbr_card_in_solution / bestSolution.total_qty) * 100).toFixed(1);
 
         return (

@@ -63,7 +63,24 @@ def load_buylist(buylist_id):
     except Exception as e:
         current_app.logger.error(f"Error loading buylist: {str(e)}")
         return jsonify({"error": "Failed to load buylist"}), 500 
-    
+
+@card_routes.route("/buylists/top", methods=["GET"])
+def get_top_buylists():
+    """Get the top 3 buylists for a specific user."""
+    try:
+        user_id = request.args.get("user_id")
+        limit = request.args.get("limit", 3, type=int)
+        if not user_id:
+            logger.error("User ID is missing in the request")
+            return jsonify({"error": "User ID is required"}), 400
+
+        buylists = CardService.get_top_buylists(user_id, limit)
+        logger.info(f"Found top {limit} buylists for user {user_id}: data={buylists}")
+        return jsonify(buylists)
+    except Exception as e:
+        current_app.logger.error(f"Error fetching top buylists: {str(e)}")
+        return jsonify({"error": "Failed to fetch top buylists"}), 500
+
 # Card Operations
 @card_routes.route("/cards", methods=["GET"])
 def get_user_buylist_cards():
@@ -134,6 +151,7 @@ def add_user_buylist_card():
 
 @card_routes.route("/fetch_card", methods=["GET"])
 def fetch_scryfall_card():
+
     card_name = request.args.get("name")
     set_code = request.args.get("set_code")
     language = request.args.get("language")
@@ -205,8 +223,7 @@ def get_card_suggestions():
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
     try:
-        task = AsyncResult(task_id, app=celery_app)
-        
+        task = AsyncResult(task_id, app=celery_app)       
         if task.state == 'PENDING':
             response = {
                 'state': task.state,
@@ -254,10 +271,6 @@ def start_scraping():
     strategy = data.get("strategy", "milp")
     min_store = data.get("min_store", 1)
     find_min_store = data.get("find_min_store", False)
-    # current_app.logger.info(f"Received site_ids: {site_ids}")
-    # current_app.logger.info(f"Received strategy: {strategy}")
-    # current_app.logger.info(f"Received min_store: {min_store}")
-    # current_app.logger.info(f"Received find_min_store: {find_min_store}")
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
@@ -267,35 +280,19 @@ def start_scraping():
     )
     return jsonify({"task_id": task.id}), 202
 
-@card_routes.route('/results', methods=['GET'])
-def get_optimization_results():
-    """Get recent optimization results"""
-    limit = request.args.get('limit', 5, type=int)
-    results = OptimizationService.get_optimization_results(limit)
-    
-    response = []
-    for opt_result in results:
-        response.append({
-            'id': opt_result.scan_id,
-            'created_at': opt_result.created_at.isoformat(),
-            'solutions': opt_result.solutions,
-            'status': opt_result.status,
-            'message': opt_result.message,
-            'sites_scraped': opt_result.sites_scraped,
-            'cards_scraped': opt_result.cards_scraped,
-            'errors': opt_result.errors
-        })
-    
-    return jsonify(response)
-
 @card_routes.route('/purchase_order', methods=['POST'])
-def purchase_order():
-    purchase_data = request.json
-    if not isinstance(purchase_data, dict):
-        return jsonify({"error": "Invalid input format. Expected a dictionary."}), 400
-
-    results = CardService.purchase_order(purchase_data)
-    return jsonify(results)
+def generate_purchase_links():
+    try:
+        data = request.json
+        purchase_data = data.get('purchase_data', [])
+        
+        results = CardService.generate_purchase_links(purchase_data)
+        #logger.info(f"return data: {results}")
+        return jsonify(results), 200
+        
+    except Exception as e:
+        logger.error(f"Error generating purchase links: {str(e)}")
+        return jsonify({"error": "Failed to generate purchase links"}), 500
 
 # Set Operations
 @card_routes.route("/sets", methods=["GET"])
@@ -338,7 +335,7 @@ def get_scan_results(scan_id):
 
 @card_routes.route("/scans", methods=["GET"])
 def get_all_scans():
-    limit = request.args.get("limit", 5, type=int)
+    limit = request.args.get("limit", 0, type=int)
     try:
         scans = ScanService.get_all_scan_results(limit)
         return jsonify([{
@@ -365,6 +362,19 @@ def get_scan_history():
         }
         for scan in scans
     ])
+
+@card_routes.route("/scans/<int:scan_id>", methods=["DELETE"])
+def delete_scan(scan_id):
+    """Delete a scan by its ID."""
+    try:
+        result = ScanService.delete_scan(scan_id)
+        if result:
+            return jsonify({"message": "Scan deleted successfully"}), 200
+        else:
+            return jsonify({"error": "Scan not found"}), 404
+    except Exception as e:
+        current_app.logger.error(f"Error deleting scan: {str(e)}")
+        return jsonify({"error": "Failed to delete scan"}), 500
 
 # Site Operations
 @card_routes.route("/sites", methods=["GET"])
@@ -417,7 +427,27 @@ def update_site(site_id):
             "message": "An unexpected error occurred while updating the site"
         }), 500
 
-# Fix duplicate function name
+@card_routes.route('/results', methods=['GET'])
+def get_optimization_results():
+    """Get recent optimization results"""
+    limit = request.args.get('limit', 5, type=int)
+    results = OptimizationService.get_optimization_results(limit)
+    
+    response = []
+    for opt_result in results:
+        response.append({
+            'id': opt_result.scan_id,
+            'created_at': opt_result.created_at.isoformat(),
+            'solutions': opt_result.solutions,
+            'status': opt_result.status,
+            'message': opt_result.message,
+            'sites_scraped': opt_result.sites_scraped,
+            'cards_scraped': opt_result.cards_scraped,
+            'errors': opt_result.errors
+        })
+    
+    return jsonify(response)
+
 @card_routes.route('/results/<int:scan_id>', methods=['GET'])
 def get_scan_optimization_result(scan_id):
     """Get optimization results for a specific scan"""    

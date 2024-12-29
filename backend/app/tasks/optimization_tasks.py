@@ -462,6 +462,18 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
     
     # Process best solution
     if best_solution:
+        stores = []
+        if isinstance(best_solution.get('stores'), list):
+            for store_data in best_solution['stores']:
+                if isinstance(store_data, dict):
+                    stores.append(StoreInSolution(
+                        site_id=store_data.get('site_id'),
+                        site_name=store_data.get('site_name'),
+                        cards=[CardInSolution(**card) for card in store_data.get('cards', [])]
+                    ))
+                else:
+                    logger.warning(f"Skipping malformed store data: {store_data}")
+        
         solutions.append(OptimizationSolution(
             total_price=best_solution['total_price'],
             number_store=best_solution['number_store'],
@@ -470,16 +482,24 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
             list_stores=best_solution['list_stores'],
             missing_cards=best_solution['missing_cards'],
             missing_cards_count=best_solution['missing_cards_count'],
-            stores=[StoreInSolution(
-                site_id=store.get('site_id'),
-                site_name=store['site_name'],
-                cards=[CardInSolution(**card) for card in store['cards']]
-            ) for store in best_solution['stores']],
+            stores=stores,
             is_best_solution=True
         ))
     
     # Process iterations
     for iteration in iterations:
+        stores = []
+        if isinstance(iteration.get('stores'), list):
+            for store_data in iteration['stores']:
+                if isinstance(store_data, dict):
+                    stores.append(StoreInSolution(
+                        site_id=store_data.get('site_id'),
+                        site_name=store_data.get('site_name'),
+                        cards=[CardInSolution(**card) for card in store_data.get('cards', [])]
+                    ))
+                else:
+                    logger.warning(f"Skipping malformed store data in iteration: {store_data}")
+        
         solutions.append(OptimizationSolution(
             total_price=iteration['total_price'],
             number_store=iteration['number_store'],
@@ -488,11 +508,7 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
             list_stores=iteration['list_stores'],
             missing_cards=iteration['missing_cards'],
             missing_cards_count=iteration['missing_cards_count'],
-            stores=[StoreInSolution(
-                site_id=store.get('site_id'),
-                site_name=store['site_name'],
-                cards=[CardInSolution(**card) for card in store['cards']]
-            ) for store in iteration['stores']],
+            stores=stores,
             is_best_solution=False
         ))
 

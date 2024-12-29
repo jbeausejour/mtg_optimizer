@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Form, List, Tooltip, Input, Select } from 'antd';
+import { useLocation } from 'react-router-dom';
+import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Form, List, Input, Select } from 'antd';
 import { EditOutlined, DeleteOutlined, EyeOutlined, SaveOutlined, FolderOpenOutlined, SearchOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import CardDetail from '../components/CardDetail';
@@ -11,48 +12,54 @@ import debounce from 'lodash/debounce';
 const { Option } = Select;
 
 const CardManagement = ({ userId }) => {
+  const location = useLocation();
+  const initialBuylistName = location?.state?.buylistName || '';
+  const initialBuylistId = location?.state?.buylistId;
+
+  console.log('Debug: Location state', location.state);
+  console.log('Debug: Initial buylist name and ID', { initialBuylistName, initialBuylistId });
+
+  const [buylistName, setBuylistName] = useState(initialBuylistName);
+  
   const [cards, setCards] = useState([]);
   const [filteredCards, setFilteredCards] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [modalMode, setModalMode] = useState('view'); // "view" or "edit"
+  const [modalMode, setModalMode] = useState('view');
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [form] = Form.useForm();
   const { theme } = useTheme();
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
-  const [buylistName, setBuylistName] = useState('');
   const [savedBuylists, setSavedBuylists] = useState([]);
-  const [currentBuylistId, setCurrentBuylistId] = useState(null); // Add state for current buylist ID
+  const [currentBuylistId, setCurrentBuylistId] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [cardVersions, setCardVersions] = useState(null);
   const [sets, setSets] = useState([]);
+  const [topBuylists, setTopBuylists] = useState([]);
 
   useEffect(() => {
-    console.log('CardManagement component mounted with userId:', userId);
+    console.log('Debug: useEffect for userId', userId);
     if (userId) {
       fetchSavedBuylists();
     }
   }, [userId]);
 
   useEffect(() => {
-    if (savedBuylists.length > 0 && !currentBuylistId) {
-      setCurrentBuylistId(savedBuylists[0].buylist_id);
+    console.log('Debug: useEffect for initialBuylistName and initialBuylistId', { initialBuylistName, initialBuylistId });
+    if (initialBuylistName && initialBuylistId) {
+      handleLoadBuylist(initialBuylistId);
+      message.success('Buylist loaded successfully');
     }
-  }, [savedBuylists]);
-
-  useEffect(() => {
-    if (currentBuylistId) {
-      handleLoadBuylist(currentBuylistId);
-    }
-  }, [currentBuylistId]);
+  }, [initialBuylistName, initialBuylistId]);
 
   const fetchSavedBuylists = async () => {
     try {
       const response = await api.get('/buylists', { params: { user_id: userId } });
       setSavedBuylists(response.data);
     } catch (error) {
+      console.error('Debug: Failed to fetch saved buylists', error);
       message.error('Failed to fetch saved buylists');
     }
   };
@@ -64,7 +71,6 @@ const CardManagement = ({ userId }) => {
     }
 
     try {
-      console.log('Saving buylist for userId:', userId);
       const response = await api.post('/buylists', { buylist_id: currentBuylistId, buylist_name: buylistName, user_id: userId, cards });
       message.success('Buylist saved successfully');
       fetchSavedBuylists();
@@ -83,8 +89,8 @@ const CardManagement = ({ userId }) => {
       setFilteredCards(response.data);
       setCurrentBuylistId(buylistId); 
       setBuylistName(response.data[0]?.buylist_name || ''); 
-      message.success('Buylist loaded successfully');
     } catch (error) {
+      console.error('Debug: Failed to load buylist', error);
       message.error(`Failed to load buylist: ${error.message}`);
     }
   };
@@ -252,7 +258,7 @@ const CardManagement = ({ userId }) => {
     setBuylistName('');
     setCards([]);
     setFilteredCards([]);
-    setCurrentBuylistId(null); // Reset current buylist ID
+    setCurrentBuylistId(null);
     message.success('New buylist created. Please add cards and save.');
   };
 
@@ -260,7 +266,7 @@ const CardManagement = ({ userId }) => {
     if (query.length > 2) {
       try {
         const response = await api.get(`/card_suggestions?query=${query}`, {
-          params: { user_id: userId } // Add user ID
+          params: { user_id: userId } 
         });
         console.log('Suggestions received:', response.data);
         setSuggestions(response.data.map(name => ({ value: name })));
@@ -276,7 +282,7 @@ const CardManagement = ({ userId }) => {
   const fetchCardVersions = async (cardName) => {
     try {
       const response = await api.get(`/card_versions?name=${encodeURIComponent(cardName)}`, {
-        params: { user_id: userId } // Add user ID
+        params: { user_id: userId } 
       });
       console.log('Card versions received:', response.data);
       setCardVersions(response.data);
@@ -336,70 +342,80 @@ const CardManagement = ({ userId }) => {
   return (
     <div className="card-management">
       <h1>Card Management</h1>
-      {currentBuylistId && <h2>Editing Buylist: {buylistName}</h2>} {/* Indicate current buylist */}
-      <AutoComplete
-        value={searchText}
-        options={suggestions}
-        onSearch={(text) => {
-          setSearchText(text);
-          handleSearch(text);
-        }}
-        onSelect={handleSelectCard}
-        placeholder="Search cards..."
-        style={{ 
-          marginBottom: 16,
-          width: '300px'
-        }}
-        prefix={<SearchOutlined />}
-      />
-      <Input
-        placeholder="Buylist name..."
-        value={buylistName}
-        onChange={(e) => setBuylistName(e.target.value)}
-        style={{ 
-          marginBottom: 16,
-          width: '300px'
-        }}
-        prefix={<SaveOutlined />}
-      />
-      <Button
-        type="primary"
-        icon={<SaveOutlined />}
-        onClick={handleSaveBuylist}
-        style={{ marginBottom: 16, marginRight: 8 }}
-      >
-        Save Buylist
-      </Button>
-      <Button
-        type="default"
-        icon={<FolderOpenOutlined />}
-        onClick={handleNewBuylist}
-        style={{ marginBottom: 16 }}
-      >
-        New Buylist
-      </Button>
-      <h3 style={{ fontWeight: 'bold', marginTop: 24 }}>Saved Buylists</h3>
-      <List
-        bordered
-        dataSource={savedBuylists}
-        renderItem={item => (
-          <List.Item
-            actions={[
-              <Button
-                type="link"
-                icon={<FolderOpenOutlined />}
-                onClick={() => handleLoadBuylist(item.buylist_id)}
-              >
-                Load
-              </Button>
-            ]}
-            style={item.buylist_id === currentBuylistId ? { fontWeight: 'bold' } : {}}
+      <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 150px', minWidth: '300px', marginRight: '16px' }}>
+          {currentBuylistId && <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Current buylist: {buylistName}</h3>} {/* Indicate current buylist */}
+          <AutoComplete
+            value={searchText}
+            options={suggestions}
+            onSearch={(text) => {
+              setSearchText(text);
+              handleSearch(text);
+            }}
+            onSelect={handleSelectCard}
+            placeholder="Search cards..."
+            style={{ 
+              marginBottom: 16,
+              width: '100%'
+            }}
+            prefix={<SearchOutlined />}
+          />
+          <Input
+            placeholder="Buylist name..."
+            value={buylistName}
+            onChange={(e) => setBuylistName(e.target.value)}
+            style={{ 
+              marginBottom: 16,
+              width: '100%'
+            }}
+            prefix={<SaveOutlined />}
+          />
+        </div>
+        <div style={{ flex: '1 1 30px', minWidth: '300px', marginRight: '16px' }}>
+          
+          <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Actions</h3>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            onClick={handleSaveBuylist}
+            style={{ marginBottom: 16, marginRight: 8, width: '100%' }}
           >
-            {item.buylist_name}
-          </List.Item>
-        )}
-        style={{ marginBottom: 16 }}
-      />
+            Save Buylist
+          </Button>
+          <Button
+            type="default"
+            icon={<FolderOpenOutlined />}
+            onClick={handleNewBuylist}
+            style={{ marginBottom: 16, width: '100%' }}
+          >
+            New Buylist
+          </Button>
+        </div>
+        <div style={{ flex: '1 1 300px', minWidth: '300px' }}>
+          <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Saved Buylists</h3>
+          <List
+            bordered
+            dataSource={savedBuylists}
+            renderItem={item => (
+              <List.Item
+                actions={[
+                  <Button
+                    type="link"
+                    icon={<FolderOpenOutlined />}
+                    onClick={() => handleLoadBuylist(item.buylist_id)}
+                  >
+                    Load
+                  </Button>
+                ]}
+                style={item.buylist_id === currentBuylistId ? { fontWeight: 'bold' } : {}}
+              >
+                {item.buylist_name}
+              </List.Item>
+            )}
+            style={{ marginBottom: 8 }}
+          />
+        </div>
+      </div>
       <h3 style={{ fontWeight: 'bold', marginTop: 24 }}>Buylist Cards</h3>
       <Table
         dataSource={filteredCards}

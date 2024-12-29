@@ -13,6 +13,7 @@ const Dashboard = ({ userId }) => {
   const [totalCards, setTotalCards] = useState(0);
   const [latestScans, setLatestScans] = useState([]);
   const [latestOptimizations, setLatestOptimizations] = useState([]);
+  const [topBuylists, setTopBuylists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
   const [selectedCard, setSelectedCard] = useState(null);
@@ -34,16 +35,18 @@ const Dashboard = ({ userId }) => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [sitesRes, cardsRes, scansRes, optimizationsRes] = await Promise.all([
+        const [sitesRes, cardsRes, scansRes, optimizationsRes, buylistsRes] = await Promise.all([
           api.get('/sites', { params: { user_id: userId } }), // Add user ID
           api.get('/cards', { params: { user_id: userId } }), // Add user ID
           api.get('/scans?limit=5', { params: { user_id: userId } }), // Add user ID
-          api.get('/results?limit=5', { params: { user_id: userId } }) // Add user ID
+          api.get('/results?limit=5', { params: { user_id: userId } }), // Add user ID
+          api.get('/buylists/top', { params: { user_id: userId, limit: 3 } }) // Fetch top 3 buylists
         ]);
 
         setTotalSites(sitesRes.data.length);
         setTotalCards(cardsRes.data.length);
         setLatestScans(scansRes.data);
+        setTopBuylists(buylistsRes.data); // Set top buylists
         
         // Simplify the filter condition
         const validOptimizations = optimizationsRes.data.filter(opt => 
@@ -62,13 +65,8 @@ const Dashboard = ({ userId }) => {
     fetchData();
   }, [userId]);
 
-  const handleCardClick = (card) => {
-    setSelectedCard(card);
-    setCardDetailVisible(true);
-  };
-
-  const handleNavigation = (path) => {
-    navigate(path);
+  const handleNavigation = (path, state) => {
+    navigate(path, { state });
   };
 
   const renderOptimizationSummary = (result) => {
@@ -94,7 +92,7 @@ const Dashboard = ({ userId }) => {
       <Card 
         hoverable 
         style={{ width: '100%' }}
-        onClick={() => navigate(`/price-tracker`)}
+        onClick={() => handleNavigation(`/price-tracker`)}
       >
         <Space align="start">
           <Badge count={scan.sites_scraped}>
@@ -139,7 +137,7 @@ const Dashboard = ({ userId }) => {
               e.stopPropagation();
               return;
             }
-            navigate(`/results/${optimization.id}`);
+            handleNavigation(`/results/${optimization.id}`);
           }}
         >
           <Space align="start">
@@ -219,6 +217,34 @@ const Dashboard = ({ userId }) => {
             {totalCards}
           </Card>
         </Col>
+        <Col span={8}>
+          <Card 
+            title="Top 3 Buylists" 
+            bordered={false}
+            onClick={() => handleNavigation('/card-management')}
+            style={{ cursor: 'pointer' }}
+          >
+            <List
+              dataSource={topBuylists}
+              renderItem={item => (
+                <List.Item>
+                  <Button 
+                    type="link" 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleNavigation('/card-management', { 
+                        buylistName: item.buylist_name,
+                        buylistId: item.buylist_id
+                      });
+                    }}
+                  >
+                    {item.buylist_name}
+                  </Button>
+                </List.Item>
+              )}
+            />
+          </Card>
+        </Col>
         <Col span={12}>
           <Card 
             title={
@@ -227,7 +253,7 @@ const Dashboard = ({ userId }) => {
                 Latest Scans
               </Space>
             } 
-            extra={<Button type="link" onClick={() => navigate('/price-tracker')}>View All</Button>}
+            extra={<Button type="link" onClick={() => handleNavigation('/price-tracker')}>View All</Button>}
           >
             <List
               dataSource={latestScans}
@@ -244,7 +270,7 @@ const Dashboard = ({ userId }) => {
                 Latest Optimizations
               </Space>
             }
-            extra={<Button type="link" onClick={() => navigate('/results')}>View All</Button>}
+            extra={<Button type="link" onClick={() => handleNavigation('/results')}>View All</Button>}
             loading={loading}
           >
             {latestOptimizations.length > 0 ? (
