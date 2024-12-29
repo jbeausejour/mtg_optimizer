@@ -1,56 +1,89 @@
 import React, { useState } from 'react';
-import { Button, Modal, Space, Divider, Typography, Alert, Spin } from 'antd';
-import { ExportOutlined, ShoppingCartOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Modal, Button, Space, Alert, Typography, Card, Divider } from 'antd';
+import { ShoppingCartOutlined, ExportOutlined, InfoCircleOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 
-const PurchaseUrls = ({ purchaseData, isOpen, onClose }) => {
+const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
     
-  const submitForm = (url, payload) => {
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = url;
-    form.target = '_blank';
+  const submitStoreForm = (store) => {
+    try {
+      // Create a form element
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = store.purchase_url;
+      form.target = '_blank';
+      
+      // Handle different store methods
+      if (store.method === 'crystal' || store.method === 'scrapper') {
+        // Add authenticity token
+        const tokenInput = document.createElement('input');
+        tokenInput.type = 'hidden';
+        tokenInput.name = 'authenticity_token';
+        tokenInput.value = store.payload.authenticity_token;
+        form.appendChild(tokenInput);
+        
+        // Add query with card names
+        const queryInput = document.createElement('input');
+        queryInput.type = 'hidden';
+        queryInput.name = 'query';
+        queryInput.value = store.payload.query;
+        form.appendChild(queryInput);
+        
+        // Add submit button
+        const submitInput = document.createElement('input');
+        submitInput.type = 'hidden';
+        submitInput.name = 'submitBtn';  // Changed from 'submit' to 'submitBtn'
+        submitInput.value = store.payload.submit;
+        form.appendChild(submitInput);
+      } else if (store.method === 'shopify') {
+        // For Shopify stores, handle the JSON payload
+        const queryInput = document.createElement('input');
+        queryInput.type = 'hidden';
+        queryInput.name = 'payload';
+        queryInput.value = store.payload; // Already JSON stringified
+        form.appendChild(queryInput);
+      }
     
-    // Add authenticity token
-    const tokenInput = document.createElement('input');
-    tokenInput.type = 'hidden';
-    tokenInput.name = 'authenticity_token';
-    tokenInput.value = 'Dwn7IuTOGRMC6ekxD8lNnJWrsg45BVs85YplhjuFzbM=';
-    form.appendChild(tokenInput);
+      // Submit the form
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
+      
+      return true;
+    } catch (err) {
+      console.error(`Error submitting form for ${store.site_name}:`, err);
+      return false;
+    }
+  };
+
+  const handleBuyFromStore = async (store) => {
+    setError(null);
+    setIsSubmitting(true);
     
-    // Add query input with card names
-    const queryInput = document.createElement('input');
-    queryInput.type = 'hidden';
-    queryInput.name = 'query';
-    // Join card names with newlines
-    queryInput.value = payload.map(card => card.name).join('\n');
-    form.appendChild(queryInput);
-    
-    // Add submit input
-    const submitInput = document.createElement('input');
-    submitInput.type = 'hidden';
-    submitInput.name = 'submit';
-    submitInput.value = 'Continue';
-    form.appendChild(submitInput);
-  
-    document.body.appendChild(form);
-    form.submit();
-    document.body.removeChild(form);
+    try {
+      const success = submitStoreForm(store);
+      if (!success) {
+        setError(`Failed to open ${store.site_name}. Please check your popup blocker.`);
+      }
+    } catch (err) {
+      setError(`Error processing purchase for ${store.site_name}: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleBuyAll = async () => {
-    setIsSubmitting(true);
     setError(null);
-    
+    setIsSubmitting(true);
+
     try {
       const results = await Promise.all(
         purchaseData?.map(store => {
           try {
-            submitForm(store.purchase_url, store.cards); // Note: using store.cards instead of store.payload
-            return true;
+            return submitStoreForm(store);
           } catch (err) {
             console.error(`Error submitting form for ${store.site_name}:`, err);
             return false;
@@ -60,8 +93,6 @@ const PurchaseUrls = ({ purchaseData, isOpen, onClose }) => {
       
       if (results.some(result => !result)) {
         setError('Some store tabs failed to open. Please try opening stores individually.');
-      } else {
-        onClose();
       }
     } catch (err) {
       setError('Failed to open store tabs. Please check your popup blocker settings.');
@@ -115,15 +146,8 @@ const PurchaseUrls = ({ purchaseData, isOpen, onClose }) => {
           {purchaseData?.map((store) => (
             <Button 
               key={store.site_name}
-              onClick={() => {
-                try {
-                  submitForm(store.purchase_url, store.payload);
-                  onClose();
-                } catch (err) {
-                  console.error(`Error opening ${store.site_name}:`, err);
-                  setError(`Failed to open ${store.site_name}. Please check your popup blocker.`);
-                }
-              }}
+              onClick={() => handleBuyFromStore(store)}
+              disabled={isSubmitting}
               block
               style={{ 
                 marginTop: '8px', 
@@ -149,4 +173,4 @@ const PurchaseUrls = ({ purchaseData, isOpen, onClose }) => {
   );
 };
 
-export default PurchaseUrls;
+export default PurchaseHandler;

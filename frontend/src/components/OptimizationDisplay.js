@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Row, Col, Card, Table, Collapse, Typography, Tag, Space, Button, message } from 'antd';
 import { WarningOutlined, ShoppingCartOutlined } from '@ant-design/icons';
 import { getStandardTableColumns } from '../utils/tableConfig';
-import PurchaseUrls from './PurchaseUrls';
+import PurchaseHandler from './PurchaseUrls';
 import api from '../utils/api';
 
 const { Title, Text } = Typography;
@@ -92,7 +92,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
         </Card>
         
         {purchaseData && (
-          <PurchaseUrls 
+          <PurchaseHandler 
             purchaseData={purchaseData}
             isOpen={isModalOpen}
             onClose={() => setIsModalOpen(false)}
