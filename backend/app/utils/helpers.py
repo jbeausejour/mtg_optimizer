@@ -3,8 +3,6 @@ import logging
 import re
 import uuid
 
-from cv2 import log
-
 logger = logging.getLogger(__name__)
 
 def parse_card_string(card_string):
@@ -80,40 +78,3 @@ def normalize_price(price_string):
         logger.error(f"Fatal error in normalize_price: {str(e)}")
         return None
     
-def create_hawk_url_and_payload(site, card_name):
-    try:
-        api_url = "https://essearchapi-na.hawksearch.com/api/v2/search"
-        # Format query based on card name type
-        if "//" in card_name:
-            # Handle double-faced cards
-            front, back = map(str.strip, card_name.split("//"))
-            query = f'card\\ name.text: "{front}" AND card\\ name\\ 2.text: "{back}"'
-        else:
-            # Handle regular cards including those with quotes or special characters
-            # Keep any existing quotes in the name
-            escaped_name = card_name.replace('"', '\\"')  # Escape any existing quotes
-            if '"' in card_name:
-                # Card already has quotes, use as is
-                query = f'card\\ name.text: "{escaped_name}"'
-            else:
-                # Regular card name
-                query = f'card\\ name.text: "{escaped_name}"'
-        
-        payload = {
-            "ClientData": {
-                "VisitorId": str(uuid.uuid4())
-            },
-            "ClientGuid": "30c874915d164f71bf6f84f594bf623f",
-            "FacetSelections": {
-                "tab": ["Magic"],
-                "child_inventory_level": ["1"]
-            },
-            "query": query,
-            "SortBy": "score"
-        }
-        
-        json_payload = json.dumps(payload)
-        return api_url, json_payload
-    except Exception as e:
-        logger.error(f"Error creating Shopify request for {site.name}: {str(e)}")
-        return None

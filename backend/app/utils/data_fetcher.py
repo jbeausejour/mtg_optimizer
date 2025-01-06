@@ -4,7 +4,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 import json
 import uuid 
-from cv2 import log
 import pandas as pd
 from bs4 import BeautifulSoup
 from threading import Lock
