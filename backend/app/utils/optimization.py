@@ -3,7 +3,6 @@ import logging
 import random
 from functools import partial
 from typing import Dict
-from cv2 import log
 import numpy as np
 import pandas as pd
 import pulp

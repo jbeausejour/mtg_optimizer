@@ -1,7 +1,6 @@
 from datetime import datetime
 from venv import logger
 
-from cv2 import log
 from app.extensions import db
 from sqlalchemy.orm import validates
 from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion

@@ -1,5 +1,4 @@
 import logging
-from cv2 import log
 from flask import Blueprint, jsonify, request, current_app
 from app.services.card_service import CardService
 from app.services.scan_service import ScanService

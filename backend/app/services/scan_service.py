@@ -2,7 +2,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from sqlalchemy import and_, func
 from sqlalchemy.exc import SQLAlchemyError
-from sympy import li
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
 from app.services.site_service import SiteService

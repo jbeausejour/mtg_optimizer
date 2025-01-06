@@ -1033,5 +1033,5 @@ class CardService:
             json_payload = json.dumps(payload)
             return api_url, json_payload
         except Exception as e:
-            logger.error(f"Error creating Shopify request for {site.name}: {str(e)}")
+            logger.error(f"Error creating hawk request for {site.name}: {str(e)}")
             return None

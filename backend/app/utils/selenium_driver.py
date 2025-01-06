@@ -4,7 +4,6 @@ from typing import Optional, Union
 import aiohttp
 from aiohttp import TCPConnector, ClientTimeout
 from urllib.parse import urlparse
-from fake_useragent import UserAgent
 import re
 
 logger = logging.getLogger(__name__)
