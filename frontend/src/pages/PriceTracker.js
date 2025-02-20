@@ -234,15 +234,19 @@ const PriceTracker = ({ userId }) => {
       render: (text, record) => (
         <Popconfirm
           title="Are you sure you want to delete this scan?"
-          onConfirm={() => handleDelete(record.id)}
+          onConfirm={(e) => {
+            e.stopPropagation(); // Ensure stopPropagation is called here
+            handleDelete(record.id);
+          }}
           okText="Yes"
           cancelText="No"
+          onCancel={(e) => e.stopPropagation()} // Ensure stopPropagation is called here
         >
           <Button
             type="link"
             icon={<DeleteOutlined />}
             onClick={(e) => {
-              e.stopPropagation();
+              e.stopPropagation(); // Ensure stopPropagation is called here
             }}
           />
         </Popconfirm>

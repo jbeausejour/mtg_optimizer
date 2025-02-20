@@ -189,6 +189,7 @@ class NetworkDriver:
         max_retries = 5
         retry_count = 0
         backoff_factor = 1
+        wait_time = 1  # Initialize wait_time here
         
         while retry_count < max_retries:
 

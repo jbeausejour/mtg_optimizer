@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Table, Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select, Popconfirm } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
-import { EditOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import api from '../utils/api';
 
 const { Title } = Typography;
@@ -17,6 +17,10 @@ const SiteManagement = ({ userId }) => {
   const [addForm] = Form.useForm();
   const [editMethodValue, setEditMethodValue] = useState('');
   const [addMethodValue, setAddMethodValue] = useState('');
+  const [filteredInfo, setFilteredInfo] = useState({});
+  const [searchText, setSearchText] = useState({});
+  const [searchedColumn, setSearchedColumn] = useState('');
+  const searchInput = useRef(null);
 
   useEffect(() => {
     fetchSites();
@@ -25,7 +29,7 @@ const SiteManagement = ({ userId }) => {
   const fetchSites = async () => {
     try {
       const response = await api.get('/sites', {
-        params: { user_id: userId } // Add user ID
+        params: { user_id: userId }
       });
       setSites(response.data);
     } catch (error) {
@@ -36,12 +40,119 @@ const SiteManagement = ({ userId }) => {
     }
   };
 
+  const handleSearch = (selectedKeys, confirm, dataIndex) => {
+    confirm();
+    setSearchText({ ...searchText, [dataIndex]: selectedKeys[0] });
+    setSearchedColumn(dataIndex);
+  };
+
+  const handleReset = (clearFilters, dataIndex) => {
+    clearFilters();
+    setSearchText({ ...searchText, [dataIndex]: '' });
+  };
+
+  const getColumnSearchProps = (dataIndex) => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+      <div style={{ padding: 8 }}>
+        <Input
+          ref={node => {
+            if (node && !searchInput.current) {
+              searchInput.current = {};
+            }
+            if (node) {
+              searchInput.current[dataIndex] = node;
+            }
+          }}
+          placeholder={`Search ${dataIndex}`}
+          value={selectedKeys[0]}
+          onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+          onPressEnter={() => handleSearch(selectedKeys, confirm, dataIndex)}
+          style={{ width: 188, marginBottom: 8, display: 'block' }}
+        />
+        <Space>
+          <Button
+            type="primary"
+            onClick={() => handleSearch(selectedKeys, confirm, dataIndex)}
+            icon={<SearchOutlined />}
+            size="small"
+            style={{ width: 90 }}
+          >
+            Search
+          </Button>
+          <Button onClick={() => handleReset(clearFilters, dataIndex)} size="small" style={{ width: 90 }}>
+            Reset
+          </Button>
+        </Space>
+      </div>
+    ),
+    filterIcon: filtered => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+    filteredValue: filteredInfo[dataIndex] || null,
+    onFilter: (value, record) => 
+      record[dataIndex]
+        ? record[dataIndex].toString().toLowerCase().includes(value.toLowerCase())
+        : ''
+  });
+
+  const handleResetFilters = () => {
+    setFilteredInfo({});
+    setSearchText({});
+    setSearchedColumn('');
+    if (searchInput.current) {
+      Object.values(searchInput.current).forEach(input => {
+        if (input) {
+          input.value = '';
+        }
+      });
+    }
+    fetchSites();
+  };
+
+
   const getUniqueCountries = () => {
     return [
       { text: 'Canada', value: 'Canada' },
       { text: 'USA', value: 'USA' },
       { text: 'Others', value: 'Others' }
     ];
+  };
+  
+  const getTypeColor = (type) => {
+    switch (type) {
+      case 'Primary':
+        return 'green';
+      case 'Extended':
+        return 'blue';
+      case 'Marketplace':
+        return 'purple';
+      case 'NoInventory':
+        return 'orange';
+      case 'NotWorking':
+        return 'red';
+      default:
+        return 'default';
+    }
+  };
+
+  const getCountryColor = (country) => {
+    switch (country?.toLowerCase()) {
+      case 'usa':
+      case 'united states':
+        return 'blue';
+      case 'canada':
+        return 'green';
+      case 'france':
+        return 'cyan';
+      case 'germany':
+        return 'gold';
+      case 'japan':
+        return 'volcano';
+      case 'korea':
+        return 'geekblue';
+      case 'italy':
+        return 'red';
+      default:
+        return 'default';
+    }
   };
 
   const handleEdit = (record) => {
@@ -93,7 +204,7 @@ const SiteManagement = ({ userId }) => {
   const handleAddSubmit = async () => {
     try {
       const values = await addForm.validateFields();
-      const response = await api.post('/sites', { ...values, user_id: userId }); // Add user ID
+      const response = await api.post('/sites', { ...values}); 
       if (response.data) {
         setSites([...sites, response.data]);
         message.success('Site added successfully');
@@ -115,181 +226,6 @@ const SiteManagement = ({ userId }) => {
       message.error('Failed to delete site');
     }
   };
-
-  const getTypeColor = (type) => {
-    switch (type) {
-      case 'Primary':
-        return 'green';
-      case 'Extended':
-        return 'blue';
-      case 'Marketplace':
-        return 'purple';
-      case 'NoInventory':
-        return 'orange';
-      case 'NotWorking':
-        return 'red';
-      default:
-        return 'default';
-    }
-  };
-
-  const getCountryColor = (country) => {
-    switch (country?.toLowerCase()) {
-      case 'usa':
-      case 'united states':
-        return 'blue';
-      case 'canada':
-        return 'green';
-      case 'france':
-        return 'cyan';
-      case 'germany':
-        return 'gold';
-      case 'japan':
-        return 'volcano';
-      case 'korea':
-        return 'geekblue';
-      case 'italy':
-        return 'red';
-      default:
-        return 'default';
-    }
-  };
-
-  const columns = [
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      sorter: (a, b) => a.name.localeCompare(b.name),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="Search site name"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-            autoFocus
-          />
-          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
-        </div>
-      ),
-      onFilter: (value, record) => record.name.toLowerCase().includes(value.toLowerCase()),
-    },
-    {
-      title: 'Method',
-      dataIndex: 'method',
-      key: 'method',
-      sorter: (a, b) => a.method?.localeCompare(b.method),
-      filters: [
-        { text: 'Crystal', value: 'crystal' },
-        { text: 'Shopify', value: 'shopify' },
-        { text: 'Hawk', value: 'hawk' },
-        { text: 'Scrapper', value: 'scrapper' },
-        { text: 'Other', value: 'other' },
-      ],
-      onFilter: (value, record) => record.method === value,
-    },
-    {
-      title: 'Country',
-      dataIndex: 'country',
-      key: 'country',
-      sorter: (a, b) => a.country?.localeCompare(b.country),
-      filters: getUniqueCountries(),
-      onFilter: (value, record) => record.country === value,
-      render: (country) => (
-        <Tag color={getCountryColor(country)}>
-          {country || 'Unknown'}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Type',
-      dataIndex: 'type',
-      key: 'type',
-      sorter: (a, b) => a.type?.localeCompare(b.type),
-      filters: [
-        { text: 'Primary', value: 'Primary' },
-        { text: 'Extended', value: 'Extended' },
-        { text: 'Marketplace', value: 'Marketplace' },
-        { text: 'No Inventory', value: 'NoInventory' },
-        { text: 'Not Working', value: 'NotWorking' },
-      ],
-      onFilter: (value, record) => record.type === value,
-      render: (type) => (
-        <Tag color={getTypeColor(type)}>
-          {type === 'NoInventory' ? 'No Inventory' : 
-           type === 'NotWorking' ? 'Not Working' : 
-           type}
-        </Tag>
-      ),
-    },
-    {
-      title: 'URL',
-      dataIndex: 'url',
-      key: 'url',
-      render: (text) => <a href={text} target="_blank" rel="noopener noreferrer">{text}</a>,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="Search URL"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-            autoFocus
-          />
-          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
-        </div>
-      ),
-      onFilter: (value, record) => record.url.toLowerCase().includes(value.toLowerCase()),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'active',
-      key: 'active',
-      render: (active) => (
-        <Tag color={active ? 'green' : 'red'}>
-          {active ? 'Active' : 'Inactive'}
-        </Tag>
-      ),
-      filters: [
-        { text: 'Active', value: true },
-        { text: 'Inactive', value: false },
-      ],
-      onFilter: (value, record) => record.active === value,
-      sorter: (a, b) => Number(a.active) - Number(b.active),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_, record) => (
-        <Space>
-          <Button 
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            Edit
-          </Button>
-          <Popconfirm
-            title="Are you sure you want to delete this site?"
-            onConfirm={() => handleDelete(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Button danger icon={<DeleteOutlined />}>
-              Delete
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
-  if (loading) return <Spin size="large" />;
-
   const handleMethodChange = (value, formType) => {
     if (formType === 'edit') {
       setEditMethodValue(value);
@@ -375,6 +311,129 @@ const SiteManagement = ({ userId }) => {
     );
   };
 
+
+  const columns = [
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      sorter: (a, b) => a.name.localeCompare(b.name),
+      ...getColumnSearchProps('name'),
+    },
+    {
+      title: 'Method',
+      dataIndex: 'method',
+      key: 'method',
+      sorter: (a, b) => a.method?.localeCompare(b.method),
+      filters: [
+        { text: 'Crystal', value: 'crystal' },
+        { text: 'Shopify', value: 'shopify' },
+        { text: 'Hawk', value: 'hawk' },
+        { text: 'Scrapper', value: 'scrapper' },
+        { text: 'Other', value: 'other' },
+      ],
+      filteredValue: filteredInfo.method || null,
+      onFilter: (value, record) => record.method === value,
+    },
+    {
+      title: 'Country',
+      dataIndex: 'country',
+      key: 'country',
+      sorter: (a, b) => a.country?.localeCompare(b.country),
+      filters: getUniqueCountries(),
+      filteredValue: filteredInfo.country || null,
+      onFilter: (value, record) => record.country === value,
+      render: (country) => (
+        <Tag color={getCountryColor(country)}>
+          {country || 'Unknown'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Type',
+      dataIndex: 'type',
+      key: 'type',
+      sorter: (a, b) => a.type?.localeCompare(b.type),
+      filters: [
+        { text: 'Primary', value: 'Primary' },
+        { text: 'Extended', value: 'Extended' },
+        { text: 'Marketplace', value: 'Marketplace' },
+        { text: 'No Inventory', value: 'NoInventory' },
+        { text: 'Not Working', value: 'NotWorking' },
+      ],
+      filteredValue: filteredInfo.type || null,
+      onFilter: (value, record) => record.type === value,
+      render: (type) => (
+        <Tag color={getTypeColor(type)}>
+          {type === 'NoInventory' ? 'No Inventory' : 
+           type === 'NotWorking' ? 'Not Working' : 
+           type}
+        </Tag>
+      ),
+    },
+    {
+      title: 'URL',
+      dataIndex: 'url',
+      key: 'url',
+      render: (text) => <a href={text} target="_blank" rel="noopener noreferrer">{text}</a>,
+      ...getColumnSearchProps('url'),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'active',
+      key: 'active',
+      render: (active) => (
+        <Tag color={active ? 'green' : 'red'}>
+          {active ? 'Active' : 'Inactive'}
+        </Tag>
+      ),
+      filters: [
+        { text: 'Active', value: true },
+        { text: 'Inactive', value: false },
+      ],
+      filteredValue: filteredInfo.active || null,
+      onFilter: (value, record) => record.active === value,
+      sorter: (a, b) => Number(a.active) - Number(b.active),
+    },
+    {
+      title: (
+        <div>
+          Actions
+          <Button
+            size="small"
+            style={{ marginLeft: 8 }}
+            onClick={handleResetFilters}
+          >
+            Reset All Filters
+          </Button>
+        </div>
+      ),
+      key: 'actions',
+      render: (_, record) => (
+        <Space>
+          <Button 
+            icon={<EditOutlined />}
+            onClick={() => handleEdit(record)}
+          >
+            Edit
+          </Button>
+          <Popconfirm
+            title="Are you sure you want to delete this site?"
+            onConfirm={() => handleDelete(record.id)}
+            okText="Yes"
+            cancelText="No"
+          >
+            <Button danger icon={<DeleteOutlined />}>
+              Delete
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  if (loading) return <Spin size="large" />;
+
   return (
     <div className={`site-management section ${theme}`}>
       <Title level={2}>Site Management</Title>
@@ -393,6 +452,9 @@ const SiteManagement = ({ userId }) => {
           columns={columns}
           rowKey="id"
           pagination={false}
+          onChange={(pagination, filters) => {
+            setFilteredInfo(filters);
+          }}
         />
       </Card>
 

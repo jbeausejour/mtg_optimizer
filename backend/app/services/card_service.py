@@ -9,7 +9,7 @@ from app.models.card import UserBuylistCard
 from mtgsdk import Card, Set
 import logging
 import requests
-from fuzzywuzzy import fuzz, process
+from thefuzz import fuzz, process
 from flask import current_app
 from contextlib import contextmanager
 from app.constants.card_mappings import CardLanguage, CardVersion
