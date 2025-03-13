@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import pandas as pd
+import time
 from sqlalchemy.orm import Query
 from flask import current_app
 from app.extensions import db
@@ -172,9 +173,13 @@ class OptimizationTaskManager:
             card_listings = []
             
             if scraping_results:
+                
+                start_time = time.time()  # Start timing
                 logger.info(f"Processing {len(scraping_results)} scraping results")
                 card_listings = self._process_scraping_results(scraping_results)
-                logger.info(f"Processed {len(card_listings)} card listings results")
+                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+
+                logger.info(f"Processed {len(card_listings)} card listings results in {elapsed_time} seconds")
             else:
                 scan_id = self._get_scan_id()
                 if scan_id:
@@ -449,6 +454,12 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
                          meta={"exc_type": type(e).__name__, "exc_message": str(e)})
         raise
 
+@celery_app.task
+def refresh_scryfall_cache():
+    """Periodically refresh the Scryfall card name and set caches."""
+    print("Refreshing Scryfall card name and set caches...")
+    CardService.fetch_scryfall_card_names()
+    CardService.fetch_scryfall_set_codes()
 
 def handle_success(optimization_result: Dict, task_manager: OptimizationTaskManager) -> Dict:
     """Handle successful optimization"""

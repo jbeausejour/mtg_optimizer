@@ -1,131 +1,215 @@
 from datetime import datetime
 import json
 import re
+import redis
 import uuid
-from sqlalchemy.exc import SQLAlchemyError
-import urllib
-from app.extensions import db
-from app.models.card import UserBuylistCard
-from mtgsdk import Card, Set
 import logging
 import requests
-from thefuzz import fuzz, process
+import traceback
 from flask import current_app
-from contextlib import contextmanager
-from app.constants.card_mappings import CardLanguage, CardVersion
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.sql import func
+from app.extensions import db
+from app.models.UserBuylistCard import UserBuylistCard
+from app.models.buylist import UserBuylist
 from app.services.site_service import SiteService
+from app.constants.card_mappings import CardLanguage, CardVersion
+
+from thefuzz import fuzz, process
+from contextlib import contextmanager
+
 
 logger = logging.getLogger(__name__)
 
 SCRYFALL_API_BASE = "https://api.scryfall.com"
+SCRYFALL_CATALOG_CARD_NAMES = f"{SCRYFALL_API_BASE}/catalog/card-names"
+SCRYFALL_SETS_URL = f"{SCRYFALL_API_BASE}/sets"
+
 SCRYFALL_API_NAMED_URL = f"{SCRYFALL_API_BASE}/cards/named"
 SCRYFALL_API_SEARCH_URL = f"{SCRYFALL_API_BASE}/cards/search"
-SCRYFALL_API_SET_URL = f"{SCRYFALL_API_BASE}/sets"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
-class CardService:
-    _sets_cache = {}
-    _sets_cache_timestamp = None
-    
-    @classmethod
-    def __init__(cls):
-        """Initialize the sets cache during class creation"""
-        cls._refresh_sets_cache()
-    
+REDIS_HOST = "192.168.68.15"
+REDIS_PORT = 6379
+CACHE_EXPIRATION = 86400  # 24 hours (same as card names)
+REDIS_SETS_KEY = "scryfall_set_codes"
+REDIS_CARDNAME_KEY = "scryfall_card_names"
+
+class CardService:    
     @contextmanager
     def transaction_context():
         """Context manager for database transactions"""
+        session = db.session  # Ensure the session is explicitly retrieved
         try:
-            yield
-            db.session.commit()
+            yield session
+            session.commit()
         except SQLAlchemyError as e:
-            db.session.rollback()
+            session.rollback()
             logger.error(f"Database error: {str(e)}")
             raise
         except Exception as e:
-            db.session.rollback()
+            session.rollback()
             logger.error(f"Error in transaction: {str(e)}")
             raise
         finally:
-            db.session.close()
+            session.close()
 
-    # Cache realted functions
-    @classmethod
-    def _refresh_sets_cache(cls):
-        """Internal method to refresh the sets cache"""
+    """Handles card-related operations including validation and buylist management."""
+
+    @staticmethod
+    def get_redis_client():
+        """Returns a Redis client instance."""
+        return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+
+    # ====== 🔹 Caching Scryfall Card Names 🔹 ======
+    @staticmethod
+    def fetch_scryfall_card_names():
+        """Fetch the full list of valid card names from Scryfall and cache it in Redis with normalization."""
+        redis_client = CardService.get_redis_client()
+
         try:
-            session = cls._get_http_session()
-            response = session.get(SCRYFALL_API_SET_URL)
+            logger.info("Fetching full card list from Scryfall...")
+            response = requests.get("https://api.scryfall.com/catalog/card-names")
             response.raise_for_status()
-            
+            card_names = response.json().get("data", [])
+
+            # ✅ Normalize all card names
+            normalized_card_names = set()
+
+            logger.info("Normalizing...")
+            for name in card_names:
+                normalized_name = name.strip().lower()
+                normalized_card_names.add(normalized_name)
+
+                # ✅ Handle double-sided cards
+                if " // " in normalized_name:
+                    parts = normalized_name.split(" // ")
+                    normalized_card_names.add(parts[0])  # First part
+                    normalized_card_names.add(parts[1])  # Second part
+
+            # ✅ Store in Redis (convert set to list)
+            logger.info("Storing full card list in redis...")
+            redis_client.set(REDIS_CARDNAME_KEY, json.dumps(list(normalized_card_names)))
+
+            logger.info(f"Cached {len(normalized_card_names)} card names from Scryfall.")
+            return normalized_card_names
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching Scryfall card names: {str(e)}")
+            return []
+
+    @staticmethod
+    def is_valid_card_name(card_name):
+        """Check if a given card name exists in the cached Scryfall card list, handling double-sided names."""
+        redis_client = CardService.get_redis_client()
+        card_names = redis_client.get(REDIS_CARDNAME_KEY)
+
+        if not card_names:
+            card_names = CardService.fetch_scryfall_card_names()
+        else:
+            card_names = json.loads(card_names)
+
+        # Normalize input (remove extra spaces, handle case sensitivity)
+        normalized_input = card_name.strip().lower()
+
+        # Direct match first
+        if normalized_input in card_names:
+            return True
+
+        # Handle double-sided names (Scryfall uses " // ")
+        for full_card_name in card_names:
+            if " // " in full_card_name:
+                # Extract both sides of the double-sided card
+                sides = full_card_name.lower().split(" // ")
+                if normalized_input in sides:
+                    return True
+
+        return False  # No match found
+
+    @staticmethod
+    def fetch_scryfall_set_codes():
+        """Fetch all valid set codes from Scryfall and cache them in Redis, excluding certain sets."""
+        redis_client = CardService.get_redis_client()
+        cached_data = redis_client.get(REDIS_SETS_KEY)
+
+        if cached_data:
+            return json.loads(cached_data)
+
+        try:
+            logger.info("Fetching full set list from Scryfall...")
+            response = requests.get(SCRYFALL_SETS_URL, timeout=10)
+            response.raise_for_status()
             data = response.json()
-            if not isinstance(data, dict) or 'data' not in data:
+
+            if not isinstance(data, dict) or "data" not in data:
                 raise ValueError("Invalid response format from Scryfall API")
 
             sets_data = {}
             excluded_set_types = {"minigame", "alchemy", "box", "memorabilia", "treasure_chest"}
+
             for set_data in data["data"]:
-                try:
-                    if set_data["set_type"] in excluded_set_types:
-                        continue
-                    set_name = set_data["name"].lower()
-                    sets_data[set_name] = {
-                        "code": set_data["code"],
-                        "name": set_data["name"],
-                        "released_at": set_data["released_at"],
-                        "set_type": set_data["set_type"]
-                    }
-                except KeyError as e:
-                    logger.warning(f"Missing key in set data: {e}")
+                if set_data["set_type"] in excluded_set_types:
                     continue
 
-            cls._sets_cache = sets_data
-            cls._sets_cache_timestamp = datetime.now()
-            logger.info(f"Successfully cached {len(sets_data)} sets")
-            
-        except Exception as e:
-            logger.error(f"Error refreshing sets cache: {str(e)}")
-        finally:
-            session.close()
+                set_name = set_data["name"].lower()
+                sets_data[set_name] = {
+                    "code": set_data["code"],
+                    "name": set_data["name"],
+                    "released_at": set_data.get("released_at", None),
+                    "set_type": set_data["set_type"]
+                }
 
-    @classmethod
-    def _get_http_session(cls):
-        """Create session with retry logic"""
-        session = requests.Session()
-        retries = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[500, 502, 503, 504]
-        )
-        session.mount('https://', HTTPAdapter(max_retries=retries))
-        return session
+
+            if sets_data:
+                redis_client.setex(REDIS_SETS_KEY, CACHE_EXPIRATION, json.dumps(sets_data))
+                logger.info(f"Cached {len(sets_data)} valid set codes from Scryfall.")
+                return sets_data
+            else:
+                logger.warning("No valid set codes found from Scryfall API.")
+                return {}
+
+        except requests.RequestException as e:
+            logger.error(f"Error fetching Scryfall set codes: {str(e)}")
+            return {}
+
+    @staticmethod
+    def is_valid_set_name(set_name):
+        """Check if a given set name exists in the cached Scryfall set list."""
+        redis_client = CardService.get_redis_client()
+        set_codes = redis_client.get(REDIS_SETS_KEY)
+
+        if not set_codes:
+            set_codes = CardService.fetch_scryfall_set_codes()
+        else:
+            set_codes = json.loads(set_codes)
+
+        return set_name.lower() in set_codes
 
     # Set Operations
-    @classmethod
-    def get_sets_data(cls, force_refresh=False):
-        """Get sets data from cache or refresh if needed"""
-        if force_refresh or not cls._sets_cache:
-            cls._refresh_sets_cache()
-        return cls._sets_cache
+    @staticmethod
+    def get_sets_data(force_refresh=False):
+        """Fetch set data from Redis or refresh if needed."""
+        redis_client = CardService.get_redis_client()
+        
+        if force_refresh:
+            return CardService.fetch_scryfall_set_codes()
+        
+        cached_sets = redis_client.get(REDIS_SETS_KEY)
+        if cached_sets:
+            return json.loads(cached_sets)
+
+        return CardService.fetch_scryfall_set_codes()  # Refresh if missing
     
     @staticmethod
     def fetch_all_sets():
-        try:
-            sets = Set.all()
-            sets_data = [
-                {
-                    "set": card_set.code,
-                    "name": card_set.name,
-                    "released_at": card_set.release_date,
-                }
-                for card_set in sets
-            ]
-            return sets_data
-        except Exception as e:
-            current_app.logger.error(f"Error fetching sets data: {str(e)}")
-            return []
+        """Fetch all valid sets from Redis (cached from Scryfall)."""
+        redis_client = CardService.get_redis_client()
+        cached_sets = redis_client.get(REDIS_SETS_KEY)
+
+        if cached_sets:
+            return [{"set": code, "name": name} for name, code in json.loads(cached_sets).items()]
+        
+        return []
 
     @classmethod
     def _normalize_set_name(cls, name):
@@ -464,7 +548,7 @@ class CardService:
                         return set_info["name"]
                         
         except Exception as e:
-            logger.error(f"Error during fuzzy matching of set name: {str(e)}")
+            logger.error(f"Error during fuzzy matching of set name: {str(e)}",exc_info=True)
 
         # Check for "promo" in the name and match against promo sets
         if "promo" in unclean_set_name.lower():
@@ -558,20 +642,45 @@ class CardService:
         
         # Remove duplicates and empty strings
         return list(set(v for v in variants if v))
-    # Card Operations
+
     @staticmethod
-    def get_user_buylist_cards():
-        return UserBuylistCard.query.all()
+    def get_next_buylist_id(user_id):
+        """
+        Get the next available buylist_id for a user by finding the maximum and incrementing.
+
+        Args:
+            user_id (int): The ID of the user.
+
+        Returns:
+            int: The next available buylist_id.
+        """
+        try:
+            with CardService.transaction_context() as session:
+                # Query for the maximum buylist_id for the given user_id
+                max_buylist_id = session.query(func.max(UserBuylist.id))\
+                    .filter(UserBuylist.user_id == user_id)\
+                    .scalar()
+
+                # Increment the maximum buylist_id or start from 1 if no buylists exist
+                return (max_buylist_id or 0) + 1
+        except Exception as e:
+            logger.error(f"Error fetching max buylist_id for user {user_id}: {str(e)}")
+            raise
+
+    #  Card Operations
+    @staticmethod
+    def get_all_user_buylist_cards(user_id):
+        return UserBuylistCard.query.filter_by(user_id=user_id).all()
+    
+    # @staticmethod
+    # def get_user_buylist_card_by_id(card_id):
+    #     """
+    #     Get a specific card from the user's buylist by ID.
+    #     """
+    #     return UserBuylistCard.query.filter_by(id=card_id).first()
     
     @staticmethod
-    def get_user_buylist_card_by_id(card_id):
-        """
-        Get a specific card from the user's buylist by ID.
-        """
-        return Card.query.filter_by(id=card_id).first()
-    
-    @staticmethod
-    def add_user_buylist_card(card_id=None, name=None, set_name=None, language="English", quantity=1, version="Standard", foil=False, buylist_id=None, user_id=None):
+    def add_user_buylist_card(card_id=None, name=None, set_name=None, language="English", quality="NM", quantity=1, version="Standard", foil=False, buylist_id=None, user_id=None):
         """Save a new card or update an existing card with proper validation and error handling"""
         try:
             with CardService.transaction_context():
@@ -607,6 +716,7 @@ class CardService:
                         set_code=set_code,
                         set_name=set_name,
                         language=language,
+                        quality=quality,
                         quantity=quantity,
                         version=version,
                         foil=foil,
@@ -628,119 +738,235 @@ class CardService:
             
             card = UserBuylistCard.query.get(card_id)
             if not card:
-                current_app.logger.error(f"Card {card_id} not found")
                 return None
 
-            # Update card attributes
+            buylist_id = data.get("buylist_id")
+            if not buylist_id:
+                raise ValueError("Buylist ID is required")
+
+            buylist = UserBuylist.query.get(buylist_id)
+            if not buylist:
+                raise ValueError("Buylist does not exist")
+
+            if card.buylist_id != buylist_id:
+                raise ValueError("Card does not belong to the provided buylist")
+
             card.name = data.get("name", card.name)
             card.set_code = data.get("set_code", card.set_code)
             card.set_name = data.get("set_name", card.set_name)
             card.language = data.get("language", card.language)
             card.quantity = data.get("quantity", card.quantity)
+            card.quality = data.get("quality", card.quality)
             card.version = data.get("version", card.version)
             card.foil = data.get("foil", card.foil)
-            card.buylist_name = data.get("buylist_name", card.buylist_name)  # Add this line
 
-            current_app.logger.info(f"Updated card data: {card.to_dict()}")
             db.session.commit()
-
             return card
         except Exception as e:
             current_app.logger.error(f"Error updating card: {str(e)}")
             db.session.rollback()
             raise
     
+
+    @staticmethod
+    def update_user_buylist_name(id, user_id, newbuylist_name):
+        """Update the name of a specific buylist for a user."""
+        # Find the buylist
+        buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
+        
+        if not buylist:
+            raise ValueError("Buylist does not exist.")
+        
+        buylist.name = newbuylist_name
+        db.session.commit()
+        current_app.logger.info(f"Buylist '{buylist.name}' updated successfully")
+        return buylist
+
     @staticmethod
     def get_all_buylists(user_id):
-        """Get all saved buylists for a specific user."""
+        """Retrieve all unique buylists for a specific user."""
         try:
-            buylists = UserBuylistCard.query.with_entities(UserBuylistCard.buylist_id, UserBuylistCard.buylist_name).filter_by(user_id=user_id).distinct().all()
-            return [{"buylist_id": buylist[0], "buylist_name": buylist[1]} for buylist in buylists]
+            buylists = db.session.query(
+                UserBuylist.id,
+                UserBuylist.name
+            ).filter(UserBuylist.user_id == user_id).all()
+
+            return [{"id": buylist.id, "name": buylist.name or "Unnamed Buylist"} for buylist in buylists]
         except Exception as e:
             logger.error(f"Error fetching buylists: {str(e)}")
             raise
 
-    @staticmethod
-    def save_buylist(buylist_id, buylist_name, user_id, cards):
-        """Save a new buylist or update an existing one."""
-        try:
-            with CardService.transaction_context():
-                buylist = UserBuylistCard.query.filter_by(buylist_id=buylist_id, user_id=user_id).first()
-                if buylist:
-                    # Update existing buylist
-                    buylist.cards = cards
-                    db.session.add(buylist)  # Ensure the buylist is added to the session
-                else:
-                    # Create new buylist
-                    max_buylist_id = db.session.query(db.func.max(UserBuylistCard.buylist_id)).filter_by(user_id=user_id).scalar() or 0
-                    new_buylist_id = max_buylist_id + 1
-                    for card in cards:
-                        new_card = UserBuylistCard(
-                            name=card['name'],
-                            set_code=card.get('set_code'),
-                            set_name=card.get('set_name'),
-                            language=card.get('language', 'English'),
-                            quantity=card.get('quantity', 1),
-                            version=card.get('version', 'Standard'),
-                            foil=card.get('foil', False),
-                            buylist_id=new_buylist_id,
-                            buylist_name=buylist_name,
-                            user_id=user_id
-                        )
-                        db.session.add(new_card)  # Ensure each new card is added to the session
-                db.session.commit()  # Commit the session after adding all cards
-                return buylist or new_card
-        except Exception as e:
-            logger.error(f"Error saving buylist: {str(e)}")
-            db.session.rollback()
-            raise
-
-    @staticmethod
-    def get_buylist_by_id(buylist_id):
-        """Get a saved buylist by ID."""
-        try:
-            return UserBuylistCard.query.get(buylist_id)
-        except Exception as e:
-            logger.error(f"Error fetching buylist: {str(e)}")
-            raise
-
-    @staticmethod
-    def get_buylist_by_name(buylist_name):
-        """Get a saved buylist by name."""
-        try:
-            return UserBuylistCard.query.filter_by(buylist_name=buylist_name).all()
-        except Exception as e:
-            logger.error(f"Error fetching buylist: {str(e)}")
-            raise
-
-    @staticmethod
-    def get_buylist_cards_by_id(buylist_id):
-        """Get all cards for a specific buylist by ID."""
-        try:
-            return UserBuylistCard.query.filter_by(buylist_id=buylist_id).all()
-        except Exception as e:
-            logger.error(f"Error fetching buylist cards: {str(e)}")
-            raise
 
     @staticmethod
     def get_top_buylists(user_id, limit=3):
-        """Get the top 'limit' buylists for a specific user."""
+        """Get the top 'limit' buylists for a specific user, sorted by most recently updated."""
         try:
-            buylists = UserBuylistCard.query\
-                .with_entities(
-                    UserBuylistCard.buylist_id,
-                    UserBuylistCard.buylist_name
-                )\
-                .filter_by(user_id=user_id)\
-                .distinct()\
-                .limit(limit)\
-                .all()
-            return [{"buylist_id": b.buylist_id, "buylist_name": b.buylist_name} for b in buylists]
+            buylists = db.session.query(
+                UserBuylist.id,
+                UserBuylist.name
+            ).filter(UserBuylist.user_id == user_id)\
+            .order_by(UserBuylist.updated_at.desc())\
+            .limit(limit)\
+            .all()
+
+            return [{"id": buylist.id, "name": buylist.name} for buylist in buylists]
         except Exception as e:
             logger.error(f"Error fetching top buylists: {str(e)}")
             raise
 
-    # Scryfall section
+    
+    @staticmethod
+    def create_buylist(name, user_id):
+        buylist = UserBuylist(name=name, user_id=user_id)
+        db.session.add(buylist)
+        db.session.commit()
+        db.session.refresh(buylist)
+        return buylist
+    
+    @staticmethod
+    def add_card_to_buylist(user_id, id, cards_data):
+        """
+        Adds cards to a buylist, preventing duplicates.
+        """
+        buylist = UserBuylist.query.get(id)
+        if not buylist:
+            raise ValueError("Buylist does not exist.")
+
+        if not cards_data:
+            raise ValueError("No cards provided.")
+
+        try:
+            with CardService.transaction_context():
+                existing_cards = {c.name.lower() for c in buylist.cards}
+                
+                for card in cards_data:
+                    card_name = card["name"].strip().lower()
+                    if card_name in existing_cards:
+                        continue  # Skip duplicate cards
+
+                    new_card = UserBuylistCard(
+                        user_id=user_id,
+                        buylist_id=id,
+                        name=card["name"],
+                        set_name=card["set_name"],
+                        set_code=card["set_code"],
+                        language=card["language"],
+                        quantity=card["quantity"],
+                        version=card["version"],
+                        foil=card["foil"]
+                    )
+                    db.session.add(new_card)
+                
+                db.session.commit()
+                return buylist
+        except Exception as e:
+            logger.error(f"Error adding cards to buylist: {str(e)}")
+            raise
+    
+    @staticmethod
+    def delete_buylist(id, user_id):
+        """
+        Deletes a buylist and all associated cards by its ID and user.
+
+        Args:
+            buylist_id (int): The ID of the buylist to delete.
+            user_id (int): The ID of the user who owns the buylist.
+
+        Returns:
+            bool: True if the buylist was deleted, False otherwise.
+        """
+        try:
+            with CardService.transaction_context():
+                # ✅ Check if the buylist exists
+                buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
+                if not buylist:
+                    logger.warning(f"Buylist {id} not found for user {user_id}.")
+                    return False
+                
+                # ✅ Delete all associated cards
+                db.session.query(UserBuylistCard).filter_by(buylist_id=id, user_id=user_id).delete()
+
+                # ✅ Delete the buylist itself
+                db.session.delete(buylist)
+
+                # ✅ Commit the transaction once
+                db.session.commit()
+
+                logger.info(f"Buylist {id} and all associated cards deleted successfully.")
+                return True
+
+        except Exception as e:
+            logger.error(f"Error deleting buylist {id}: {str(e)}")
+            return False
+
+
+    @staticmethod
+    def delete_card_from_buylist(id, card_name, quantity, user_id):
+        """
+        Deletes a card from the specified buylist.
+
+        Args:
+            buylist_id (int): The ID of the buylist.
+            card_name (str): The name of the card to delete.
+            quantity (int): The quantity of the card to remove.
+            user_id (int): The ID of the user performing the operation.
+
+        Returns:
+            bool: True if the card was successfully deleted, False otherwise.
+        """
+        try:
+            with CardService.transaction_context():
+                # Query for the card in the user's buylist
+                card = UserBuylistCard.query.filter_by(
+                    buylist_id=id,
+                    name=card_name,
+                    user_id=user_id
+                ).first()
+
+                if not card:
+                    logger.warning(f"Card '{card_name}' not found in buylist ID {id}.")
+                    return False
+
+                # If the card exists, adjust quantity or delete it
+                if card.quantity > quantity:
+                    card.quantity -= quantity
+                    logger.info(f"Reduced quantity of '{card_name}' in buylist ID {id} by {quantity}. Remaining: {card.quantity}.")
+                else:
+                    db.session.delete(card)
+                    logger.info(f"Deleted '{card_name}' from buylist ID {id}.")
+
+                return True
+        except Exception as e:
+            logger.error(f"Error deleting card '{card_name}' from buylist ID {id}: {str(e)}")
+            return False
+
+    # @staticmethod
+    # def get_buylist_by_id(buylist_id):
+    #     """Get a saved buylist by ID."""
+    #     try:
+    #         return UserBuylistCard.query.get(buylist_id)
+    #     except Exception as e:
+    #         logger.error(f"Error fetching buylist: {str(e)}")
+    #         raise
+
+    # @staticmethod
+    # def get_buylist_by_name(buylist_name):
+    #     """Get a saved buylist by name."""
+    #     try:
+    #         return UserBuylist.query.filter_by(name=buylist_name).all()
+    #     except Exception as e:
+    #         logger.error(f"Error fetching buylist: {str(e)}")
+    #         raise
+
+    @staticmethod
+    def get_buylist_cards_by_id(id):
+        """Get all cards for a specific buylist by ID."""
+        try:
+            return UserBuylistCard.query.filter_by(buylist_id=id).all()
+        except Exception as e:
+            logger.error(f"Error fetching buylist cards: {str(e)}")
+            raise
+    
     @staticmethod
     def fetch_scryfall_data(card_name, set_code=None, language=None, version=None):
         current_app.logger.info(f"Fetching Scryfall data for: {card_name} (set: {set_code})")
@@ -818,37 +1044,37 @@ class CardService:
             current_app.logger.error(f"Error in fetch_card_data: {str(e)}")
             return None
      
-    @staticmethod
-    def fetch_all_printings(prints_search_uri):
-        all_printings = []
-        next_page = prints_search_uri
+    # @staticmethod
+    # def fetch_all_printings(prints_search_uri):
+    #     all_printings = []
+    #     next_page = prints_search_uri
 
-        while next_page:
-            try:
-                response = requests.get(next_page)
-                response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                current_app.logger.error(f"Error fetching printings data from Scryfall: {str(e)}")
-                return []
+    #     while next_page:
+    #         try:
+    #             response = requests.get(next_page)
+    #             response.raise_for_status()
+    #         except requests.exceptions.RequestException as e:
+    #             current_app.logger.error(f"Error fetching printings data from Scryfall: {str(e)}")
+    #             return []
 
-            data = response.json()
-            current_app.logger.debug(f"Scryfall all printings data for page: {data}")
+    #         data = response.json()
+    #         current_app.logger.debug(f"Scryfall all printings data for page: {data}")
 
-            for card in data.get('data', []):
-                current_app.logger.debug(f"Processing card printing: {card}")
-                all_printings.append({
-                    'set_code': card.get('set'),
-                    'set_name': card.get('set_name'),
-                    'rarity': card.get('rarity'),
-                    'collector_number': card.get('collector_number'),
-                    'prices': card.get('prices'),
-                    'scryfall_uri': card.get('scryfall_uri'),
-                    'image_uris': card.get('image_uris')  # Include image_uris for hover previews
-                })
+    #         for card in data.get('data', []):
+    #             current_app.logger.debug(f"Processing card printing: {card}")
+    #             all_printings.append({
+    #                 'set_code': card.get('set'),
+    #                 'set_name': card.get('set_name'),
+    #                 'rarity': card.get('rarity'),
+    #                 'collector_number': card.get('collector_number'),
+    #                 'prices': card.get('prices'),
+    #                 'scryfall_uri': card.get('scryfall_uri'),
+    #                 'image_uris': card.get('image_uris')  # Include image_uris for hover previews
+    #             })
 
-            next_page = data.get('next_page')
+    #         next_page = data.get('next_page')
 
-        return all_printings
+    #     return all_printings
 
     @staticmethod
     def get_card_suggestions(query, limit=20):

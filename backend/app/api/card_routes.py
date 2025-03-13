@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 # Defining Blueprint for Card Routes
 card_routes = Blueprint("card_routes", __name__)
 
+############################################################################################################
 # Buylist Operations
+############################################################################################################
 @card_routes.route("/buylists", methods=["GET"])
 def get_buylists():
     """Get all saved buylists for a specific user."""
@@ -32,36 +34,114 @@ def get_buylists():
         return jsonify({"error": "Failed to fetch buylists"}), 500
 
 @card_routes.route("/buylists", methods=["POST"])
-def save_buylist():
-    """Save a new buylist or update an existing one."""
+def create_buylist():
+    """
+    Create a new buylist.
+    """
     try:
         data = request.json
-        buylist_id = data.get("buylist_id")
-        buylist_name = data.get("buylist_name")
+        name = data.get("name", "Untitled Buylist")
         user_id = data.get("user_id")
-        cards = data.get("cards")
 
-        if not buylist_name or not user_id or not cards:
-            return jsonify({"error": "Buylist name, user ID, and cards are required"}), 400
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
 
-        buylist = CardService.save_buylist(buylist_id, buylist_name, user_id, cards)
-        return jsonify(buylist.to_dict()), 201
+        current_app.logger.info(f"Creating new buylist '{name}' for user {user_id}")
+        new_buylist = CardService.create_buylist(name=name, user_id=user_id)
+        return jsonify(new_buylist.to_dict()), 201
+
     except Exception as e:
-        current_app.logger.error(f"Error saving buylist: {str(e)}")
-        return jsonify({"error": "Failed to save buylist"}), 500
+        current_app.logger.error(f"Error creating buylist: {str(e)}")
+        return jsonify({"error": "Failed to create buylist"}), 500
 
-@card_routes.route("/buylists/<int:buylist_id>", methods=["GET"])
-def load_buylist(buylist_id):
-    """Load a saved buylist by ID."""
+@card_routes.route("/buylists/<int:id>", methods=["GET"])
+def load_buylist(id=None):
+    """Load a saved buylist by ID or all buylists' cards if ID is None."""
     try:
-        buylist_cards = CardService.get_buylist_cards_by_id(buylist_id)
-        if not buylist_cards:
-            return jsonify({"error": "Buylist not found"}), 404
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
 
-        return jsonify([card.to_dict() for card in buylist_cards])
+        if id:
+            current_app.logger.info(f"Loading buylist {id} for user {user_id}")
+            buylist_cards = CardService.get_buylist_cards_by_id(id)
+            current_app.logger.info(f"Loaded {len(buylist_cards)} cards for buylist {id}")
+        else:
+            current_app.logger.info(f"Loading all buylist cards for user {user_id}")
+            buylist_cards = CardService.get_all_user_buylist_cards(user_id)
+            current_app.logger.info(f"Loaded all {len(buylist_cards)} cards for user {user_id}")
+
+        return jsonify([card.to_dict() for card in buylist_cards]), 200
+
     except Exception as e:
         current_app.logger.error(f"Error loading buylist: {str(e)}")
-        return jsonify({"error": "Failed to load buylist"}), 500 
+        return jsonify({"error": "Failed to load buylist"}), 500
+
+@card_routes.route("/buylists/<int:id>", methods=["DELETE"])
+def delete_buylist(id):
+
+    """
+    Delete a buylist by its ID.
+    """
+    try:
+        user_id = request.args.get("user_id")
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
+
+        # Call the service to delete the buylist
+        deleted = CardService.delete_buylist(id, user_id)
+
+        if deleted:
+            return jsonify({"message": "Buylist deleted successfully"}), 200
+        else:
+            return jsonify({"error": "Buylist not found or could not be deleted"}), 404
+    except Exception as e:
+        current_app.logger.error(f"Error deleting buylist {id}: {str(e)}")
+        return jsonify({"error": "Failed to delete buylist"}), 500
+
+@card_routes.route("/buylists/<int:id>/cards", methods=["POST"])
+def add_cards_to_buylist(id):
+    """
+    Add cards to an existing buylist.
+    """
+    try:
+        data = request.json
+        user_id = data.get("user_id")
+        cards = data.get("cards", [])
+
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
+
+        if not cards:
+            return jsonify({"error": "No cards provided"}), 400
+
+        current_app.logger.info(f"Adding cards to buylist {id} for user {user_id}")
+        updated_buylist = CardService.add_card_to_buylist(id, user_id, cards)
+        return jsonify(updated_buylist.to_dict()), 201
+
+    except Exception as e:
+        current_app.logger.error(f"Error adding cards to buylist {id}: {str(e)}")
+        return jsonify({"error": "Failed to add cards to buylist"}), 500
+
+@card_routes.route("/buylists/<int:id>/rename", methods=["PUT"])
+def rename_buylist(id):
+    """
+    Rename an existing buylist without affecting its cards.
+    """
+    try:
+        data = request.json
+        new_name = data.get("name")
+        user_id = data.get("user_id")
+
+        if not user_id or not new_name:
+            return jsonify({"error": "User ID and new buylist name are required"}), 400
+
+        updated_buylist = CardService.update_user_buylist_name(id, user_id, new_name)
+        return jsonify({id, updated_buylist.name}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error renaming buylist {id}: {str(e)}")
+        return jsonify({"error": "Failed to rename buylist"}), 500
 
 @card_routes.route("/buylists/top", methods=["GET"])
 def get_top_buylists():
@@ -80,24 +160,106 @@ def get_top_buylists():
         current_app.logger.error(f"Error fetching top buylists: {str(e)}")
         return jsonify({"error": "Failed to fetch top buylists"}), 500
 
-# Card Operations
-@card_routes.route("/cards", methods=["GET"])
-def get_user_buylist_cards():
+############################################################################################################
+# Buylist Card Operations
+############################################################################################################
+
+@card_routes.route("/buylist/cards", methods=["DELETE"])
+def delete_cards():
     """
-    Get all the cards in the user's buylist.
+    Delete specific cards from a buylist.
+
+    Expects a JSON payload with:
+    - id: The ID of the buylist
+    - user_id: The ID of the user
+    - cards: A list of cards to delete
     """
     try:
-        cards = CardService.get_user_buylist_cards()
-        return jsonify([card.to_dict() for card in cards])
-    except Exception as e:
-        current_app.logger.error(f"Error fetching user cards: {str(e)}")
-        return jsonify({"error": "Failed to fetch user cards"}), 500
+        data = request.json
+        id = data.get("id")
+        user_id = data.get("user_id")
+        cards = data.get("cards")
 
-@card_routes.route("/cards/<int:card_id>", methods=["PUT"])
+        if not id or not user_id or not cards:
+            return jsonify({"error": "Buylist ID, user ID, and cards are required"}), 400
+
+        deleted_cards = []
+        for card in cards:
+            card_name = card.get("name")
+            quantity = card.get("quantity", 1)
+
+            # Delete the card
+            deleted = CardService.delete_card_from_buylist(
+                id=id,
+                card_name=card_name,
+                quantity=quantity,
+                user_id=user_id
+            )
+            if deleted:
+                deleted_cards.append({"name": card_name, "quantity": quantity})
+            else:
+                current_app.logger.warning(f"Card not found or could not be deleted: {card_name}")
+
+        return jsonify({"deletedCards": deleted_cards}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error deleting cards: {str(e)}")
+        return jsonify({"error": "Failed to delete cards"}), 500
+
+@card_routes.route("/buylist/cards/import", methods=["POST"])
+def import_cards_to_buylist():
+    """Import cards into a buylist from a text input."""
+    try:
+        data = request.json
+        id = data.get("id")
+        cards = data.get("cards", [])
+        user_id = data.get("user_id")
+        
+        if not user_id:
+            logger.error("User ID is missing in the request")
+            return jsonify({"error": "User ID is required"}), 400
+
+        if not id or not cards:
+            return jsonify({"error": "Buylist ID and cards are required"}), 400
+
+        added_cards = []
+        not_found_cards = []
+
+        for card in cards:
+            card_name = card.get("name")
+            quantity = card.get("quantity", 1)
+
+            # Validate card existence (e.g., via Scryfall API)
+            if CardService.is_valid_card_name(card_name):
+                CardService.add_user_buylist_card(
+                    name=card_name,
+                    quantity=quantity,
+                    buylist_id=id,
+                    user_id=user_id,
+                )
+                current_app.logger.info(f"card {card_name} found")
+                added_cards.append({"name": card_name, "quantity": quantity})
+            else:
+                current_app.logger.info(f"card {card_name} not found")
+                not_found_cards.append({"name": card_name})
+
+        return jsonify({"addedCards": added_cards, "notFoundCards": not_found_cards}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error importing cards: {str(e)}")
+        return jsonify({"error": "Failed to import cards"}), 500
+
+@card_routes.route("/buylist/cards/<int:card_id>", methods=["PUT"])
 def update_user_buylist_card(card_id):
     """Update a specific card in the user's buylist."""
     try:
         data = request.json
+        user_id = data.get("user_id")
+        id = data.get("id")  # Ensure buylist id is provided
+
+        if not user_id or not id:
+            return jsonify({"error": "User ID and Buylist ID are required"}), 400
+
         current_app.logger.info(f"Received update request for card {card_id}: {data}")
 
         updated_card = CardService.update_user_buylist_card(card_id, data)
@@ -112,41 +274,10 @@ def update_user_buylist_card(card_id):
         current_app.logger.error(f"Error updating card: {str(e)}")
         return jsonify({"error": f"Failed to update card: {str(e)}"}), 500
 
-@card_routes.route("/cards", methods=["POST"])
-def add_user_buylist_card():
-    """Save a new card or update an existing card."""
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
 
-        # Standardize data fields
-        card_data = {
-            "name": data.get("name"),
-            "set_name": data.get("set_name"),
-            "set_code": data.get("set_code"),
-            "language": data.get("language", "English"),
-            "quantity": data.get("quantity", 0),
-            "version": data.get("version", "Standard"),
-            "foil": data.get("foil", False),
-            "buylist_id": data.get("buylist_id"),  # Use buylist_id
-            "user_id": data.get("user_id")  # Use user_id
-        }
-
-        # Validate card data
-        validation_errors = CardService.validate_card_data(card_data)
-        if (validation_errors):
-            return jsonify({
-                "error": "Validation failed",
-                "details": validation_errors
-            }), 400
-
-        saved_card = CardService.add_user_buylist_card(**card_data)
-        return jsonify(saved_card.to_dict()), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error saving card: {str(e)}")
-        return jsonify({"error": "Failed to save card"}), 500
+############################################################################################################
+# Card Operations
+############################################################################################################
 
 @card_routes.route("/fetch_card", methods=["GET"])
 def fetch_scryfall_card():
@@ -218,7 +349,10 @@ def get_card_suggestions():
     suggestions = CardService.get_card_suggestions(query)
     return jsonify(suggestions)
 
+############################################################################################################
 # Task Operations
+############################################################################################################
+
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
     try:
@@ -258,7 +392,9 @@ def task_status(task_id):
             'error': str(e)
         }), 500
 
+############################################################################################################
 # Optimization Operations
+############################################################################################################
 @card_routes.route("/start_scraping", methods=["POST"])
 def start_scraping():
     """Starts the scraping task."""
@@ -293,7 +429,9 @@ def generate_purchase_links():
         logger.error(f"Error generating purchase links: {str(e)}")
         return jsonify({"error": "Failed to generate purchase links"}), 500
 
+############################################################################################################
 # Set Operations
+############################################################################################################
 @card_routes.route("/sets", methods=["GET"])
 def get_sets():
     try:
@@ -319,7 +457,9 @@ def save_set_selection():
         current_app.logger.error(f"Error saving set selection: {str(e)}")
         return jsonify({"error": "Failed to save set selection"}), 500
 
+############################################################################################################
 # Scan Operations
+############################################################################################################
 @card_routes.route("/scans/<int:scan_id>", methods=["GET"])
 def get_scan_results(scan_id):
     try:
@@ -375,7 +515,9 @@ def delete_scan(scan_id):
         current_app.logger.error(f"Error deleting scan: {str(e)}")
         return jsonify({"error": "Failed to delete scan"}), 500
 
+############################################################################################################
 # Site Operations
+############################################################################################################
 @card_routes.route("/sites", methods=["GET"])
 def get_sites():
     sites = SiteService.get_all_sites()
@@ -426,6 +568,9 @@ def update_site(site_id):
             "message": "An unexpected error occurred while updating the site"
         }), 500
 
+############################################################################################################
+# Results Operations
+############################################################################################################
 @card_routes.route('/results', methods=['GET'])
 def get_optimization_results():
     """Get recent optimization results"""

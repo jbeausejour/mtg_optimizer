@@ -24,16 +24,20 @@ EVAL "return redis.call('del', unpack(redis.call('keys', ARGV[1])))" 0 "celery-t
 
 # Backend Terminal Installation
 pip install -r requirements.txt
-
+    
 # Frontend Terminal Installation
 npm install
 
+# Python venv
+.\.venv\Scripts\Activate.ps1
 
 # Backend Terminal Run command
 set FLASK_APP=app.py && set FLASK_ENV=development
 flask run
 
 # Frontend Terminal Build&Run command
+$env:NODE_OPTIONS="--openssl-legacy-provider" && npm cache clean --force && npm cache clean --force
+npm run build &&  xcopy .\build\*  "..\backend\static\" /s /e /y
 $env:NODE_OPTIONS="--openssl-legacy-provider"
 npm cache clean --force
 npm run build

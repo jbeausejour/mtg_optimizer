@@ -1,25 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Form, List, Input, Select } from 'antd';
+import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Checkbox, List, Input, Select } from 'antd';
 import { EditOutlined, DeleteOutlined, EyeOutlined, SaveOutlined, FolderOpenOutlined, SearchOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import CardDetail from '../components/CardDetail';
 import api from '../utils/api';
 import { getStandardTableColumns } from '../utils/tableConfig';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
+import ImportCardsToBuylist from '../components/CardManagement/ImportCardsToBuylist';
 import debounce from 'lodash/debounce';
 
 const { Option } = Select;
+const { TextArea } = Input;
 
-const CardManagement = ({ userId }) => {
+const BuylistManagement = ({ userId }) => {
   const location = useLocation();
   const initialBuylistName = location?.state?.buylistName || '';
   const initialBuylistId = location?.state?.buylistId;
 
-  console.log('Debug: Location state', location.state);
-  console.log('Debug: Initial buylist name and ID', { initialBuylistName, initialBuylistId });
-
-  const [buylistName, setBuylistName] = useState(initialBuylistName);
   
   const [cards, setCards] = useState([]);
   const [filteredCards, setFilteredCards] = useState([]);
@@ -29,73 +27,159 @@ const CardManagement = ({ userId }) => {
   const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [form] = Form.useForm();
   const { theme } = useTheme();
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
   const [savedBuylists, setSavedBuylists] = useState([]);
-  const [currentBuylistId, setCurrentBuylistId] = useState(null);
+  const [currentBuylistId, setCurrentBuylistId] = useState(initialBuylistId || null); 
+  const [currentBuylistName, setCurrentBuylistName] = useState(initialBuylistName);
+
   const [suggestions, setSuggestions] = useState([]);
   const [cardVersions, setCardVersions] = useState(null);
   const [sets, setSets] = useState([]);
-  const [topBuylists, setTopBuylists] = useState([]);
+  const [cardText, setCardText] = useState('');
+  const [errorCards, setErrorCards] = useState([]);
+
+  const [selectedCardIds, setSelectedCardIds] = useState(new Set()); // ✅ Store selected card IDs
+  const [selectAllChecked, setSelectAllChecked] = useState(false); // ✅ Track "Select All" state
+
+  // Fetch saved buylists and set the initial buylist
+  useEffect(() => {
+    const initializeBuylists = async () => {
+      setErrorCards([]);
+      try {
+        const response = await api.get('/buylists', { params: { user_id: userId } });
+
+        if (response.data.length > 0) {
+          setSavedBuylists(response.data);
+
+          // Determine the buylist to load
+          if (initialBuylistId) {
+            setCurrentBuylistId(initialBuylistId);
+            setCurrentBuylistName(initialBuylistName);
+          } else {
+            const firstBuylist = response.data[0];
+            setCurrentBuylistId(firstBuylist.id);
+            setCurrentBuylistName(firstBuylist.name);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch saved buylists:', error);
+        message.error('Failed to fetch saved buylists.');
+      }
+    };
+
+    initializeBuylists();
+  }, [userId, initialBuylistId, initialBuylistName]);
+
+
+  // Load cards for the current buylist
+  useEffect(() => {
+    setErrorCards([]);
+    const loadBuylist = async (buylistId) => {
+      if (!buylistId) return;
+
+      try {
+        const response = await api.get(`/buylists/${buylistId}`, { params: { user_id: userId } });
+
+        // ✅ Ensure response.data is always an array
+        const cards = Array.isArray(response.data) ? response.data : [];
+
+        setCards(cards);
+        setFilteredCards(cards);
+
+        if (cards.length > 0) {
+            message.success(`Buylist "${currentBuylistName}" loaded successfully.`);
+        } else {
+            message.info(`Buylist "${currentBuylistName}" is empty.`);
+        }
+      } catch (error) {
+        console.error('Failed to load buylist:', error);
+        message.error('Failed to load buylist.');
+      }
+    };
+
+    loadBuylist(currentBuylistId);
+  }, [currentBuylistId]);
 
   useEffect(() => {
-    console.log('Debug: useEffect for userId', userId);
-    if (userId) {
-      fetchSavedBuylists();
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    console.log('Debug: useEffect for initialBuylistName and initialBuylistId', { initialBuylistName, initialBuylistId });
-    if (initialBuylistName && initialBuylistId) {
-      handleLoadBuylist(initialBuylistId);
-      message.success('Buylist loaded successfully');
-    }
-  }, [initialBuylistName, initialBuylistId]);
+    setErrorCards([]);
+    console.log("Updated buylistId:", currentBuylistId);
+    console.log("Updated buylistName:", currentBuylistName);
+  }, [currentBuylistId, currentBuylistName]);
 
   const fetchSavedBuylists = async () => {
     try {
       const response = await api.get('/buylists', { params: { user_id: userId } });
-      setSavedBuylists(response.data);
+      if (response.data) {
+        setSavedBuylists(response.data);
+        setCurrentBuylistId(response.data[0]?.id);
+        console.log('currentBuylistId in fetchSavedBuylists:', currentBuylistId);
+        setCurrentBuylistName(response.data[0]?.name);
+      }
     } catch (error) {
       console.error('Debug: Failed to fetch saved buylists', error);
       message.error('Failed to fetch saved buylists');
     }
   };
 
+
   const handleSaveBuylist = async () => {
-    if (!buylistName && !currentBuylistId) {
-      message.error('Please enter a name for the buylist');
+    setErrorCards([]);
+    if (!currentBuylistId || !currentBuylistName) {
+      message.error('Buylist ID and name are required.');
       return;
     }
 
     try {
-      const response = await api.post('/buylists', { buylist_id: currentBuylistId, buylist_name: buylistName, user_id: userId, cards });
-      message.success('Buylist saved successfully');
-      fetchSavedBuylists();
-      setCurrentBuylistId(response.data.buylist_id); // Set the current buylist ID
+      await api.put(`/buylists/${currentBuylistId}/rename`, {
+        name: currentBuylistName,
+        user_id: userId
+      });
+
+      message.success('Buylist name updated successfully.');
     } catch (error) {
-      message.error(`Failed to save buylist: ${error.message}`);
+      message.error('Failed to rename buylist.');
+      console.error('Error renaming buylist:', error);
     }
   };
 
-  const handleLoadBuylist = async (buylistId) => {
-    try {
-      const response = await api.get(`/buylists/${buylistId}`, {
-        params: { user_id: userId }
-      });
-      setCards(response.data);
-      setFilteredCards(response.data);
-      setCurrentBuylistId(buylistId); 
-      setBuylistName(response.data[0]?.buylist_name || ''); 
-    } catch (error) {
-      console.error('Debug: Failed to load buylist', error);
-      message.error(`Failed to load buylist: ${error.message}`);
-    }
+
+  // const handleLoadBuylist = async (buylistId) => {
+  //   try {
+  //     const response = await api.get(`/buylists/${buylistId}`, {
+  //       params: { user_id: userId }
+  //     });
+  //     setCards(response.data);
+  //     setFilteredCards(response.data);
+  //     setCurrentBuylistId(buylistId); 
+  //     setCurrentBuylistName(response.data[0]?.name || ''); 
+  //   } catch (error) {
+  //     console.error('Debug: Failed to load buylist', error);
+  //     message.error(`Failed to load buylist: ${error.message}`);
+  //   }
+  // };
+  
+  const handleCardImport = (addedCards) => {
+    setErrorCards([]);
+    setCards((prevCards) => {
+      const existingNames = new Set(prevCards.map(card => card.name.toLowerCase()));
+      const uniqueCards = addedCards.filter(card => !existingNames.has(card.name.toLowerCase()));
+
+      return [...prevCards, ...uniqueCards];
+    });
+
+    setFilteredCards((prevCards) => {
+        const existingNames = new Set(prevCards.map(card => card.name.toLowerCase()));
+        const uniqueCards = addedCards.filter(card => !existingNames.has(card.name.toLowerCase()));
+
+        return [...prevCards, ...uniqueCards];
+    });
+
+    message.success('Cards imported successfully.');
   };
 
   const handleViewCard = async (card) => {
+    setErrorCards([]);
     console.group('View Card Flow');
     console.log('Card record:', {
       name: card.name,
@@ -136,6 +220,7 @@ const CardManagement = ({ userId }) => {
   };
 
   const handleEditCard = async (card) => {
+    setErrorCards([]);
     setSelectedCard(card);
     setModalMode('edit');
     setIsLoading(true);
@@ -173,6 +258,7 @@ const CardManagement = ({ userId }) => {
   };
 
   const handleSaveEdit = async (selectedPrinting) => {
+    setErrorCards([]);
     console.group('Save Edit Flow');
     console.log('1. Selected printing:', selectedPrinting);
     console.log('2. Selected card:', selectedCard);
@@ -187,18 +273,19 @@ const CardManagement = ({ userId }) => {
     const updatedCard = {
       id: selectedCard.id,
       name: selectedPrinting.name,
-      set: selectedPrinting.set,
+      set_code: selectedPrinting.set_code, // Ensuring consistency with backend field names
       set_name: selectedPrinting.set_name,
-      language: selectedPrinting.lang || selectedCard.language,
+      language: selectedPrinting.language || selectedCard.language,
       quantity: selectedCard.quantity,
       version: selectedPrinting.version || selectedCard.version,
-      foil: selectedCard.foil
-    };
-
+      foil: selectedCard.foil,
+      buylist_id: selectedCard.buylist_id, // Ensure buylist_id is retained
+      user_id: userId // Include user ID for validation
+  };
     console.log('3. Updating card with:', updatedCard);
 
     try {
-      const response = await api.put(`/cards/${selectedCard.id}`, { ...updatedCard, user_id: userId }); // Add user ID
+      const response = await api.put(`/buylist/cards/${selectedCard.id}`, updatedCard);
       console.log('4. Update response:', response);
 
       if (!response.data) {
@@ -226,25 +313,71 @@ const CardManagement = ({ userId }) => {
     }
   };
 
-  const handleDeleteCard = async (cardId) => {
+  const handleDeleteCards = async (selectedCards) => {
+    setErrorCards([]);
+    if (!selectedCards.length) {
+        message.warning("No cards selected for deletion.");
+        return;
+    }
+
     try {
-      await api.delete(`/cards/${cardId}`, {
-        params: { user_id: userId } // Add user ID
-      });
-      message.success('Card deleted successfully');
-      setCards((prev) => prev.filter((card) => card.id !== cardId));
-      setFilteredCards((prev) => prev.filter((card) => card.id !== cardId));
+        await api.delete("/buylist/cards", {
+            data: {  // ✅ Ensure DELETE request has body
+                id: currentBuylistId,
+                user_id: userId,
+                cards: selectedCards,
+            }
+        });
+
+        message.success(`${selectedCards.length} card(s) deleted successfully.`);
+
+        // ✅ Update state: Remove deleted cards from the UI
+        setCards((prev) => prev.filter((card) => !selectedCards.some((c) => c.id === card.id)));
+        setFilteredCards((prev) => prev.filter((card) => !selectedCards.some((c) => c.id === card.id)));
+
+        // ✅ Clear selection after deletion
+        setSelectedCardIds(new Set());
+        setSelectAllChecked(false);
     } catch (error) {
-      message.error(`Failed to delete card: ${error.message}`);
+        message.error("Failed to delete cards.");
+        console.error("Error deleting cards:", error);
     }
   };
 
+  // ✅ Handle individual checkbox selection
+  const handleCheckboxChange = (cardId) => {
+    setErrorCards([]);
+    setSelectedCardIds((prev) => {
+      const newSelection = new Set(prev);
+      if (newSelection.has(cardId)) {
+          newSelection.delete(cardId);
+      } else {
+          newSelection.add(cardId);
+      }
+      setSelectAllChecked(newSelection.size === filteredCards.length); // Update select all checkbox state
+      return newSelection;
+    });
+  };
+
+  // ✅ Handle "Select All" checkbox
+  const handleSelectAll = () => {
+    setErrorCards([]);
+    if (selectAllChecked) {
+      setSelectedCardIds(new Set()); // Unselect all
+    } else {
+      setSelectedCardIds(new Set(filteredCards.map((card) => card.id))); // Select all
+    }
+    setSelectAllChecked(!selectAllChecked);
+  };
+
   const handleSearch = (value) => {
+    setErrorCards([]);
     setSearchText(value);
     debouncedFetchSuggestions(value);
   };
 
   const handleSetClick = async (setCode) => {
+    setErrorCards([]);
     try {
       console.log('Set clicked:', setCode);
       await api.post('/save_set_selection', { set: setCode });
@@ -254,14 +387,69 @@ const CardManagement = ({ userId }) => {
     }
   };
 
-  const handleNewBuylist = () => {
-    setBuylistName('');
-    setCards([]);
-    setFilteredCards([]);
-    setCurrentBuylistId(null);
-    message.success('New buylist created. Please add cards and save.');
+  const handleNewBuylist = async () => {
+    setErrorCards([]);
+    const trimmedBuylistName = currentBuylistName.trim() || "Untitled Buylist";
+
+    try {
+      const response = await api.post("/buylists", {
+          name: trimmedBuylistName,
+          user_id: userId,
+          cards: []
+      });
+
+      const newBuylist = response.data;
+
+      setCurrentBuylistId(newBuylist.id);
+      setCurrentBuylistName(newBuylist.name);
+      setCards([]);
+      setFilteredCards([]);
+      setSearchText("");
+      setErrorCards([]);
+      setCardText("");
+
+      // ✅ Update Saved Buylists list immediately
+      setSavedBuylists((prevBuylists) => [
+          ...prevBuylists,
+          { id: newBuylist.id, name: newBuylist.name }
+      ]);
+
+      message.success(`New buylist "${newBuylist.name}" created.`);
+    } catch (error) {
+      message.error("Failed to create a new buylist.");
+      console.error("Error creating new buylist:", error);
+    }
   };
 
+
+
+  const handleDeleteBuylist = async (buylistId) => {
+    setErrorCards([]);
+    Modal.confirm({
+      title: "Are you sure you want to delete this buylist?",
+      content: "This action cannot be undone.",
+      okText: "Yes, delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+          try {
+              await api.delete(`/buylists/${buylistId}`, { params: { user_id: userId } });
+              message.success("Buylist deleted successfully.");
+              fetchSavedBuylists();
+              
+              if (currentBuylistId === buylistId) {
+                  setCurrentBuylistId(null);
+                  setCurrentBuylistName("");
+                  setCards([]);
+              }
+          } catch (error) {
+              message.error("Failed to delete buylist.");
+              console.error("Error deleting buylist:", error);
+          }
+      }
+    });
+  };
+  
   const fetchSuggestions = async (query) => {
     if (query.length > 2) {
       try {
@@ -311,40 +499,64 @@ const CardManagement = ({ userId }) => {
   const columns = [
     ...getStandardTableColumns(handleViewCard),
     {
-      title: 'Actions',
-      key: 'actions',
+      title: "Actions",
+      key: "actions",
+      className: "actions-column",
       render: (_, record) => (
         <Space>
           <Button icon={<EyeOutlined />} onClick={(e) => {
-            e.stopPropagation();
-            handleViewCard(record);
+              e.stopPropagation();
+              handleViewCard(record);
           }}>View</Button>
           <Button icon={<EditOutlined />} onClick={(e) => {
-            e.stopPropagation();
-            handleEditCard(record);
+              e.stopPropagation();
+              handleEditCard(record);
           }}>Edit</Button>
           <Popconfirm
-            title="Are you sure you want to delete this card?"
-            onConfirm={(e) => {
-              e.stopPropagation();
-              handleDeleteCard(record.id);
-            }}
-            okText="Yes"
-            cancelText="No"
+              title="Are you sure you want to delete this card?"
+              onConfirm={(e) => {
+                  e.stopPropagation();
+                  handleDeleteCards([record]);
+              }}
+              okText="Yes"
+              cancelText="No"
           >
-            <Button icon={<DeleteOutlined />} danger>Delete</Button>
+              <Button icon={<DeleteOutlined />} danger>Delete</Button>
           </Popconfirm>
         </Space>
       ),
-    }
+    },
+    {
+      title: (
+        <Checkbox
+          checked={selectAllChecked}
+          onChange={(e) => {
+              e.stopPropagation(); // ✅ Prevent triggering card view
+              handleSelectAll();
+          }}
+        />
+      ),
+      dataIndex: "checkbox",
+      key: "checkbox",
+      align: "center",
+      render: (_, record) => (
+        <Checkbox
+            checked={selectedCardIds.has(record.id)}
+            onChange={(e) => {
+                e.stopPropagation();
+                handleCheckboxChange(record.id);
+            }}
+        />
+      ),
+    },
   ];
 
   return (
-    <div className="card-management">
-      <h1>Card Management</h1>
+    <div className="buylist-management">
+      <h1>Buylist Management</h1>
       <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 150px', minWidth: '300px', marginRight: '16px' }}>
-          {currentBuylistId && <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Current buylist: {buylistName}</h3>} {/* Indicate current buylist */}
+        <div style={{ flex: '1 1 150px', minWidth: '150px', marginLeft: '16px' , marginRight: '16px' }}>
+          {currentBuylistId && <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Current buylist: {currentBuylistName}</h3>} {/* Indicate current buylist */}
           <AutoComplete
             value={searchText}
             options={suggestions}
@@ -360,20 +572,31 @@ const CardManagement = ({ userId }) => {
             }}
             prefix={<SearchOutlined />}
           />
+          <div style={{ flex: 2 }}>
+            <ImportCardsToBuylist 
+              buylistId={currentBuylistId}
+              onCardsAdded={handleCardImport}
+              userId={userId}
+              cardText={cardText}  // ✅ Pass state
+              setCardText={setCardText}  // ✅ Pass state updater
+              errorCards={errorCards}  // ✅ Pass state
+              setErrorCards={setErrorCards}  // ✅ Pass state updater
+            />
+          </div>
+        </div>
+        <div style={{ flex: '1 1 30px', minWidth: '300px', marginRight: '16px' }}>
+          
+          <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Actions</h3>
           <Input
             placeholder="Buylist name..."
-            value={buylistName}
-            onChange={(e) => setBuylistName(e.target.value)}
+            value={currentBuylistName}
+            onChange={(e) => setCurrentBuylistName(e.target.value)}
             style={{ 
               marginBottom: 16,
               width: '100%'
             }}
             prefix={<SaveOutlined />}
           />
-        </div>
-        <div style={{ flex: '1 1 30px', minWidth: '300px', marginRight: '16px' }}>
-          
-          <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Actions</h3>
           <Button
             type="primary"
             icon={<SaveOutlined />}
@@ -396,36 +619,63 @@ const CardManagement = ({ userId }) => {
           <List
             bordered
             dataSource={savedBuylists}
-            renderItem={item => (
+            style={{ marginBottom: 8 }}
+            renderItem={(item) => (
               <List.Item
-                actions={[
-                  <Button
-                    type="link"
-                    icon={<FolderOpenOutlined />}
-                    onClick={() => handleLoadBuylist(item.buylist_id)}
-                  >
-                    Load
-                  </Button>
-                ]}
-                style={item.buylist_id === currentBuylistId ? { fontWeight: 'bold' } : {}}
+                style={item.id === currentBuylistId ? { fontWeight: 'bold' } : {}}
               >
-                {item.buylist_name}
+                <Button
+                  type="link"
+                  icon={<FolderOpenOutlined />}
+                  onClick={() => {
+                    setCurrentBuylistId(item.id);
+                    setCurrentBuylistName(item.name);
+                  }}
+                  style={{ marginRight: 8 }}
+                >
+                  Load
+                </Button>
+                <Button
+                  type="link"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => handleDeleteBuylist(item.id)}
+                >
+                </Button>
+                {item.name}
               </List.Item>
             )}
-            style={{ marginBottom: 8 }}
           />
         </div>
       </div>
-      <h3 style={{ fontWeight: 'bold', marginTop: 24 }}>Buylist Cards</h3>
+      <h3 style={{ fontWeight: 'bold', marginTop: 24 , marginLeft: '16px'}}>Buylist Cards</h3>
+        {/* ✅ Show delete button only when at least one checkbox is selected */}
+        {selectedCardIds.size > 0 && (
+          <Button
+            type="primary"
+            danger
+            onClick={() => handleDeleteCards(filteredCards.filter((card) => selectedCardIds.has(card.id)))}
+            style={{ marginBottom: 16 }}
+          >
+              Delete Selected
+          </Button>
+        )}
       <Table
         dataSource={filteredCards}
         columns={columns}
         rowKey="id"
         className={`ant-table ${theme}`}
         onRow={(record) => ({
-          onClick: () => handleViewCard(record),
+          onClick: (e) => {
+            if ((!e.target.closest(".actions-column")) && 
+                 !e.target.closest(".ant-checkbox-wrapper")) 
+            {  // ✅ Ignore clicks inside buttons
+              handleViewCard(record);
+            }
+          },
         })}
         pagination={false}
+        style={{ marginLeft: '16px', marginRight: '16px' }}
       />
       {selectedCard && (
         <CardDetail
@@ -451,7 +701,6 @@ const CardManagement = ({ userId }) => {
           </Button>
         ]}
       >
-        {console.log('Modal render:', { isLoading, hasCardData: !!cardData, isModalVisible })}
         {isLoading ? (
           <Spin size="large" />
         ) : cardData ? (
@@ -473,4 +722,4 @@ const CardManagement = ({ userId }) => {
   );
 };
 
-export default CardManagement;
+export default BuylistManagement;

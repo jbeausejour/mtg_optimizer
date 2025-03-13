@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag, Tooltip } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import ScryfallCard from '../components/CardManagement/ScryfallCard'; 
 import { OptimizationSummary } from '../components/OptimizationDisplay';
@@ -50,8 +50,8 @@ const Optimize = ({ userId }) => {
 
   useEffect(() => {
     if (buylists.length > 0 && !selectedBuylist) {
-      setSelectedBuylist(buylists[0].buylist_id);
-      handleSelectBuylist(buylists[0].buylist_id);
+      setSelectedBuylist(buylists[0].id);
+      handleSelectBuylist(buylists[0].id);
     }
   }, [buylists]);
 
@@ -247,6 +247,26 @@ const Optimize = ({ userId }) => {
     }));
   };
 
+  const findMinStoretooltipContent = (
+    <div>
+      <p>When find_min_store is True:</p>
+      <p>
+        The algorithm will perform a search to find the minimum number of stores required to fulfill the user's wishlist.
+        It iterates through different store counts, starting from 1 up to the total number of unique stores available.
+        For each store count, it attempts to find a feasible solution that meets the user's requirements.
+        The goal is to find the solution with the fewest stores that still meets the user's wishlist, while also considering the cost.
+        This approach ensures that the solution uses the minimum number of stores possible, which can be beneficial for reducing shipping costs and simplifying logistics.
+      </p>
+      <p>When find_min_store is False:</p>
+      <p>
+        The algorithm will use the min_store value provided in the configuration to set a fixed minimum number of stores that must be used.
+        It does not attempt to minimize the number of stores beyond this fixed value.
+        The focus is primarily on finding a feasible solution that meets the user's requirements while adhering to the specified minimum store constraint.
+        This approach is useful when the user has a preference for using a certain number of stores, regardless of whether fewer stores could potentially fulfill the wishlist.
+      </p>
+    </div>
+  );
+
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -278,12 +298,14 @@ const Optimize = ({ userId }) => {
           />
         </Col>
         <Col span={6}>
-          <Switch
-            checked={findMinStore}
-            onChange={setFindMinStore}
-            checkedChildren="Find Min Store"
-            unCheckedChildren="Don't Find Min Store"
-          />
+          <Tooltip title={findMinStoretooltipContent} overlayStyle={{ width: 900 }}>
+            <Switch
+              checked={findMinStore}
+              onChange={setFindMinStore}
+              checkedChildren="Find Min Store"
+              unCheckedChildren="Don't Find Min Store"
+            />
+          </Tooltip>
         </Col>
       </Row>
 
@@ -337,8 +359,8 @@ const Optimize = ({ userId }) => {
                   placeholder="Select Buylist"
                 >
                   {buylists.map(buylist => (
-                    <Option key={buylist.buylist_id} value={buylist.buylist_id}>
-                      {buylist.buylist_name}
+                    <Option key={buylist.id} value={buylist.id}>
+                      {buylist.name}
                     </Option>
                   ))}
                 </Select>

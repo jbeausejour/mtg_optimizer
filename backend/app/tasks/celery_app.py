@@ -2,7 +2,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 from celery import Celery
-from .celery_config import CeleryConfig
+from app.tasks.celery_config import CeleryConfig
 
 # Configure loggers
 task_logger = logging.getLogger(__name__)
@@ -61,25 +61,34 @@ def make_celery(app=None):
         backend=CeleryConfig.result_backend,
         include=["app.tasks.optimization_tasks"],
     )
+    celery.config_from_object(CeleryConfig)  # Apply the full config from celery_config.py
 
     task_logger.info(f"Celery app created with broker: {celery.conf.broker_url}")
     return celery
 
 celery_app = make_celery()
 
-def init_celery(app):
-    celery_app.conf.update(app.config)
-    task_logger.info("Celery initialized with Flask app config")
+from celery.schedules import crontab
+from app.tasks.optimization_tasks import refresh_scryfall_cache
+celery_app.conf.beat_schedule = {
+    "refresh_scryfall_cache_daily": {
+        "task": "app.tasks.optimization_tasks.refresh_scryfall_cache",
+        "schedule": crontab(hour=3, minute=0),  # Run every day at 3 AM
+    },
+}
+# def init_celery(app):
+#     celery_app.conf.update(app.config)
+#     task_logger.info("Celery initialized with Flask app config")
 
-    class ContextTask(celery_app.Task):
-        def __call__(self, *args, **kwargs):
-            if app is not None:
-                with app.app_context():
-                    return self.run(*args, **kwargs)
-            return self.run(*args, **kwargs)
+#     class ContextTask(celery_app.Task):
+#         def __call__(self, *args, **kwargs):
+#             if app is not None:
+#                 with app.app_context():
+#                     return self.run(*args, **kwargs)
+#             return self.run(*args, **kwargs)
 
-    celery_app.Task = ContextTask
-    app.extensions["celery"] = celery_app
+#     celery_app.Task = ContextTask
+#     app.extensions["celery"] = celery_app
 
-    task_logger.info("ContextTask set for Celery")
-    return celery_app
+#     task_logger.info("ContextTask set for Celery")
+#     return celery_app

@@ -5,7 +5,7 @@ from flask import current_app
 from sqlalchemy import inspect, text
 
 from app.extensions import db
-from app.models.card import UserBuylistCard
+from app.models.UserBuylistCard import UserBuylistCard
 from app.models.site import Site
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))

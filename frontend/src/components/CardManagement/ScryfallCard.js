@@ -15,16 +15,18 @@ const formatCardName = (name) => {
 };
 
 //Formats the set code to lowercase, handling special cases for prefixes like 'p' or 't'. (Utility function)
-const formatSetCode = (setCode) => {
+const formatSetCode = (setCode, collector_number) => {
   if (!setCode) {
     console.error('Error: setCode is undefined or null');
     return '';
   }
 
   let formattedSetCode = setCode;
+  console.log('Component formatSetCode:', { formattedSetCode });
   if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
-    formattedSetCode = formattedSetCode.slice(1);
+    formattedSetCode = collector_number.split('-')[0];
   }
+  console.log('Component formattedSetCode:', { formattedSetCode });
   return formattedSetCode.toLowerCase();
 };
 
@@ -55,8 +57,8 @@ const ManaSymbol = ({ symbol }) => {
 };
 
 //Renders the symbol of a card set with coloring based on rarity. (Utility function)
-const SetSymbol = ({ setCode, rarity }) => {
-  const formattedSetCode = formatSetCode(setCode);
+const SetSymbol = ({ setCode, rarity, collector_number }) => {
+  const formattedSetCode = formatSetCode(setCode, collector_number);
   const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
   const rarityColor = {
     common: '#000000', // Black
@@ -185,7 +187,7 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
     setIsLoading(true);
     try {
       setSelectedPrinting(print);
-      if (onSetClick) onSetClick(print.set);
+      if (onSetClick) onSetClick(print.set_code);
       if (onPrintingSelect) onPrintingSelect(print);
     } catch (error) {
       message.error('Failed to update card printing');
@@ -231,23 +233,6 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
 
   if (!data) return <div>No card data available</div>;
 
-  // Ensure all properties have default values
-  const {
-    name = '',
-    set_name = '',
-    collector_number = '',
-    rarity = '',
-    colors = [],
-    type_line = '',
-    oracle_text = '',
-    flavor_text = '',
-    power,
-    toughness,
-    loyalty,
-    image_uris = {},
-    card_faces = []
-  } = data;
-
   console.log('Rendering card display');
   return (
     <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
@@ -274,7 +259,7 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
                   <strong>Expansion:</strong>
                   {data.set ? (
                     <>
-                      <SetSymbol setCode={data.set} rarity={data.rarity} /> {data.set_name || 'N/A'}
+                      <SetSymbol setCode={data.set} rarity={data.rarity} collector_number={data.collector_number} /> {data.set_name || 'N/A'}
                     </>
                   ) : 'N/A'}
                 </Text>
@@ -283,19 +268,22 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
               </Space>
             </>
           )}
+          
+          {console.log('Available Printings:', availablePrints)}
           <Divider orientation="left">Available Printings</Divider>
           <div style={{ marginBottom: '16px' }}>
             {availablePrints.map(print => (
               <div
-                key={`${print.set}-${print.collector_number}`}
+                key={`${print.set_code}-${print.collector_number}`}
                 style={selectedPrinting?.id === print.id ? selectedPrintingStyle : printingItemStyle}
                 onClick={() => handlePrintClick(print)}
                 onMouseEnter={() => setHoveredPrinting(print)}
                 onMouseLeave={() => setHoveredPrinting(null)}
               >
+                {console.log('Available Printings:', print)}
                 <Space>
-                  <SetSymbol setCode={print.set} rarity={print.rarity} />
-                  <span>{print.set?.toUpperCase() || 'Unknown Set'}</span>
+                  <SetSymbol setCode={print.set_code} rarity={print.rarity} collector_number={print.collector_number} />
+                  <span>{print.set_code?.toUpperCase() || 'Unknown Set'}</span>
                   {print.prices?.usd && <span>${print.prices.usd}</span>}
                 </Space>
               </div>
@@ -328,7 +316,7 @@ const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
             </span>
           </Title>
           <Text strong>
-            {(selectedPrinting || data).set_name} ({(selectedPrinting || data).set?.toUpperCase() || 'N/A'})
+            {(selectedPrinting || data).set_name} ({(selectedPrinting || data).set_code?.toUpperCase() || 'N/A'})
           </Text>
           <Divider />
           <Text>{data.type_line || 'N/A'}</Text>

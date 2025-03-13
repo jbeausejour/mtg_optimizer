@@ -2,7 +2,6 @@ import logging
 from flask import Flask
 from app import create_app
 from app.tasks.celery_app import celery_app
-from .celery_config import CeleryConfig
 
 # Configure basic console logging
 logging.basicConfig(
@@ -17,13 +16,6 @@ logger = logging.getLogger(__name__)
 # Create Flask app and push context
 app = create_app()
 app.app_context().push()
-
-# Initialize Celery with updated config
-celery_app.conf.update(app.config)
-celery_app.conf.update(
-    broker_connection_retry_on_startup=True,
-    broker_connection_max_retries=10
-)
 
 logger.info("Flask app created and context pushed")
 logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")

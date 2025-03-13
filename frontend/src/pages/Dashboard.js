@@ -37,7 +37,7 @@ const Dashboard = ({ userId }) => {
         setLoading(true);
         const [sitesRes, cardsRes, scansRes, optimizationsRes, buylistsRes] = await Promise.all([
           api.get('/sites', { params: { user_id: userId } }), // Add user ID
-          api.get('/cards', { params: { user_id: userId } }), // Add user ID
+          api.get('/buylists', { params: { user_id: userId } }), // Add user ID
           api.get('/scans?limit=5', { params: { user_id: userId } }), // Add user ID
           api.get('/results?limit=5', { params: { user_id: userId } }), // Add user ID
           api.get('/buylists/top', { params: { user_id: userId, limit: 3 } }) // Fetch top 3 buylists
@@ -211,7 +211,7 @@ const Dashboard = ({ userId }) => {
           <Card 
             title="Total Cards" 
             bordered={false}
-            onClick={() => handleNavigation('/card-management')}
+            onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
             {totalCards}
@@ -221,7 +221,7 @@ const Dashboard = ({ userId }) => {
           <Card 
             title="Top 3 Buylists" 
             bordered={false}
-            onClick={() => handleNavigation('/card-management')}
+            onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
             <List
@@ -232,7 +232,7 @@ const Dashboard = ({ userId }) => {
                     type="link" 
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleNavigation('/card-management', { 
+                      handleNavigation('/buylist-management', { 
                         buylistName: item.buylist_name,
                         buylistId: item.buylist_id
                       });

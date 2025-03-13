@@ -5,7 +5,7 @@ import Navigation from './components/Navigation';
 import Login from './components/Login';
 import Register from './components/Register';
 import Dashboard from './pages/Dashboard';
-import CardManagement from './pages/CardManagement';
+import BuylistManagement from './pages/CardManagement';
 import SiteManagement from './pages/SiteManagement';
 import Optimize from './pages/Optimize';
 import Results from './pages/Results';
@@ -57,7 +57,7 @@ function App() {
             <Route path="/register" element={<Register />} />
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<Dashboard  userId={userId} />} />
-              <Route path="/card-management" element={<CardManagement userId={userId} />} />
+              <Route path="/buylist-management" element={<BuylistManagement userId={userId} />} />
               <Route path="/site-management" element={<SiteManagement  userId={userId} />} />
               <Route path="/optimize" element={<Optimize  userId={userId} />} />
               <Route path="/results" element={<Results  userId={userId} />} />

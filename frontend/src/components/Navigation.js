@@ -40,7 +40,7 @@ const Navigation = () => {
 
   const menuItems = [
     { key: "/", label: <Link to="/">Dashboard</Link> },
-    { key: "/card-management", label: <Link to="/card-management">Card Management</Link> },
+    { key: "/buylist-management", label: <Link to="/buylist-management">Buylist Management</Link> },
     { key: "/site-management", label: <Link to="/site-management">Site Management</Link> },
     { key: "/optimize", label: <Link to="/optimize">Optimization Center</Link> },
     { key: "/results", label: <Link to="/results">Results & Analytics</Link> },

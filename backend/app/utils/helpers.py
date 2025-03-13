@@ -29,23 +29,33 @@ def parse_card_string(card_string):
         logger.error(f"Fatal error in parse_card_string: {str(e)}")
         return None
 
-def clean_card_name(name, original_names):
+def clean_card_name(unclean_name, original_names):
     try:
         # Remove any numeric suffixes in parentheses
-        name = re.sub(r"\s*\(\d+\)", "", name)
+        without_suffixe_name = re.sub(r"\s*\(\d+\)", "", unclean_name)
+
+        # ✅ Remove set names in parentheses
+        cleaned_name = re.sub(r"\s*\(.*?\)", "", without_suffixe_name).strip()
 
         # Check if the name is in the original list without quotes
-        if name in original_names:
-            return name
-
+        if cleaned_name in original_names:
+            return cleaned_name
+        
+            
         # Check if the name without outer quotes is in the original list
         name_without_outer_quotes = re.sub(
-            r'^"|"$', "", name)  # Remove only outer quotes
+            r'^"|"$', "", cleaned_name)  # Remove only outer quotes
         if name_without_outer_quotes in original_names:
             return name_without_outer_quotes
 
+        # ✅ Handle double-sided cards (e.g., "Blightstep Pathway // Searstep Pathway")
+        if " // " in name_without_outer_quotes:
+            front_side = name_without_outer_quotes.split(" // ")[0].strip()
+            if front_side in original_names:
+                return front_side
+            
         # If the name is not in the original list, return as is
-        return name
+        return unclean_name
     
     except Exception as e:
         logger.error(f"Fatal error in clean_card_name: {str(e)}")

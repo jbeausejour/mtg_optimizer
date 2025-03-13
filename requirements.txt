@@ -47,3 +47,4 @@ tenacity==9.0.0  # Retry handling library
 # Background task scheduling:
 rq==2.1.0  # Redis Queue for background tasks
 rq-scheduler==0.14.0  # Scheduler for RQ
+python-Levenshtein==0.27.1

@@ -3,7 +3,8 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 import json
-import uuid 
+import time
+import traceback
 import pandas as pd
 from bs4 import BeautifulSoup
 from threading import Lock
@@ -103,6 +104,7 @@ class ExternalDataSynchronizer:
 
     async def scrape_multiple_sites(self, sites, card_names):
         """Enhanced scraping with proper Selenium integration"""
+        start_time = time.time()  # Start timing
         results = []
         logger.info(f"Starting scrape for {len(sites)} sites, {len(card_names)} cards")
         
@@ -128,23 +130,25 @@ class ExternalDataSynchronizer:
                         
                         for result in batch_results:
                             if isinstance(result, Exception):
-                                logger.error(f"Batch processing error: {str(result)}")
+                                logger.error(f"Batch processing error: {str(result)}", exc_info=True)
                             elif result:
                                 results.extend(result)
                                 #logger.info(f"Processed batch {batch_num}/{total_batches} ({len(result)}/{len(results)})")
                                 
                     except Exception as e:
-                        logger.error(f"Error processing batch {batch_num}: {str(e)}")
+                        logger.error(f"Error processing batch {batch_num}: {str(e)}", exc_info=True)
                         
-                logger.info(f"Completed scraping with {len(results)} total results")
+                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+                logger.info(f"Completed scraping with {len(results)} total results in {elapsed_time} seconds")
                 return results
                 
             except Exception as e:
-                logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}")
+                logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}", exc_info=True)
                 raise
 
     async def process_site(self, site, card_names):
         """Process a single site and return results without saving to DB"""
+        start_time = time.time()  # Start timing
         scrapping_method = ExternalDataSynchronizer.scrapping_method_dict.get(site.method.lower(), 
                                     ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL)
         
@@ -207,7 +211,9 @@ class ExternalDataSynchronizer:
                 #self.log_cards_df_stat(site, cards_df)
                 total_cards = len(card_names)
                 found_cards = cards_df['name'].nunique()
-                logger.info(f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name}")
+                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+
+                logger.info(f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name} in {elapsed_time} seconds")
                 
                 # if found_cards < total_cards:
                 #     missing_cards = set(card_names) - set(cards_df['name'].unique())
@@ -237,7 +243,8 @@ class ExternalDataSynchronizer:
                 return None
                 
         except Exception as e:
-            self.log_site_error(site.name, "Processing Error", str(e))
+            elapsed_time = round(time.time() - start_time, 2)
+            self.log_site_error(site.name, f"Processing Error (after {elapsed_time} seconds)", str(e))
             return None
 
     @staticmethod
@@ -257,7 +264,7 @@ class ExternalDataSynchronizer:
                 )
                 
         except Exception as e:
-            logger.error(f"Fatal error in extract_magic_set: {str(e)}")
+            logger.error(f"Fatal error in extract_magic_set: {str(e)}", exc_info=True)
             return None
                 
 
@@ -333,7 +340,6 @@ class ExternalDataSynchronizer:
                         continue
 
                     current_card = parse_card_string(data['data-name'])
-                    # logger.info(f"after parse_card_string form: {set_code} ")
                     if not current_card:
                         continue
 
@@ -426,7 +432,7 @@ class ExternalDataSynchronizer:
                         seen_variants.add(variant_key)
                         
                 except Exception as e:
-                    logger.error(f"Error processing form in {site.name}: {str(e)}")
+                    logger.error(f"Error processing form in {site.name}: {str(e)}", exc_info=True)
                     continue
 
         else:
@@ -563,7 +569,7 @@ class ExternalDataSynchronizer:
                                 seen_variants.add(variant_key)
 
                         except Exception as e:
-                            logger.error(f"Error processing variant: {str(e)}")
+                            logger.error(f"Error processing variant: {str(e)}", exc_info=True)
                             continue
 
         if not cards:
@@ -594,7 +600,7 @@ class ExternalDataSynchronizer:
             return df
             
         except Exception as e:
-            logger.error(f"Error creating DataFrame for {site.name}: {str(e)}")
+            logger.error(f"Error creating DataFrame for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
         
     def extract_info_hawk_json(self, json_data, site, card_names):
@@ -666,7 +672,7 @@ class ExternalDataSynchronizer:
                             cards.append(card_info)
                             
                         except Exception as e:
-                            logger.error(f"Error processing variant for {card_name} in {site.name}: {str(e)}")
+                            logger.error(f"Error processing variant for {card_name} in {site.name}: {str(e)}", exc_info=True)
                             continue
                                 
             if not cards:
@@ -706,7 +712,7 @@ class ExternalDataSynchronizer:
             return df
                 
         except Exception as e:
-            logger.error(f"Error processing Hawk JSON for {site.name}: {str(e)}")
+            logger.error(f"Error processing Hawk JSON for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
  
     def extract_info_shopify_json(self, json_data, site, card_names):
@@ -800,7 +806,7 @@ class ExternalDataSynchronizer:
             return df
             
         except Exception as e:
-            logger.error(f"Error processing Shopify JSON for {site.name}: {str(e)}")
+            logger.error(f"Error processing Shopify JSON for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
 
     async def get_site_details(self, site, auth_required=True):
@@ -946,12 +952,12 @@ class ExternalDataSynchronizer:
                             else:
                                 logger.warning(f"No results for {card_name}, Response: {response_text[:200]}")
                         except json.JSONDecodeError as e:
-                            logger.error(f"Invalid JSON response for {card_name}: {str(e)}")
+                            logger.error(f"Invalid JSON response for {card_name}: {str(e)}", exc_info=True)
                             logger.error(f"Raw response: {response_text[:200]}")
                             continue
                             
                 except Exception as e:
-                    logger.error(f"Request failed for {card_name}: {str(e)}")
+                    logger.error(f"Request failed for {card_name}: {str(e)}", exc_info=True)
                     continue
                     
             if results:
@@ -962,7 +968,7 @@ class ExternalDataSynchronizer:
             return None
                 
         except Exception as e:
-            logger.error(f"Error in Hawk search: {str(e)}")
+            logger.error(f"Error in Hawk search: {str(e)}", exc_info=True)
             return None
     
 
@@ -987,11 +993,11 @@ class ExternalDataSynchronizer:
             try:
                 return json.loads(response)
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON response from {site.name}: {str(e)}")
+                logger.error(f"Invalid JSON response from {site.name}: {str(e)}", exc_info=True)
                 return None
                 
         except Exception as e:
-            logger.error(f"Error searching Shopify site {site.name}: {str(e)}")
+            logger.error(f"Error searching Shopify site {site.name}: {str(e)}", exc_info=True)
             return None
     
     @staticmethod
@@ -1016,7 +1022,7 @@ class ExternalDataSynchronizer:
             
             return set_name, quality, is_foil
         except Exception as e:
-            logger.error(f"Error parsing variant title '{title}': {str(e)}")
+            logger.error(f"Error parsing variant title '{title}': {str(e)}", exc_info=True)
             return None
 
     @staticmethod
@@ -1040,7 +1046,7 @@ class ExternalDataSynchronizer:
             
             return any('foil' in s for s in check_strings)
         except Exception as e:
-            logger.exception(f"Error in detect_foil {str(e)}")
+            logger.exception(f"Error in detect_foil {str(e)}", exc_info=True)
             return None
     
     @staticmethod
@@ -1067,7 +1073,7 @@ class ExternalDataSynchronizer:
             return price_value
             
         except Exception as e:
-            logger.error(f"Error extracting price: {str(e)}")
+            logger.error(f"Error extracting price: {str(e)}", exc_info=True)
             return None
 
 
@@ -1110,7 +1116,7 @@ class ExternalDataSynchronizer:
             return quality or 'DMG', language or 'Unknown'
 
         except Exception as e:
-            logger.exception(f"Error in extract_quality_language with input '{quality_language}': {str(e)}")
+            logger.exception(f"Error in extract_quality_language with input '{quality_language}': {str(e)}", exc_info=True)
             return 'DMG', 'Unknown'  # Return default values on error
 
     @staticmethod
@@ -1151,7 +1157,7 @@ class ExternalDataSynchronizer:
                 return None
             
         except Exception as e:
-            logger.exception(f"Error in extract_quantity {str(e)}")
+            logger.exception(f"Error in extract_quantity {str(e)}", exc_info=True)
             return None
             
     @staticmethod
@@ -1178,7 +1184,7 @@ class ExternalDataSynchronizer:
             return product_name, product_version, product_foil
         
         except Exception as e:
-            logger.exception(f"Error in find_name_version_foil {str(e)}")
+            logger.exception(f"Error in find_name_version_foil {str(e)}", exc_info=True)
             return None
 
     @staticmethod
@@ -1207,7 +1213,7 @@ class ExternalDataSynchronizer:
                 )
             logger.info("=" * 100 + "\n")
         except Exception as e:
-            logger.exception(f"Error in log_cards_df_stat {str(e)}")
+            logger.exception(f"Error in log_cards_df_stat {str(e)}", exc_info=True)
             return None
     
     @staticmethod
@@ -1229,7 +1235,7 @@ class ExternalDataSynchronizer:
             variant_parts = cleaned_description.split(",")
             return [part.strip() for part in variant_parts]
         except Exception as e:
-            logger.exception(f"Error in normalize_variant_description {str(e)}")
+            logger.exception(f"Error in normalize_variant_description {str(e)}", exc_info=True)
             return None
         
     @staticmethod
@@ -1251,5 +1257,5 @@ class ExternalDataSynchronizer:
                         return True
             return False
         except Exception as e:
-            logger.error(f"Error checking if product is Magic card: {str(e)}")
+            logger.error(f"Error checking if product is Magic card: {str(e)}", exc_info=True)
             return False

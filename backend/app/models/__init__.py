@@ -1,4 +1,4 @@
-from .card import UserBuylistCard
+from .UserBuylistCard import UserBuylistCard
 from .scan import Scan, ScanResult
 from .optimization_results import OptimizationResult
 from .settings import Settings
