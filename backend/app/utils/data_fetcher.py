@@ -67,6 +67,8 @@ class ExternalDataSynchronizer:
         self.network = NetworkDriver()
         self.error_collector = ErrorCollector.get_instance()
         self.error_collector.reset()
+        # Create a thread pool for CPU-intensive operations
+        self.thread_pool = ThreadPoolExecutor(max_workers=8)
 
     async def __aenter__(self):
         return self
@@ -104,51 +106,44 @@ class ExternalDataSynchronizer:
 
     async def scrape_multiple_sites(self, sites, card_names):
         """Enhanced scraping with proper Selenium integration"""
-        start_time = time.time()  # Start timing
-        results = []
-        logger.info(f"Starting scrape for {len(sites)} sites, {len(card_names)} cards")
-        
-        async with self.network as session:
-            try:
-                tasks = []
-                for i, site in enumerate(sites, 1):
-                    logger.info(f"Creating scraping task {i} for site: {site.name}")
-                    task = asyncio.create_task(self.process_site(site, card_names))
-                    tasks.append(task)
-                
-                # Process tasks in batches with proper cleanup
-                # Aggressive batching settings
-                MAX_CONCURRENT = 20  # Much higher concurrent limit
-                BATCH_SIZE = min(max(len(sites) // 2, 10), 30)  # Larger batch size, between 10-30
-                total_batches = (len(tasks) + BATCH_SIZE - 1) // BATCH_SIZE
-                
-                for batch_num, i in enumerate(range(0, len(tasks), BATCH_SIZE), 1):
+        try:
+            start_time = time.time()  # Start timing
+            results = []
+            for site in sites:
+                concurrency = self.network.method_limiter.get_concurrency(site.method)
+                rate_limit = self.network.method_limiter.get_rate_limit(site.method)
+                logger.info(f"Processing {len(sites)} sites with method '{site.method}'" 
+                        f" using concurrency {concurrency} and rate limit {rate_limit}/sec")
+            
+                # Process sites in this domain with limited concurrency
+                semaphore = asyncio.Semaphore(concurrency)
+
+                async def process_with_limit(site):
+                    async with semaphore:
+                        return await self.process_site(site, card_names)
+                    
+                pending_tasks = [process_with_limit(site) for site in sites]
+                for future in asyncio.as_completed(pending_tasks):
                     try:
-                        logger.info(f"Processing batch {batch_num}/{total_batches}")
-                        batch = tasks[i:i + BATCH_SIZE]
-                        batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                        
-                        for result in batch_results:
-                            if isinstance(result, Exception):
-                                logger.error(f"Batch processing error: {str(result)}", exc_info=True)
-                            elif result:
-                                results.extend(result)
-                                #logger.info(f"Processed batch {batch_num}/{total_batches} ({len(result)}/{len(results)})")
-                                
+                        result = await future
+                        if result:
+                            results.extend(result)
                     except Exception as e:
-                        logger.error(f"Error processing batch {batch_num}: {str(e)}", exc_info=True)
-                        
+                        logger.error(f"Error in scraping task: {str(e)}", exc_info=True)
+
                 elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
                 logger.info(f"Completed scraping with {len(results)} total results in {elapsed_time} seconds")
                 return results
-                
-            except Exception as e:
-                logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}", exc_info=True)
-                raise
+               
+        except Exception as e:
+            logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}", exc_info=True)
+            raise
 
     async def process_site(self, site, card_names):
         """Process a single site and return results without saving to DB"""
         start_time = time.time()  # Start timing
+        elapsed_time_search = 0
+        elapsed_time_extract = 0
         scrapping_method = ExternalDataSynchronizer.scrapping_method_dict.get(site.method.lower(), 
                                     ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL)
         
@@ -161,36 +156,52 @@ class ExternalDataSynchronizer:
         try:
             if scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_SHOPIFY:
                 # Get data from Shopify API
+                start_time_search = time.time()  # Start timing
                 json_data = await self.search_shopify(site, card_names)
+                elapsed_time_search = round(time.time() - start_time_search, 2)  # Compute elapsed time 
                 
                 if not json_data:
                     self.error_collector.unreachable_stores.add(site.name)
                     self.log_site_error(site.name, "Connection Error", 
                                     "Failed to retrieve data from Shopify API.")
                     return None
-                    
-                cards_df = self.extract_info_shopify_json(json_data, site, card_names)
+                   
+                
+                start_time_extract = time.time()  # Start timing
+                cards_df = await self.extract_info_shopify_json(json_data, site, card_names)
+                elapsed_time_extract = round(time.time() - start_time_extract, 2)  # Compute elapsed time
                 
             elif scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_HAWK:
                 
+                start_time_search = time.time()  # Start timing
                 json_data = await self.search_hawk(site, card_names)
+                elapsed_time_search = round(time.time() - start_time_search, 2)  # Compute elapsed time
             
                 if not json_data:
                     self.error_collector.unreachable_stores.add(site.name)
                     self.log_site_error(site.name, "Connection Error", 
                                     "Failed to retrieve data from Hawk API.")
-                    return None
-                    
-                cards_df = self.extract_info_hawk_json(json_data, site, card_names)
+                    return None  
+                
+                start_time_extract = time.time()  # Start timing
+                cards_df = await self.extract_info_hawk_json(json_data, site, card_names)
+                elapsed_time_extract = round(time.time() - start_time_extract, 2)  # Compute elapsed time
                 
             else:
+                start_time_search = time.time()  # Start timing
                 soup = await self.search_crystalcommerce(site, card_names)
+                elapsed_time_search = round(time.time() - start_time_search, 2)  # Compute elapsed time
+
                 if not soup:
                     self.error_collector.unreachable_stores.add(site.name)
                     self.log_site_error(site.name, "Connection Error", 
                                     "Failed to retrieve data from site. Site may be down or blocking requests.")
                     return None
-                cards_df = self.extract_info_crystal(soup, site, card_names, scrapping_method)
+                
+                start_time_extract = time.time()  # Start timing
+                cards_df = await self.extract_info_crystal(soup, site, card_names, scrapping_method)
+                elapsed_time_extract = round(time.time() - start_time_extract, 2)  # Compute elapsed time
+
                 if cards_df.empty:
                     old_strategy = scrapping_method
                     scrapping_method = (
@@ -199,7 +210,10 @@ class ExternalDataSynchronizer:
                         else ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
                     )
                     logger.info(f"Strategy {old_strategy} failed, attempting with {scrapping_method}")
-                    cards_df = self.extract_info_crystal(soup, site, card_names, scrapping_method)
+                    
+                    start_time_extract = time.time()  # Start timing
+                    cards_df = await self.extract_info_crystal(soup, site, card_names, scrapping_method)
+                    elapsed_time_extract = round(time.time() - start_time_extract, 2)  # Compute elapsed time
 
             if cards_df is None or cards_df.empty:
                 self.log_site_error(site.name, "No Data Found", 
@@ -213,7 +227,11 @@ class ExternalDataSynchronizer:
                 found_cards = cards_df['name'].nunique()
                 elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
 
-                logger.info(f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name} in {elapsed_time} seconds")
+                logger.info(f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name} [{site.method}]")
+                logger.info(f"Time taken for {site.name} [{site.method}] is:")
+                logger.info(f"   Search time {elapsed_time_search} seconds")
+                logger.info(f"   Extract time {elapsed_time_extract} seconds")
+                logger.info(f"   Total time {elapsed_time} seconds")
                 
                 # if found_cards < total_cards:
                 #     missing_cards = set(card_names) - set(cards_df['name'].unique())
@@ -268,7 +286,27 @@ class ExternalDataSynchronizer:
             return None
                 
 
-    def extract_info_crystal(self, soup, site, card_names, scrapping_method):
+    async def process_dataframe(self, func, *args, **kwargs):
+        """Run DataFrame operations in thread pool to avoid blocking the event loop"""
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self.thread_pool,
+                lambda: func(*args, **kwargs)
+            )
+        except Exception as e:
+            logger.error(f"Error in thread pool execution: {str(e)}")
+            return pd.DataFrame()
+    
+    async def extract_info_crystal(self, soup, site, card_names, scrapping_method):
+        """Extract card information with non-blocking execution"""
+        
+        # Run the CPU-intensive operations in a thread pool
+        return await self.process_dataframe(
+            self._extract_info_crystal_sync, soup, site, card_names, scrapping_method
+        )
+    
+    def _extract_info_crystal_sync(self, soup, site, card_names, scrapping_method):
         """
         Extract card information using either form-based or scrapper scrapping_method.
         """
@@ -603,7 +641,13 @@ class ExternalDataSynchronizer:
             logger.error(f"Error creating DataFrame for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
         
-    def extract_info_hawk_json(self, json_data, site, card_names):
+    async def extract_info_hawk_json(self, json_data, site, card_names):
+        """Extract card information from Hawk API response with non-blocking execution"""
+        return await self.process_dataframe(
+            self._extract_info_hawk_json_sync, json_data, site, card_names
+        )
+
+    def _extract_info_hawk_json_sync(self, json_data, site, card_names):
         """Extract card information from Hawk API response with deduplication"""
         if not json_data or 'Results' not in json_data:
             logger.warning(f"No valid results in Hawk response for {site.name}")
@@ -715,7 +759,13 @@ class ExternalDataSynchronizer:
             logger.error(f"Error processing Hawk JSON for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
  
-    def extract_info_shopify_json(self, json_data, site, card_names):
+    async def extract_info_shopify_json(self, json_data, site, card_names):
+        """Extract card information from Shopify API response with non-blocking execution"""
+        return await self.process_dataframe(
+            self._extract_info_shopify_json_sync, json_data, site, card_names
+        )
+
+    def _extract_info_shopify_json_sync(self, json_data, site, card_names):
         """Extract card information from Shopify API response"""
         cards = []
         
@@ -850,8 +900,77 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error in crystal commerce search for {site.name}: {str(e)}", exc_info=True)
             return None
+        
+    async def _search_crystal_batch(self, site, batch_card_names,search_url,auth_token,relevant_headers):
+        """
+        Simplified crystal commerce search with better error handling.
+        """
+        try:            
+            query_string = "\r\n".join(batch_card_names)
+            if "orchardcitygames" in site.name.lower():
+                query_string = urllib.parse.quote_plus(query_string)
+                # logger.info(f"Query string for {site.name}: {query_string}")
+                
+            payload = {
+                "authenticity_token": auth_token,
+                "query": query_string,
+                "submit": "Continue"
+            }
+            
+            response = await self.network.post_request(search_url, payload, headers=relevant_headers, method=site.method)
+            await asyncio.sleep(2)  # Add delay to avoid rate limiting
+            if not response:
+                logger.error(f"Search request failed for {site.name}")
+                return None
+
+            # Return response for further processing
+            return BeautifulSoup(response, "html.parser")
+
+        except Exception as e:
+            logger.error(f"Error in crystal commerce search for {site.name}: {str(e)}", exc_info=True)
+            return None
 
     async def search_crystalcommerce(self, site, card_names):
+        """Search CrystalCommerce with batched requests for efficiency."""
+        
+        BATCH_SIZE = 20  # Number of cards per request
+
+        search_url = site.url.rstrip('/')
+        auth_token, relevant_headers, cookie_str = await self.get_site_details(site)
+        
+        relevant_headers.update({
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Cookie": cookie_str,
+        })
+        # Prepare search payload
+        clean_names = [clean_card_name(name, card_names) for name in card_names if name]
+        
+        if not clean_names:
+            logger.error(f"No valid card names to search for {site.name}")
+            return None
+        
+        # Split the card list into chunks of 20
+        card_batches = [clean_names[i:i + BATCH_SIZE] for i in range(0, len(clean_names), BATCH_SIZE)]
+        
+        # Prepare tasks for all batches
+        tasks = [self._search_crystal_batch(site, batch, search_url, auth_token, relevant_headers) for batch in card_batches]
+        
+        logger.info(f"Sending {len(card_batches)} batch requests for {site.name}...")
+
+        # Execute all batch requests concurrently
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Filter out failed requests and extract successful results
+        soups = [result for result in batch_results if isinstance(result, BeautifulSoup)]
+
+        # Combine HTML results from all batches
+        combined_html = "".join([str(soup) for soup in soups])
+
+        return BeautifulSoup(combined_html, "html.parser") if combined_html else None
+        
+        
+    async def search_crystalcommerce2(self, site, card_names):
         """
         Simplified crystal commerce search with better error handling.
         """
@@ -883,7 +1002,8 @@ class ExternalDataSynchronizer:
                 "submit": "Continue"
             }
             
-            response = await self.network.post_request(search_url, payload, headers=relevant_headers)
+            response = await self.network.post_request(search_url, payload, headers=relevant_headers, method=site.method)
+            await asyncio.sleep(2)  # Add delay to avoid rate limiting
             if not response:
                 logger.error(f"Search request failed for {site.name}")
                 return None
@@ -942,7 +1062,13 @@ class ExternalDataSynchronizer:
                             continue
                             
                         response.raise_for_status()
-                        response_text = await response.text()
+                        
+                        await asyncio.sleep(2)  # Add delay to avoid rate limiting
+                        try:
+                            response_text = await response.text()
+                            logger.debug(f"Raw API response: {response_text[:500]}")
+                        except Exception as e:
+                            logger.error(f"Request failed for {card_name}: {str(e)}")
                         
                         try:
                             card_results = json.loads(response_text)
@@ -984,7 +1110,9 @@ class ExternalDataSynchronizer:
                 "Cookie": cookie_str,
             })
         
-            response = await self.network.post_request(api_url, json_payload, headers=relevant_headers)
+            response = await self.network.post_request(api_url, json_payload, headers=relevant_headers, method=site.method)
+            
+            await asyncio.sleep(2)  # Add delay to avoid rate limiting
             
             if not response:
                 logger.error(f"Failed to get response from Binder API for {site.name}")

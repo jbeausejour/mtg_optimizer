@@ -267,6 +267,7 @@ class CardLanguage(str, Enum):
     @classmethod
     def get_language_mapping(cls):
         return LANGUAGE_MAPPING
+    
 class CardVersion(str, Enum):
     """Enumeration of possible card version values"""
     STANDARD = "Standard"

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import time
 from typing import Optional, Union
 import aiohttp
 from aiohttp import TCPConnector, ClientTimeout
@@ -7,6 +8,101 @@ from urllib.parse import urlparse
 import re
 
 logger = logging.getLogger(__name__)
+
+class MethodRateLimiter:
+    def __init__(self):
+        # Store semaphores for concurrency control (limits parallel requests)
+        self.limiters = {}
+        # Store concurrency values for reference
+        self.concurrency = {}
+        # Store rate limits (requests per second)
+        self.rate_limits = {}
+        # Store last request timestamps per method
+        self.last_request_time = {}
+        # Store accumulated tokens per method
+        self.tokens = {}
+
+    def get_concurrency(self, method) -> int:
+        """Get the appropriate concurrency level for this method type"""
+        method = method.lower()
+        if method not in self.concurrency:
+            if method == "crystal" or method == "scrapper":
+                self.concurrency[method] = 3  # Crystal Commerce has limited capacity
+            elif method == "hawk":
+                self.concurrency[method] = 1  # Hawk API needs strict limiting
+            elif method == "shopify":
+                self.concurrency[method] = 4  # Shopify can handle more
+            else:
+                self.concurrency[method] = 5  # Default for unknown methods
+        return self.concurrency[method]
+    
+    def get_rate_limit(self, method) -> float:
+        """Get requests per second limit for this method type"""
+        method = method.lower()
+        if method not in self.rate_limits:
+            if method == "crystal" or method == "scrapper":
+                self.rate_limits[method] = 0.5  # 1 request per 2 seconds
+            elif method == "hawk":
+                self.rate_limits[method] = 0.2  # 1 request per 5 seconds
+            elif method == "shopify":
+                self.rate_limits[method] = 0.33  # 1 request per 3 seconds
+            else:
+                self.rate_limits[method] = 1.0  # 1 request per second default
+        return self.rate_limits[method]
+    
+    def get_limiter(self, method) -> asyncio.Semaphore:
+        """Get or create a semaphore for this method type"""
+        method = method.lower()
+        if method not in self.limiters:
+            concurrency = self.get_concurrency(method)
+            self.limiters[method] = asyncio.Semaphore(concurrency)
+        return self.limiters[method]
+    
+    async def acquire(self, method):
+        """Acquire both a semaphore slot and respect the rate limit"""
+        method = method.lower()
+        
+        # Get the appropriate semaphore
+        limiter = self.get_limiter(method)
+        
+        # First wait for semaphore (limits concurrent requests)
+        await limiter.acquire()
+        
+        # Then enforce rate limit (requests per second)
+        rate_limit = self.get_rate_limit(method)
+        now = time.time()
+        
+        # Initialize last request time if not set
+        if method not in self.last_request_time:
+            self.last_request_time[method] = now
+            self.tokens[method] = 1.0
+        
+        # Calculate time since last request and add tokens
+        time_passed = now - self.last_request_time[method]
+        self.tokens[method] += time_passed * rate_limit
+        
+        # Cap tokens at max of 1
+        if self.tokens[method] > 1.0:
+            self.tokens[method] = 1.0
+        
+        # If we don't have enough tokens, sleep until we do
+        if self.tokens[method] < 1.0:
+            sleep_time = (1.0 - self.tokens[method]) / rate_limit
+            await asyncio.sleep(sleep_time)
+            self.tokens[method] = 0.0
+        else:
+            # Consume a token
+            self.tokens[method] -= 1.0
+        
+        # Update last request time
+        self.last_request_time[method] = time.time()
+        
+        # Return a function to release the semaphore
+        def release():
+            limiter.release()
+        
+        return release
+
 class NetworkDriver:
     """Enhanced base class for network operations with connection pooling"""
     def __init__(self, max_connections: int = 100, keepalive_timeout: int = 30):
@@ -20,8 +116,8 @@ class NetworkDriver:
         self.connector = None
         self.max_connections = max_connections
         self.keepalive_timeout = keepalive_timeout
-        self._rate_limiters = {}
         self._default_rate_limit = asyncio.Semaphore(10)
+        self.method_limiter = MethodRateLimiter()
 
     async def _init_connector(self):
         """Initialize the connector when needed"""
@@ -59,25 +155,132 @@ class NetworkDriver:
 
     async def __aexit__(self, exc_type, exc, tb):
         await self._cleanup()
-            
-    def _get_rate_limiter(self, domain: str) -> asyncio.Semaphore:
-        """Get or create rate limiter for a domain"""
-        if domain not in self._rate_limiters:
-            # Customize rate limits per domain if needed
-            if 'example.com' in domain:
-                self._rate_limiters[domain] = asyncio.Semaphore(5)  # Stricter limit
-            else:
-                self._rate_limiters[domain] = self._default_rate_limit
-        return self._rate_limiters[domain]
     
-    async def post_request(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
+    async def post_request(self, url: str, payload: Union[dict, str, list], headers: dict = None, method: str = "default") -> Optional[str]:
+        """Enhanced POST request with detailed error tracking and Selenium fallback"""
+        await self._ensure_session()
+
+        # Apply both concurrency and rate limiting
+        release = await self.method_limiter.acquire(method)
+
+        max_retries = 3
+        retry_count = 0
+        backoff_factor = 1
+        wait_time = 1        
+        semaphore = asyncio.Semaphore(5) 
+        
+        async with semaphore:
+            while retry_count < max_retries:
+                connection_info = {
+                    'attempt': retry_count + 1,
+                    'max_retries': max_retries
+                }  # Initialize with basic info
+                
+                try:
+                    retry_count += 1
+                    
+                    # Enhanced timeout configuration
+                    timeout = aiohttp.ClientTimeout(
+                        total=100,
+                        connect=30,
+                        sock_read=60,
+                        sock_connect=15
+                    )
+                    connection_info['timeout'] = str(timeout)
+
+                    connector = TCPConnector(
+                        limit=10,
+                        force_close=True,
+                        enable_cleanup_closed=True
+                    )
+
+                    # Track the start time for detailed timing
+                    start_time = time.time()
+                    async with aiohttp.ClientSession(
+                        connector=connector, timeout=timeout, headers=headers
+                    ) as session:
+                        try:
+                            async with session.post(url, data=payload) as response:
+                                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+
+                                connection_info.update({
+                                    'status': response.status,
+                                    'elapsed_time': f"{elapsed_time:.2f}s",
+                                    'headers': dict(response.headers)
+                                })
+
+                                # Log extra connection details
+                                if hasattr(response, 'connection') and response.connection:
+                                    if hasattr(response.connection, 'transport') and response.connection.transport:
+                                        connection_info.update({
+                                            'peername': response.connection.transport.get_extra_info('peername', 'N/A'),
+                                            'ssl': bool(response.connection.transport.get_extra_info('ssl_object', None))
+                                        })  
+
+                                logger.debug(f"Connection details for {url}: {connection_info}")
+
+                                if response.status == 200:
+                                    if retry_count > 1:
+                                        logger.info(f"Success posting to {url} after {retry_count} attempts in {elapsed_time} seconds")
+                                    else:
+                                        logger.info(f"Success posting to {url} in {elapsed_time} seconds")
+                                    return await response.text()
+
+                                elif response.status in (301, 302, 303, 307, 308):  
+                                    redirect_url = response.headers.get('Location')
+                                    if redirect_url:
+                                        logger.info(f"Following redirect to {redirect_url}")
+                                        url = redirect_url
+                                        continue
+                                elif response.status == 404:
+                                    logger.error(f"URL not found: {url} (Took {elapsed_time} seconds)")
+                                    return None
+                                elif response.status == 429:
+                                    wait_time = int(response.headers.get('Retry-After', 60))
+                                    logger.warning(f"Rate limited on {url}, waiting {wait_time}s (Took {elapsed_time} seconds)")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                else:
+                                    logger.error(f"Error {response.status} from {url} (Attempt {retry_count}/{max_retries}) - Took {elapsed_time} seconds")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+
+                        except asyncio.TimeoutError:
+                            elapsed_time = round(time.time() - start_time, 2)
+                            logger.error(f"Timeout after {elapsed_time:.2f}s posting to {url} (Attempt {retry_count}/{max_retries})")
+                            await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+                            continue
+
+                except aiohttp.ClientError as e:
+                    elapsed_time = round(time.time() - start_time, 2)
+                    connection_info['error'] = f"Client error: {str(e)}"
+                    logger.error(f"Connection failed to {url} (Took {elapsed_time} seconds): {connection_info}")
+                    await asyncio.sleep(backoff_factor)
+                    continue
+
+                except Exception as e:
+                    elapsed_time = round(time.time() - start_time, 2)
+                    connection_info['error'] = f"Unexpected error: {str(e)}"
+                    logger.error(f"Request failed to {url} (Took {elapsed_time} seconds): {connection_info}")
+                    await asyncio.sleep(backoff_factor)
+                    continue
+                
+                finally:
+                    # Always release the semaphore
+                    release()
+
+                backoff_factor *= 2
+
+        return None  
+    
+    async def post_request2(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
         """Enhanced POST request with detailed error tracking and Selenium fallback"""
         await self._ensure_session()
 
         max_retries = 5
         retry_count = 0
         backoff_factor = 1
-        wait_time = 1        
+        wait_time = 1
         
         while retry_count < max_retries:
             connection_info = {

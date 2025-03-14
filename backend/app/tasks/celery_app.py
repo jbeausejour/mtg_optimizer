@@ -40,9 +40,8 @@ if not task_logger.handlers:
     # File handler
     if not os.path.exists("logs"):
         os.makedirs("logs")
-    file_handler = RotatingFileHandler(
-        "logs/celery_tasks.log", maxBytes=10240, backupCount=10
-    )
+    file_handler = RotatingFileHandler(f"logs/celery_tasks_{os.getpid()}.log", maxBytes=10240, backupCount=10)
+
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s: %(message)s [in %(filename)s:%(lineno)d]")
     )

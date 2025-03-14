@@ -33,7 +33,7 @@ def is_data_fresh(card_name):
         
     now = datetime.now(timezone.utc).replace(microsecond=0)
     age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
-    return age.total_seconds() < 1800  # 30 minutes
+    return age.total_seconds() < 1  # 30 minutes
 
 def get_fresh_scan_results(fresh_cards, site_ids):
     """Get the latest scan results"""
@@ -68,7 +68,7 @@ class OptimizationTaskManager:
             logger.error(f"Error in create_new_scan: {str(e)}")
             raise
 
-    def handle_scraping(self):
+    async def handle_scraping(self):
         try:
             if not self.current_scan_id:
                 self.create_new_scan()
@@ -93,15 +93,12 @@ class OptimizationTaskManager:
             
             # Get fresh results first
             fresh_results = []
-            if fresh_cards:
-                # Convert fresh results to dictionaries immediately
+            async def fetch_fresh_data():
                 if fresh_cards:
                     fresh_query_results = get_fresh_scan_results(fresh_cards, self.site_ids)
                     
-                    # Process fresh results with deduplication
-                    for r in fresh_query_results:
-                        # Create unique key for card-site-condition combination
-                        fresh_results.append({
+                    return [
+                        {
                             'site_id': r.site_id,
                             'name': r.name,
                             'set_name': r.set_name,
@@ -112,57 +109,84 @@ class OptimizationTaskManager:
                             'quality': r.quality,
                             'language': r.language,
                             'quantity': int(r.quantity)
-                        })
+                        }
+                        for r in fresh_query_results
+                    ]
+                return []  # ✅ Always return an empty list instead of None
             
-            if not outdated_cards:
-                logger.info("All cards have fresh data, skipping scraping :)")
+            async def scrape_outdated_data():
+                if not outdated_cards:
+                    logger.info("All cards have fresh data, skipping scraping :)")
+                    logger.info("=============================")
+                    return []
+                
+                # Fix: Same correction for outdated cards
+                logger.info(f"Scraping outdated cards:\n - {'\n - '.join([card['name'] for card in outdated_cards])}")
                 logger.info("=============================")
-                return fresh_results
-            
-            # Fix: Same correction for outdated cards
-            logger.info(f"Scraping outdated cards:\n - {'\n - '.join([card['name'] for card in outdated_cards])}")
-            logger.info("=============================")
 
-            scraper = ExternalDataSynchronizer()
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                scan_id = self.current_scan_id
+                scraper = ExternalDataSynchronizer()
                 
-                new_results = loop.run_until_complete(
-                    scraper.scrape_multiple_sites(
-                        self.sites,
-                        [card['name'] for card in outdated_cards]
-                    )
-                )
-                # Deduplicate new results before saving
                 deduplicated_new_results = []
-                if new_results:
-                    for result in new_results:
-                        combo_key = (
-                            result['site_id'],
-                            result['name'],
-                            result['set_name'],
-                            result['set_code'],
-                            result['price'],
-                            result['version'],
-                            result['foil'],
-                            result['quality'],
-                            result['language']
-                        )
-                        if combo_key not in processed_combinations:
-                            processed_combinations.add(combo_key)
-                            deduplicated_new_results.append(result)
-                            ScanService.save_scan_result(scan_id, result)
+                # loop = asyncio.new_event_loop()
+                # asyncio.set_event_loop(loop)
+                # try:
+                scan_id = self.current_scan_id
                     
-                    logger.info(f"Saved {len(deduplicated_new_results)} unique results with scan_id {scan_id}")
-                
-                # Combine fresh and deduplicated new results
-                all_results = fresh_results + deduplicated_new_results
-                logger.info(f"Total unique card-site combinations in final results: {len(processed_combinations)}")
-                return all_results
-            finally:
-                loop.close()
+                new_results = await scraper.scrape_multiple_sites(
+                    self.sites, [card['name'] for card in outdated_cards]
+                )
+                for result in new_results:
+                    combo_key = (
+                        result['site_id'], result['name'], result['set_name'],
+                        result['set_code'], result['price'], result['version'],
+                        result['foil'], result['quality'], result['language']
+                    )
+                    if combo_key not in processed_combinations:
+                        processed_combinations.add(combo_key)
+                        deduplicated_new_results.append(result)
+                        ScanService.save_scan_result(scan_id, result)
+
+                logger.info(f"Scraped and saved {len(deduplicated_new_results)} new results with scan_id {scan_id}")
+                return deduplicated_new_results
+            # Run database fetching and web scraping in parallel
+            fresh_results, new_results = await asyncio.gather(fetch_fresh_data(), scrape_outdated_data())
+
+            all_results = fresh_results + new_results
+            logger.info(f"Total results collected: {len(all_results)}")
+            return all_results  
+        
+                    # new_results = loop.run_until_complete(
+                    #     scraper.scrape_multiple_sites(
+                    #         self.sites,
+                    #         [card['name'] for card in outdated_cards]
+                    #     )
+                    # )
+                    # Deduplicate new results before saving
+                    # deduplicated_new_results = []
+                    # if new_results:
+                    #     for result in new_results:
+                    #         combo_key = (
+                    #             result['site_id'],
+                    #             result['name'],
+                    #             result['set_name'],
+                    #             result['set_code'],
+                    #             result['price'],
+                    #             result['version'],
+                    #             result['foil'],
+                    #             result['quality'],
+                    #             result['language']
+                    #         )
+                    #         if combo_key not in processed_combinations:
+                    #             processed_combinations.add(combo_key)
+                    #             deduplicated_new_results.append(result)
+                    #             ScanService.save_scan_result(scan_id, result)
+                          
+            # Combine fresh and deduplicated new results
+            #     all_results = fresh_results + deduplicated_new_results
+            #     logger.info(f"Total unique card-site combinations in final results: {len(processed_combinations)}")
+            #     return all_results
+            # finally:
+            #     loop.close()
         except Exception as e:
             logger.exception(f"Error in handle_scraping: {str(e)}")
             raise  # Let the outer transaction handle rollback
@@ -410,46 +434,79 @@ def start_scraping_task(self, site_ids, card_list_from_frontend, strategy, min_s
     def update_progress(status: str, progress: int):
         self.update_state(state="PROCESSING", meta={"status": status, "progress": progress})
 
+    async def async_scraping_task(task_manager):
+        """Runs the scraping process asynchronously using the existing task_manager"""
+        return await task_manager.handle_scraping()
+
     try:
-        # Initialize configuration and managers
+        # Start total time tracking
+        total_start_time = time.time()
+
+        # ✅ Create a single instance of task_manager
         config = OptimizationConfigDTO(strategy=strategy, min_store=min_store, find_min_store=find_min_store)
         task_manager = OptimizationTaskManager(site_ids, card_list_from_frontend, config.strategy, 
                                              config.min_store, config.find_min_store)
         logger = task_manager.logger
-        # Scraping phase
-        update_progress("Scrapping started", 20)
-        scraping_results = task_manager.handle_scraping()
+
+        # Scraping phase (Parallelized)
+        update_progress("Scraping started", 20)
+        scrape_start_time = time.time()
+
+        # ✅ Run the async scraping function with the existing task_manager
+        scraping_results = asyncio.run(async_scraping_task(task_manager))
+
+        scrape_elapsed_time = round(time.time() - scrape_start_time, 2)
         if not scraping_results:
+            logger.error(f"Scraping failed (Took {scrape_elapsed_time} seconds)")
             return handle_failure("No scraping results found", task_manager)
-            
+
+        logger.info(f"Scraping completed in {scrape_elapsed_time} seconds")
+
         # Data preparation phase    
         update_progress("Preparing data", 40)
+        data_prep_start_time = time.time()
         filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
+        data_prep_elapsed_time = round(time.time() - data_prep_start_time, 2)
+
         if filtered_listings_df is None or filtered_listings_df.empty:
+            logger.error(f"Data preparation failed (Took {data_prep_elapsed_time} seconds)")
             return handle_failure("No valid card listings found", task_manager)
+
+        logger.info(f"Data preparation completed in {data_prep_elapsed_time} seconds")
 
         # Optimization phase
         update_progress("Running optimization", 60)
+        optimization_start_time = time.time()
         optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
-        
-        # Result processing
-        update_progress("Processing results", 80)
-        if optimization_result and optimization_result.get("status") == "success":
-            best_solution = optimization_result.get('best_solution', {})
-            iterations = optimization_result.get('iterations', [])
-            
-            logger.info("Optimization Result received:")
-            logger.info(f"Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}")
-            logger.info(f"Iterations count: {len(iterations)}")
+        optimization_elapsed_time = round(time.time() - optimization_start_time, 2)
 
-            update_progress("Optimization completed successfully", 100)
-            return handle_success(optimization_result, task_manager)
-        else:
+        if not optimization_result or optimization_result.get("status") != "success":
+            logger.error(f"Optimization failed (Took {optimization_elapsed_time} seconds)")
             update_progress("Optimization failed", 100)
             return handle_failure("Optimization failed", task_manager, optimization_result)
 
+        logger.info(f"Optimization completed in {optimization_elapsed_time} seconds")
+
+        # Result processing
+        update_progress("Processing results", 80)
+        best_solution = optimization_result.get('best_solution', {})
+        iterations = optimization_result.get('iterations', [])
+
+        logger.info("Optimization Result received:")
+        logger.info(f"Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}")
+        logger.info(f"Iterations count: {len(iterations)}")
+
+        update_progress("Optimization completed successfully", 100)
+
+        # Total execution time
+        total_elapsed_time = round(time.time() - total_start_time, 2)
+        logger.info(f"Total task execution time: {total_elapsed_time} seconds")
+
+        return handle_success(optimization_result, task_manager)
+
     except Exception as e:
-        logger.exception("Task execution failed")
+        total_elapsed_time = round(time.time() - total_start_time, 2)
+        logger.exception(f"Task execution failed (Took {total_elapsed_time} seconds)")
         self.update_state(state=states.FAILURE, 
                          meta={"exc_type": type(e).__name__, "exc_message": str(e)})
         raise
