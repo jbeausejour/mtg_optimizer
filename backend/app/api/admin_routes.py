@@ -1,17 +1,19 @@
 import logging
-from flask import Blueprint, jsonify, request, current_app
-from flask_jwt_extended import create_access_token, jwt_required
-from sqlalchemy.exc import IntegrityError
-from app.services.admin_service import AdminService
+
 from app.models.user import User
+from app.services.admin_service import AdminService
 from app.utils.create_user import create_user
 from app.utils.load_initial_data import load_all_data, truncate_tables
 from app.utils.validators import validate_setting_key, validate_setting_value
+from flask import Blueprint, current_app, jsonify, request
+from flask_jwt_extended import create_access_token, jwt_required
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
 # Admin Routes
 admin_routes = Blueprint("admin_routes", __name__)
+
 
 # Settings Operations
 @admin_routes.route("/settings", methods=["GET"])
@@ -20,6 +22,7 @@ def get_settings():
     logger.info("Getting all settings")
     settings = AdminService.get_all_settings()
     return jsonify([setting.to_dict() for setting in settings])
+
 
 @admin_routes.route("/settings", methods=["POST"])
 @jwt_required()
@@ -39,6 +42,7 @@ def update_settings():
 
     return jsonify(updated_settings), 200
 
+
 @admin_routes.route("/login", methods=["POST"])
 def login():
     data = request.json
@@ -53,6 +57,7 @@ def login():
     current_app.logger.warning(f"Failed login attempt for user: {data.get('username')}")
     return jsonify({"message": "Invalid username or password"}), 401
 
+
 @admin_routes.route("/create_user", methods=["POST"])
 def route_create_user():
     try:
@@ -60,6 +65,7 @@ def route_create_user():
         create_user()
     except Exception as e:
         print("user exist")
+
 
 @admin_routes.route("/load-data", methods=["POST"])
 def load_data():

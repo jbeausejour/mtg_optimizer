@@ -11,8 +11,7 @@ migrate = Migrate()
 jwt = JWTManager()
 cors = CORS(resources={r"/api/*": {"origins": "*"}})
 rq = RQ()
-limiter = Limiter(key_func=get_remote_address,
-                  storage_uri="redis://localhost:6379/0")
+limiter = Limiter(key_func=get_remote_address, storage_uri="redis://localhost:6379/0")
 
 
 def init_extensions(app):

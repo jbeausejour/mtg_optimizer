@@ -233,12 +233,12 @@ const Dashboard = ({ userId }) => {
                     onClick={(e) => {
                       e.stopPropagation();
                       handleNavigation('/buylist-management', { 
-                        buylistName: item.buylist_name,
-                        buylistId: item.buylist_id
+                        buylistName: item.name,
+                        buylistId: item.id
                       });
                     }}
                   >
-                    {item.buylist_name}
+                    {item.name}
                   </Button>
                 </List.Item>
               )}

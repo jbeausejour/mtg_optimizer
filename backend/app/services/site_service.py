@@ -1,11 +1,12 @@
+import logging
 from contextlib import contextmanager
-from sqlalchemy.exc import SQLAlchemyError
+
 from app.extensions import db
 from app.models.site import Site
-from sqlalchemy.exc import IntegrityError
-import logging
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 logger = logging.getLogger(__name__)
+
 
 class SiteService:
     @staticmethod
@@ -25,7 +26,7 @@ class SiteService:
             raise
         finally:
             db.session.close()
-            
+
     @staticmethod
     def get_sites_by_ids(site_ids):
         """Get sites by their IDs"""

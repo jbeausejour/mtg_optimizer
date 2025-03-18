@@ -1,5 +1,6 @@
-import redis
 import json
+
+import redis
 
 # Define Redis connection details
 REDIS_HOST = "192.168.68.15"
@@ -46,4 +47,3 @@ try:
 
 except redis.ConnectionError as e:
     print(f"❌ Failed to connect to Redis: {e}")
-

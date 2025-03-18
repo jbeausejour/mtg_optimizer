@@ -1,12 +1,11 @@
 import csv
 import os
 
+from app.extensions import db
+from app.models.site import Site
+from app.models.UserBuylistCard import UserBuylistCard
 from flask import current_app
 from sqlalchemy import inspect, text
-
-from app.extensions import db
-from app.models.UserBuylistCard import UserBuylistCard
-from app.models.site import Site
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "..", "..", "data")
@@ -26,11 +25,7 @@ def truncate_tables():
     inspector = inspect(db.engine)
     if "sqlite_sequence" in inspector.get_table_names():
         # Reset the autoincrement counters
-        db.session.execute(
-            text(
-                "DELETE FROM sqlite_sequence WHERE name IN ('site', 'card_list', 'sets')"
-            )
-        )
+        db.session.execute(text("DELETE FROM sqlite_sequence WHERE name IN ('site', 'card_list', 'sets')"))
 
     # Commit the changes
     db.session.commit()
@@ -42,9 +37,7 @@ def load_site_list():
         headers = next(csv_reader)
         print(f"Headers: {headers}")  # Debug print
 
-        column_indices = {
-            column.strip().lower(): index for index, column in enumerate(headers)
-        }
+        column_indices = {column.strip().lower(): index for index, column in enumerate(headers)}
 
         for row in csv_reader:
             print(f"Processing row: {row}")  # Debug print
@@ -73,10 +66,7 @@ def load_card_list():
         quantity = int(quantity.strip())
         card_name = card_name.strip()
 
-        card = UserBuylistCard(
-            name=card_name,
-            quantity=quantity
-        )
+        card = UserBuylistCard(name=card_name, quantity=quantity)
         db.session.merge(card)  # Use merge to add or update
 
     db.session.commit()
@@ -95,12 +85,8 @@ def load_sql_file():
             if command:
                 # Modify the CREATE TABLE command for SQLite
                 if command.upper().startswith("CREATE TABLE"):
-                    command = command.replace(
-                        "INT AUTO_INCREMENT", "INTEGER AUTOINCREMENT"
-                    )
-                    command = command.replace(
-                        "BOOLEAN", "INTEGER"
-                    )  # SQLite uses INTEGER for boolean
+                    command = command.replace("INT AUTO_INCREMENT", "INTEGER AUTOINCREMENT")
+                    command = command.replace("BOOLEAN", "INTEGER")  # SQLite uses INTEGER for boolean
 
                 try:
                     connection.execute(text(command))

@@ -1,12 +1,14 @@
-from contextlib import contextmanager
 import logging
-from typing import Optional, List
+from contextlib import contextmanager
+from typing import List, Optional
+
+from app.dto.optimization_dto import OptimizationResultDTO
 from app.extensions import db
 from app.models.optimization_results import OptimizationResult
 from app.models.scan import Scan
-from app.dto.optimization_dto import OptimizationResultDTO
 
 logger = logging.getLogger(__name__)
+
 
 class OptimizationService:
     @contextmanager
@@ -21,23 +23,23 @@ class OptimizationService:
             raise
         finally:
             db.session.close()
-            
+
     @staticmethod
     def create_optimization_result(scan_id: int, result_dto: OptimizationResultDTO) -> OptimizationResult:
         """
         Create a new optimization result
-        
+
         Args:
             scan_id: ID of the related scan
             optimization_data: Dictionary containing optimization results
-            
+
         Returns:
             OptimizationResult or None if creation fails
-            
+
         Raises:
             ValueError: If input data is invalid
         """
-        
+
         try:
             """Create a new optimization result"""
             with db.session.begin_nested():  # Use transaction context
@@ -52,7 +54,7 @@ class OptimizationService:
                     sites_scraped=result_dto.sites_scraped,
                     cards_scraped=result_dto.cards_scraped,
                     solutions=[solution.model_dump() for solution in result_dto.solutions],
-                    errors=result_dto.errors
+                    errors=result_dto.errors,
                 )
                 db.session.add(optimization)
                 db.session.commit()
@@ -62,16 +64,14 @@ class OptimizationService:
             db.session.rollback()
             logger.error(f"Failed to create optimization result: {str(e)}")
             raise
-    
 
     @staticmethod
     def get_optimization_results(limit: int = 5) -> List[OptimizationResult]:
         """Get recent optimization results"""
         try:
-            results = (OptimizationResult.query
-                    .order_by(OptimizationResult.created_at.desc())
-                    .limit(limit)
-                    .all())  # Make sure we use .all() to get a list
+            results = (
+                OptimizationResult.query.order_by(OptimizationResult.created_at.desc()).limit(limit).all()
+            )  # Make sure we use .all() to get a list
             return results
         except Exception as e:
             logger.error(f"Error fetching optimization results: {str(e)}")
@@ -90,9 +90,7 @@ class OptimizationService:
     def get_latest_optimization() -> Optional[OptimizationResult]:
         """Get the most recent optimization result"""
         try:
-            return OptimizationResult.query.order_by(
-                OptimizationResult.created_at.desc()
-            ).first()
+            return OptimizationResult.query.order_by(OptimizationResult.created_at.desc()).first()
         except Exception as e:
             logger.error(f"Error fetching latest optimization: {str(e)}")
             return None

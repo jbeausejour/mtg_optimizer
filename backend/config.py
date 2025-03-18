@@ -9,15 +9,11 @@ class Config:
     SECRET_KEY = "your_secret_key"  # Replace with a strong, random key
 
     # Database configuration
-    SQLALCHEMY_DATABASE_URI = (
-        f"sqlite:///{os.path.join(basedir, 'instance', 'site_data.db')}"
-    )
+    SQLALCHEMY_DATABASE_URI = f"sqlite:///{os.path.join(basedir, 'instance', 'site_data.db')}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # JWT configuration
-    JWT_SECRET_KEY = (
-        "your-jwt-secret-key-here"  # Replace with a different strong, random key
-    )
+    JWT_SECRET_KEY = "your-jwt-secret-key-here"  # Replace with a different strong, random key
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
 

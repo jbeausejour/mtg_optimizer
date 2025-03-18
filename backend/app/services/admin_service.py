@@ -1,14 +1,16 @@
-from sqlalchemy.exc import SQLAlchemyError
-from app.extensions import db
-from app.models.settings import Settings
 import logging
-from flask import current_app
 from contextlib import contextmanager
 
-logger = logging.getLogger(__name__)   
- 
+from app.extensions import db
+from app.models.settings import Settings
+from flask import current_app
+from sqlalchemy.exc import SQLAlchemyError
+
+logger = logging.getLogger(__name__)
+
+
 class AdminService:
-    
+
     @contextmanager
     def transaction_context():
         """Context manager for database transactions"""

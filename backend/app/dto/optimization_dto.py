@@ -1,38 +1,38 @@
 import logging
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Optional
+
 from app.constants.card_mappings import CardLanguage, CardQuality
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
+
 class CardValidation(BaseModel):
     """Base validation rules for card-related DTOs"""
+
     price: float = Field(0.0, ge=0)
     quantity: int = Field(0, ge=0)
 
-    @field_validator('price')
+    @field_validator("price")
     @classmethod
     def validate_price(cls, v: float) -> float:
-        if v > 100000:  
-            raise ValueError('Price seems unreasonably high')
+        if v > 100000:
+            raise ValueError("Price seems unreasonably high")
         return v
 
-    @field_validator('quantity')
+    @field_validator("quantity")
     @classmethod
     def validate_quantity(cls, v: int) -> int:
-        if v > 100:  
-            raise ValueError('Quantity exceeds reasonable limits')
+        if v > 100:
+            raise ValueError("Quantity exceeds reasonable limits")
         return v
 
-    model_config = {
-        "validate_assignment": True
-    }
+    model_config = {"validate_assignment": True}
+
 
 class ScanResultDTO(CardValidation):
-    scan_id: int = Field(..., gt=0) 
+    scan_id: int = Field(..., gt=0)
     name: str = Field(..., min_length=1)
     site_id: int = Field(..., gt=0)
     set_name: str
@@ -46,34 +46,36 @@ class ScanResultDTO(CardValidation):
     def from_scan_result(cls, scan_result):
         """Convert a ScanResult model instance to DTO with validation"""
         try:
-            scan_id = getattr(scan_result, 'scan_id', None) or getattr(scan_result, 'id', None)
+            scan_id = getattr(scan_result, "scan_id", None) or getattr(scan_result, "id", None)
             if not scan_id:
                 raise ValueError("scan_id is required and must be > 0")
-                
-            raw_quality = getattr(scan_result, 'quality', CardQuality.NM)
+
+            raw_quality = getattr(scan_result, "quality", CardQuality.NM)
             try:
                 normalized_quality = CardQuality.validate_and_normalize(raw_quality)
             except ValueError as e:
                 logger.warning(f"Quality validation failed for scan_id {scan_id}: {e}")
                 normalized_quality = "DMG"  # Default to most conservative quality
-            
+
             if normalized_quality not in [q.value for q in CardQuality]:
-                raise ValueError(f"Invalid quality '{raw_quality}' normalized to '{normalized_quality}'. Must be one of: {', '.join([q.value for q in CardQuality])}")
+                raise ValueError(
+                    f"Invalid quality '{raw_quality}' normalized to '{normalized_quality}'. Must be one of: {', '.join([q.value for q in CardQuality])}"
+                )
 
             data = {
-                'scan_id': scan_id,
-                'name': getattr(scan_result, 'name', ''),
-                'site_id': getattr(scan_result, 'site_id', 0),
-                'price': float(getattr(scan_result, 'price', 0)),
-                'set_name': getattr(scan_result, 'set_name', ''),
-                'version': getattr(scan_result, 'version', 'Standard'),
-                'foil': getattr(scan_result, 'foil', False),
-                'quality': normalized_quality,
-                'language': getattr(scan_result, 'language', CardLanguage.ENGLISH),
-                'quantity': getattr(scan_result, 'quantity', 0),
-                'updated_at': getattr(scan_result, 'updated_at', None)
+                "scan_id": scan_id,
+                "name": getattr(scan_result, "name", ""),
+                "site_id": getattr(scan_result, "site_id", 0),
+                "price": float(getattr(scan_result, "price", 0)),
+                "set_name": getattr(scan_result, "set_name", ""),
+                "version": getattr(scan_result, "version", "Standard"),
+                "foil": getattr(scan_result, "foil", False),
+                "quality": normalized_quality,
+                "language": getattr(scan_result, "language", CardLanguage.ENGLISH),
+                "quantity": getattr(scan_result, "quantity", 0),
+                "updated_at": getattr(scan_result, "updated_at", None),
             }
-            
+
             return cls(**data)
         except Exception as e:
             raise ValueError(f"Invalid scan result data: {str(e)}")
@@ -85,6 +87,7 @@ class ScanResultDTO(CardValidation):
     def to_dict(self):
         """Alias for model_dump to maintain compatibility"""
         return self.model_dump()
+
 
 class CardInSolution(BaseModel):
     name: str
@@ -102,6 +105,7 @@ class CardInSolution(BaseModel):
     class Config:
         from_attributes = True
 
+
 class StoreInSolution(BaseModel):
     site_id: Optional[int]
     site_name: str
@@ -109,6 +113,7 @@ class StoreInSolution(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class OptimizationSolution(BaseModel):
     total_price: float
@@ -124,25 +129,27 @@ class OptimizationSolution(BaseModel):
     class Config:
         from_attributes = True
 
+
 class OptimizationConfigDTO(BaseModel):
-    strategy: str = Field(..., pattern='^(milp|nsga-ii|hybrid)$')
+    strategy: str = Field(..., pattern="^(milp|nsga-ii|hybrid)$")
     min_store: int = Field(..., gt=0)
     find_min_store: bool
 
-    @field_validator('strategy')
+    @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v: str) -> str:
-        valid_strategies = ['milp', 'nsga-ii', 'hybrid']
+        valid_strategies = ["milp", "nsga-ii", "hybrid"]
         if v not in valid_strategies:
-            raise ValueError(f'Strategy must be one of {valid_strategies}')
+            raise ValueError(f"Strategy must be one of {valid_strategies}")
         return v
 
-    @field_validator('min_store')
+    @field_validator("min_store")
     @classmethod
     def validate_min_store(cls, v: int) -> int:
         if v > 20:  # Business logic example
-            raise ValueError('Cannot optimize for more than 20 stores')
+            raise ValueError("Cannot optimize for more than 20 stores")
         return v
+
 
 class OptimizationResultDTO(BaseModel):
     status: str
@@ -151,17 +158,13 @@ class OptimizationResultDTO(BaseModel):
     cards_scraped: int
     solutions: List[OptimizationSolution]
     errors: Dict[str, List[str]] = Field(
-        default_factory=lambda: {
-            'unreachable_stores': [],
-            'unknown_languages': [],
-            'unknown_qualities': []
-        }
+        default_factory=lambda: {"unreachable_stores": [], "unknown_languages": [], "unknown_qualities": []}
     )
     progress: int = Field(default=100, ge=0, le=100)
 
-    @field_validator('status')
+    @field_validator("status")
     def validate_status(cls, v):
-        valid_statuses = ['Completed', 'Failed', 'Processing']
+        valid_statuses = ["Completed", "Failed", "Processing"]
         if v not in valid_statuses:
-            raise ValueError(f'Status must be one of {valid_statuses}')
+            raise ValueError(f"Status must be one of {valid_statuses}")
         return v

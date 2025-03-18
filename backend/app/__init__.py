@@ -1,57 +1,13 @@
 """Backend init Module."""
 
 import logging
-from logging.handlers import RotatingFileHandler
 
+from config import get_config
 from flask import Flask, jsonify
 from flask_jwt_extended import JWTManager
 
-from config import get_config
-
 from .extensions import init_extensions
-from .tasks.celery_app import celery_app
-
-
-# Color codes
-RESET = "\033[0m"
-RED = "\033[31m"
-YELLOW = "\033[33m"
-WHITE = "\033[37m"
-BLUE = "\033[34m"
-
-
-# Formatter for logs with color
-class ColoredFormatter(logging.Formatter):
-    LEVEL_COLORS = {
-        'DEBUG': BLUE,
-        'INFO': WHITE,
-        'WARNING': YELLOW,
-        'ERROR': RED,
-        'CRITICAL': RED,
-    }
-
-    def format(self, record):
-        color = self.LEVEL_COLORS.get(record.levelname, WHITE)
-        levelname = f"{color}{record.levelname}{RESET}"
-        record.levelname = levelname  # Overwrite the levelname with colored version
-        return super().format(record)
-
-
-def setup_logging(app):
-    """Configure logging to prevent duplication"""
-    # Remove any existing handlers to prevent duplication
-    app.logger.handlers.clear()
-    
-    # Configure handler
-    handler = logging.StreamHandler()
-    handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(message)s'))
-    app.logger.addHandler(handler)
-    app.logger.setLevel(logging.INFO)
-    
-    # Prevent propagation to root logger
-    app.logger.propagate = False
-    
-    return app.logger
+from .logging_config import setup_logging
 
 
 def create_app(config_class=get_config()):
@@ -65,14 +21,17 @@ def create_app(config_class=get_config()):
     app.config.from_object(config_class)
 
     init_extensions(app)
-    
+
     jwt = JWTManager(app)
+
     @jwt.expired_token_loader
     def expired_token_callback(jwt_header, expired_token):
-        return jsonify({
-            "msg": "Token has expired",
-            "token_type": expired_token['type']
-        }), 401
+        return (
+            jsonify({"msg": "Token has expired", "token_type": expired_token["type"]}),
+            401,
+        )
+
+    from app.tasks.celery_instance import celery_app
 
     celery_app.conf.update(app.config)
 
@@ -80,11 +39,19 @@ def create_app(config_class=get_config()):
         from app.api.admin_routes import admin_routes
         from app.api.card_routes import card_routes
 
-        app.register_blueprint(admin_routes, url_prefix='/api/v1')
-        app.register_blueprint(card_routes, url_prefix='/api/v1')
+        app.register_blueprint(admin_routes, url_prefix="/api/v1")
+        app.register_blueprint(card_routes, url_prefix="/api/v1")
 
     # Setup logging with duplicate prevention
-    logger = setup_logging(app)
-    logger.info("MTG Optimizer startup")
+    # Get the app logger
+    app_logger = logging.getLogger("app")
+    if not app_logger.handlers:
+        console_handler, file_handler = setup_logging("logs/flask_app.log")
+        app_logger.addHandler(console_handler)
+        app_logger.addHandler(file_handler)
+        app_logger.setLevel(logging.INFO)
+        app_logger.propagate = False
+
+    app_logger.info("MTG Optimizer startup")
 
     return app

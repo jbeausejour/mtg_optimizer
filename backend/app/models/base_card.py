@@ -1,15 +1,17 @@
+import re
 from datetime import datetime
 from venv import logger
 
+from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion
 from app.extensions import db
 from sqlalchemy.orm import validates
-from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion
-import re
+
 
 class BaseCard(db.Model):
     """Abstract base class for card-related models"""
+
     __abstract__ = True  # This ensures BaseCard won't create its own table
-    
+
     name = db.Column(db.String(255), nullable=False)  # This already defines the name column
     set_name = db.Column(db.String(255), nullable=True)
     set_code = db.Column(db.String(10), nullable=True)
@@ -19,14 +21,14 @@ class BaseCard(db.Model):
     quantity = db.Column(db.Integer, nullable=True, default=0)
     quality = db.Column(db.String(50), nullable=True, default="NM")  # Add quality column
 
-    @validates('name')
+    @validates("name")
     def validate_name(self, key, name):
         """Ensure name is provided and not empty"""
         if not name or not name.strip():
             raise ValueError("Card name is required")
         return name.strip()
 
-    @validates('language')
+    @validates("language")
     def validate_language(self, key, value):
         """Validate card language"""
         normalized = CardLanguage.normalize(value)
@@ -36,15 +38,15 @@ class BaseCard(db.Model):
             raise ValueError(f"Invalid language. Must be one of: {', '.join(valid_languages)}")
         return normalized
 
-    @validates('set_code')
+    @validates("set_code")
     def validate_set_code(self, key, set_code):
         """Ensure set_code follows MTG standard format"""
-        if set_code and not re.match(r'^[a-zA-Z0-9]{3,5}$', set_code):
+        if set_code and not re.match(r"^[a-zA-Z0-9]{3,5}$", set_code):
             logger.error(f"Invalid set code format: {set_code}")
-            raise ValueError("Invalid set code format")
+            raise ValueError(f"Invalid set code format: {set_code}")
         return set_code.upper() if set_code else None
-    
-    @validates('quality')
+
+    @validates("quality")
     def validate_quality(self, key, quality):
         """Validate card quality"""
         try:
@@ -53,18 +55,18 @@ class BaseCard(db.Model):
             valid_qualities = ", ".join(q.value for q in CardQuality)
             raise ValueError(f"Invalid quality. Must be one of: {valid_qualities}")
 
-    @validates('version')
+    @validates("version")
     def validate_version(self, key, version):
         """Validate card version"""
         if not version:
             return CardVersion.STANDARD.value
-            
+
         if version not in {v.value for v in CardVersion}:
             valid_versions = ", ".join(v.value for v in CardVersion)
             raise ValueError(f"Invalid version. Must be one of: {valid_versions}")
         return version
 
-    @validates('quantity')
+    @validates("quantity")
     def validate_quantity(self, key, quantity):
         """Validate quantity is non-negative"""
         if quantity is not None and int(quantity) < 0:
@@ -81,5 +83,5 @@ class BaseCard(db.Model):
             "version": self.version,
             "foil": self.foil,
             "quantity": self.quantity,
-            "quality": self.quality
+            "quality": self.quality,
         }

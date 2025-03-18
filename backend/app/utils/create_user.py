@@ -1,7 +1,6 @@
-from werkzeug.security import generate_password_hash
-
 from app.extensions import db
 from app.models.user import User
+from werkzeug.security import generate_password_hash
 
 
 def create_user():
@@ -19,4 +18,3 @@ def create_user():
     db.session.commit()
 
     print(f"User '{username}' created successfully.")
-    

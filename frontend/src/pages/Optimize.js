@@ -32,6 +32,7 @@ const Optimize = ({ userId }) => {
   const [selectedSiteCount, setSelectedSiteCount] = useState(0); 
   const [buylists, setBuylists] = useState([]); 
   const [selectedBuylist, setSelectedBuylist] = useState(null); 
+  const [minAge, setMinAge] = useState(1800);  // default 30 minutes
 
   useEffect(() => {
     fetchSites();
@@ -102,6 +103,7 @@ const Optimize = ({ userId }) => {
         strategy: optimizationStrategy,
         min_store: minStore,
         find_min_store: findMinStore,
+        min_age_seconds: minAge,  
         card_list: cards.map(card => ({
           name: card.name,
           quantity: card.quantity,
@@ -304,6 +306,17 @@ const Optimize = ({ userId }) => {
               onChange={setFindMinStore}
               checkedChildren="Find Min Store"
               unCheckedChildren="Don't Find Min Store"
+            />
+          </Tooltip>
+          <Tooltip title="Specify how old the cached data can be (in seconds) before it’s considered stale.">
+            <InputNumber
+              min={60}
+              step={60}
+              value={minAge}
+              onChange={setMinAge}
+              addonAfter="sec"
+              addonBefore="Refresh if data is older than"
+              placeholder="1800"
             />
           </Tooltip>
         </Col>

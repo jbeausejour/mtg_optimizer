@@ -46,9 +46,7 @@ def search_cardconduit(cardname):
         time.sleep(random.uniform(2, 4))  # Random delay
 
         # Wait for the content to load
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "pre"))
-        )
+        WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, "pre")))
 
         # Extract the JSON data
         json_element = driver.find_element(By.CSS_SELECTOR, "pre")

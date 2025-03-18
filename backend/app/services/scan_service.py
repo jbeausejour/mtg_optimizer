@@ -1,16 +1,18 @@
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from sqlalchemy import and_, func
-from sqlalchemy.exc import SQLAlchemyError
+
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
 from app.services.site_service import SiteService
-import logging
+from sqlalchemy import and_, func
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
+
 class ScanService:
-    
+
     @staticmethod
     @contextmanager
     def transaction_context():
@@ -41,8 +43,8 @@ class ScanService:
             scan = Scan()
             db.session.add(scan)
             db.session.flush()  # Get the ID without committing
-            scan_id = scan.id   # Store the ID
-            db.session.commit() # Now commit
+            scan_id = scan.id  # Store the ID
+            db.session.commit()  # Now commit
             return scan_id  # Return just the ID instead of the scan object
         except Exception as e:
             logger.error(f"Error creating scan: {str(e)}")
@@ -53,29 +55,28 @@ class ScanService:
     def get_scan_by_id(scan_id):
         """Get a scan by ID, ensuring it's attached to the current session"""
         return db.session.get(Scan, scan_id)
-    
+
     @staticmethod
     def get_scan_by_id_and_sites(scan_id, site_ids):
         """Get a scan by ID, ensuring it's attached to the current session"""
-        results = db.session.query(ScanResult).filter(
-                ScanResult.scan_id == scan_id).filter(
-                ScanResult.site_id.in_(site_ids)).all()
+        results = (
+            db.session.query(ScanResult)
+            .filter(ScanResult.scan_id == scan_id)
+            .filter(ScanResult.site_id.in_(site_ids))
+            .all()
+        )
         return results
 
     @staticmethod
     def get_latest_filtered_scan_results(card_name: str):
         """Get latest scan result for a specific card name"""
         try:
-            result = ScanResult.query.filter_by(
-                name=card_name
-            ).order_by(
-                ScanResult.updated_at.desc()
-            ).first()
+            result = ScanResult.query.filter_by(name=card_name).order_by(ScanResult.updated_at.desc()).first()
             return result
         except Exception as e:
             logger.error(f"Error getting latest filtered scan results for {card_name}: {str(e)}")
             return None
-            
+
     def get_fresh_scan_results(fresh_cards, site_ids):
         """
         Get latest scan results for multiple cards.
@@ -85,16 +86,9 @@ class ScanService:
             # Subquery to get latest scan for each card
             latest_scans = (
                 db.session.query(
-                    ScanResult.name,
-                    ScanResult.site_id,
-                    func.max(ScanResult.updated_at).label('max_updated_at')
+                    ScanResult.name, ScanResult.site_id, func.max(ScanResult.updated_at).label("max_updated_at")
                 )
-                .filter(
-                    and_(
-                        ScanResult.name.in_(fresh_cards),
-                        ScanResult.site_id.in_(site_ids)
-                    )
-                )
+                .filter(and_(ScanResult.name.in_(fresh_cards), ScanResult.site_id.in_(site_ids)))
                 .group_by(ScanResult.name, ScanResult.site_id)
                 .subquery()
             )
@@ -107,8 +101,8 @@ class ScanService:
                     and_(
                         ScanResult.name == latest_scans.c.name,
                         ScanResult.site_id == latest_scans.c.site_id,
-                        ScanResult.updated_at == latest_scans.c.max_updated_at
-                    )
+                        ScanResult.updated_at == latest_scans.c.max_updated_at,
+                    ),
                 )
                 .all()
             )
@@ -118,7 +112,7 @@ class ScanService:
         except Exception as e:
             logger.error(f"Error getting latest scan results: {str(e)}")
             return []
-        
+
     @staticmethod
     def save_scan_result(scan_id, result):
         """Save a single scan result"""
@@ -140,7 +134,7 @@ class ScanService:
                 quality=result.get("quality"),
                 language=result.get("language", "English"),
                 quantity=result.get("quantity", 0),
-                updated_at=ScanService._get_current_time()
+                updated_at=ScanService._get_current_time(),
             )
             db.session.add(scan_result)
             return scan_result
@@ -152,27 +146,26 @@ class ScanService:
             return None, None
 
         # Use SiteService to get site names
-        results = db.session.query(
-            ScanResult.name,
-            ScanResult.price,
-            ScanResult.site_id,
-            ScanResult.set_name,
-            ScanResult.quality,
-            ScanResult.foil,
-            ScanResult.language,
-            ScanResult.quantity
-        ).filter(
-            ScanResult.scan_id == latest_scan.id
-        ).all()
+        results = (
+            db.session.query(
+                ScanResult.name,
+                ScanResult.price,
+                ScanResult.site_id,
+                ScanResult.set_name,
+                ScanResult.quality,
+                ScanResult.foil,
+                ScanResult.language,
+                ScanResult.quantity,
+            )
+            .filter(ScanResult.scan_id == latest_scan.id)
+            .all()
+        )
 
         # Convert results to include site names
         if results:
             sites = SiteService.get_sites_by_ids([r.site_id for r in results])
             site_map = {site.id: site.name for site in sites}
-            results_with_sites = [
-                (*r[:-1], site_map.get(r.site_id, 'Unknown Site'))
-                for r in results
-            ]
+            results_with_sites = [(*r[:-1], site_map.get(r.site_id, "Unknown Site")) for r in results]
             return latest_scan, results_with_sites
 
         return latest_scan, []

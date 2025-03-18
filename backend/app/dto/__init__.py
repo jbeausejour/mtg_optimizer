@@ -1,13 +1,3 @@
-from .optimization_dto import (
-    OptimizationResultDTO,
-    CardInSolution,
-    StoreInSolution,
-    OptimizationSolution
-)
+from .optimization_dto import CardInSolution, OptimizationResultDTO, OptimizationSolution, StoreInSolution
 
-__all__ = [
-    'OptimizationResultDTO',
-    'CardInSolution',
-    'StoreInSolution',
-    'OptimizationSolution'
-]
+__all__ = ["OptimizationResultDTO", "CardInSolution", "StoreInSolution", "OptimizationSolution"]

@@ -1,17 +1,16 @@
 import logging
-from flask import Flask
+
 from app import create_app
-from app.tasks.celery_app import celery_app
+from app.logging_config import setup_logging
+from app.tasks.celery_instance import celery_app
 
-# Configure basic console logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(message)s',
-    force=True
-)
-
-# logger = logging.getLogger('celery_worker_logger')
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("celery_worker")
+if not logger.handlers:
+    console_handler, file_handler = setup_logging("logs/celery_worker.log")
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 # Create Flask app and push context
 app = create_app()
@@ -22,6 +21,5 @@ logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
 logger.info(f"Celery result backend: {celery_app.conf.result_backend}")
 
 if __name__ == "__main__":
-    with app.app_context():
-        print("Starting Celery worker...")
-        celery_app.worker_main(["worker", "--loglevel=info", "--pool=solo"])
+    print("Starting Celery worker...")
+    celery_app.start(["worker", "--loglevel=info", "--pool=solo"])
