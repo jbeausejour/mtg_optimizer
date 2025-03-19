@@ -339,8 +339,12 @@ class PurchaseOptimizer:
                 summary.append("No cards in solution")
 
             # Add store distribution if available
+            summary.append("")
+            summary.append("Store Distribution")
+            summary.append("-" * 30)
             if isinstance(best_solution, dict) and "list_stores" in best_solution:
-                summary.extend(["", "Store Distribution:", "-" * 30, best_solution["list_stores"]])
+                for store in best_solution["list_stores"].split(", "):
+                    summary.append(store)
 
             return "\n".join(summary)
 
@@ -985,17 +989,17 @@ class PurchaseOptimizer:
 
                         results.append(
                             {
-                                "name": card,
                                 "site_name": store,
-                                "price": actual_price,
-                                "quality": card_data["quality"],
-                                "quantity": int(quantity),
+                                "site_id": card_data.get("site_id"),
+                                "name": card,
                                 "set_name": card_data["set_name"],
                                 "set_code": card_data["set_code"],
+                                "language": card_data.get("language", "English"),
                                 "version": card_data.get("version", "Standard"),
                                 "foil": bool(card_data.get("foil", False)),
-                                "language": card_data.get("language", "English"),
-                                "site_id": card_data.get("site_id"),
+                                "quality": card_data["quality"],
+                                "quantity": int(quantity),
+                                "price": actual_price,
                             }
                         )
 

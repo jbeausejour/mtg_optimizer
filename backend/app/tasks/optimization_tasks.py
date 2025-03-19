@@ -107,12 +107,12 @@ class OptimizationTaskManager:
                             "name": r.name,
                             "set_name": r.set_name,
                             "set_code": r.set_code,
-                            "price": round(float(r.price), 2),
+                            "language": r.language,
                             "version": getattr(r, "version", "Standard"),
                             "foil": bool(getattr(r, "foil", False)),
                             "quality": r.quality,
-                            "language": r.language,
                             "quantity": int(r.quantity),
+                            "price": round(float(r.price), 2),
                         }
                         for r in fresh_query_results
                     ]
@@ -143,11 +143,11 @@ class OptimizationTaskManager:
                         result["name"],
                         result["set_name"],
                         result["set_code"],
-                        result["price"],
+                        result["language"],
                         result["version"],
                         result["foil"],
                         result["quality"],
-                        result["language"],
+                        result["price"],
                     )
                     if combo_key not in processed_combinations:
                         processed_combinations.add(combo_key)
@@ -200,27 +200,17 @@ class OptimizationTaskManager:
             logger.exception(f"Error in handle_scraping: {str(e)}")
             raise  # Let the outer transaction handle rollback
 
-    def prepare_optimization_data(self, scraping_results=None):
+    def prepare_optimization_data(self, scraping_results):
         """Prepare optimization data from scraping results or database"""
         try:
             card_listings = []
 
-            if scraping_results:
+            start_time = time.time()  # Start timing
+            logger.info(f"Processing {len(scraping_results)} scraping results")
+            card_listings = self._process_scraping_results(scraping_results)
+            elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
 
-                start_time = time.time()  # Start timing
-                logger.info(f"Processing {len(scraping_results)} scraping results")
-                card_listings = self._process_scraping_results(scraping_results)
-                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
-
-                logger.info(f"Processed {len(card_listings)} card listings results in {elapsed_time} seconds")
-            else:
-                scan_id = self._get_scan_id()
-                if scan_id:
-                    logger.info(f"Using scan_id {scan_id} for optimization data")
-                    results = self._fetch_scan_results(scan_id)
-                    logger.info(f"Fetched {len(results)} scan results")
-                    card_listings = self._process_scraping_results(results)
-                    logger.info(f"Processed {len(card_listings)} card listings results")
+            logger.info(f"Processed {len(card_listings)} card listings results in {elapsed_time} seconds")
 
             if not card_listings:
                 logger.error("No card listings created")
@@ -249,27 +239,33 @@ class OptimizationTaskManager:
         card_listings = []
         for r in scraping_results:
             site_info = self.site_data.get(r["site_id"])
-            if site_info:
-                # Get set code from the set name using CardService
-                if not r["set_code"] or r["set_code"] == "Unknown" or r["set_code"] == "":
-                    set_code = CardService.get_clean_set_code(r["set_name"])
+            if not site_info:
+                logger.warning(f"[SITE INFO] No site info found for site_id: {r['site_id']}, skipping result.")
+                continue
 
-                card_listings.append(
-                    {
-                        "name": r["name"],
-                        "site_name": site_info["name"],
-                        "price": round(float(r["price"]), 2),
-                        "quality": r["quality"],
-                        "quantity": int(r["quantity"]),
-                        "set_name": r["set_name"],
-                        "set_code": set_code,  # Use the retrieved set code
-                        "version": r.get("version", "Standard"),
-                        "foil": bool(r.get("foil", False)),
-                        "language": r.get("language", "English"),
-                        "site_id": r["site_id"],
-                        "weighted_price": round(float(r["price"]), 2),
-                    }
+            # Directly trust set_code here:
+            if not r["set_code"] or r["set_code"] == "unknown":
+                logger.warning(
+                    f"[SET CODE] Unknown set code for '{r['set_name']}' at final processing stage, skipping."
                 )
+                continue
+
+            card_listings.append(
+                {
+                    "site_name": site_info["name"],
+                    "name": r["name"],
+                    "set_name": r["set_name"],
+                    "set_code": r["set_code"],
+                    "price": round(float(r["price"]), 2),
+                    "quality": r["quality"],
+                    "quantity": int(r["quantity"]),
+                    "version": r.get("version", "Standard"),
+                    "foil": bool(r.get("foil", False)),
+                    "language": r.get("language", "English"),
+                    "site_id": r["site_id"],
+                    # "weighted_price": round(float(r["price"]), 2),
+                }
+            )
         return card_listings
 
     def _get_scan_id(self):
@@ -517,9 +513,9 @@ def start_scraping_task(
 
             logger.info("Optimization Result received:")
             logger.info(
-                f"Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}"
+                f"-- Best Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}"
             )
-            logger.info(f"Iterations count: {len(iterations)}")
+            logger.info(f"-- Iterations count: {len(iterations)}")
 
             update_progress("Optimization completed successfully", 100)
 
@@ -554,7 +550,7 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
     best_solution = optimization_result.get("best_solution", {})
     iterations = optimization_result.get("iterations", [])
 
-    logger.info(f"handle_success: processing solution with {len(iterations) + 1} total solutions")
+    # logger.info(f"handle_success: processing solution with {len(iterations) + 1} total solutions")
 
     # Convert solutions to DTO format
     solutions = []

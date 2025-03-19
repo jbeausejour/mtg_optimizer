@@ -25,6 +25,33 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+# Statistic bucket structure to collect site results summary:
+class SiteScrapeStats:
+    def __init__(self):
+        self.site_stats = {}
+
+    def record_site(self, site_name, search_time, extract_time, total_time, found_cards, total_cards, total_variants):
+        self.site_stats[site_name] = {
+            "search_time": search_time,
+            "extract_time": extract_time,
+            "total_time": total_time,
+            "found_cards": found_cards,
+            "total_cards": total_cards,
+            "total_variants": total_variants,
+        }
+
+    def log_summary(self):
+        logger.info("\n======= Scraping Summary =======")
+        for site, stats in self.site_stats.items():
+            logger.info(
+                f"{site}: Found {stats['found_cards']} / {stats['total_cards']} cards (Total variants: {stats['total_variants']})"
+            )
+            logger.info(
+                f"   Search time: {stats['search_time']}s | Extract time: {stats['extract_time']}s | Total time: {stats['total_time']}s"
+            )
+        logger.info("================================\n")
+
+
 class ErrorCollector:
     _instance = None
     _lock = Lock()
@@ -120,6 +147,7 @@ class ExternalDataSynchronizer:
 
     async def scrape_multiple_sites(self, sites, card_names):
         """Enhanced scraping with proper Selenium integration"""
+        scrape_stats = SiteScrapeStats()
         try:
             start_time = time.time()  # Start timing
             results = []
@@ -146,7 +174,7 @@ class ExternalDataSynchronizer:
                 async def process_with_limit(site):
                     async with semaphore:
                         try:
-                            return await self.process_site(site, card_names)
+                            return await self.process_site(site, card_names, scrape_stats)
                         except Exception as e:
                             logger.error(f"Error processing {site.name}: {str(e)}", exc_info=True)
                             return None
@@ -173,6 +201,7 @@ class ExternalDataSynchronizer:
                 f"Completed scraping {len(sites)} sites with {len(results)} total results in {elapsed_time} seconds"
             )
 
+            scrape_stats.log_summary()
             return results
             # for site in sites:
             #     concurrency = self.network.method_limiter.get_concurrency(site.method)
@@ -210,7 +239,7 @@ class ExternalDataSynchronizer:
             logger.error(f"Fatal error in scrape_multiple_sites: {str(e)}", exc_info=True)
             raise
 
-    async def process_site(self, site, card_names):
+    async def process_site(self, site, card_names, scrape_stats: SiteScrapeStats):
         """Process a single site and return results without saving to DB"""
         start_time = time.time()  # Start timing
         elapsed_time_search = 0
@@ -313,10 +342,17 @@ class ExternalDataSynchronizer:
                 logger.info(
                     f"Successfully processed {found_cards} / {total_cards} (Total: {len(cards_df)}) for {site.name} [{site.method}]"
                 )
-                logger.info(f"Time taken for {site.name} [{site.method}] is:")
-                logger.info(f"   Search time {elapsed_time_search} seconds")
-                logger.info(f"   Extract time {elapsed_time_extract} seconds")
-                logger.info(f"   Total time {elapsed_time} seconds")
+
+                # Instead of logging right here, record into scrape_stats:
+                scrape_stats.record_site(
+                    site.name,
+                    elapsed_time_search,
+                    elapsed_time_extract,
+                    elapsed_time,
+                    found_cards,
+                    total_cards,
+                    len(cards_df),
+                )
 
                 # if found_cards < total_cards:
                 #     missing_cards = set(card_names) - set(cards_df['name'].unique())
@@ -324,22 +360,19 @@ class ExternalDataSynchronizer:
                 #     logger.warning(f"Missing cards {len(missing_cards)} for {site.name}")
 
                 # Convert DataFrame rows to results
-                results = []
-                for _, row in cards_df.iterrows():
-                    result = {
-                        "site_id": site.id,
-                        "name": row["name"],
-                        "set_name": row["set_name"],
-                        "set_code": row["set_code"],
-                        "price": float(row.get("price", 0.0)),
-                        "version": row.get("version", "Standard"),
-                        "foil": bool(row.get("foil", False)),
-                        "quality": row["quality"],
-                        "language": row["language"],
-                        "quantity": int(row.get("quantity", 0)),
-                    }
-                    results.append(result)
-
+                results = (
+                    cards_df.rename(columns={"clean_name": "name"})  # Only if necessary, ensure correct column mapping
+                    .assign(
+                        price=lambda df: df["price"].fillna(0.0).astype(float),
+                        quantity=lambda df: df["quantity"].fillna(0).astype(int),
+                        foil=lambda df: df["foil"].fillna(False).astype(bool),
+                        version=lambda df: df["version"].fillna("Standard"),
+                    )[["name", "set_name", "set_code", "quality", "language", "price", "quantity", "foil", "version"]]
+                    .to_dict(orient="records")
+                )
+                for r in results:
+                    r["site_id"] = site.id
+                    r["site_name"] = site.name
                 return results
             else:
                 logger.warning(f"No valid cards found for {site.name}")
@@ -363,91 +396,393 @@ class ExternalDataSynchronizer:
         """Extract card information with non-blocking execution"""
 
         # Run the CPU-intensive operations in a thread pool
+        # return await self.process_dataframe(
+        #     self._extract_info_crystal_sync_vectorized, soup, site, card_names, scrapping_method
+        # )
         return await self.process_dataframe(self._extract_info_crystal_sync, soup, site, card_names, scrapping_method)
 
-    def _extract_info_crystal_sync_vectorized(self, soup, site, card_names, scrapping_method):
-        forms = soup.find_all("form", {"class": "add-to-cart-form"})
-        bulk_data = [
-            {
-                "data-name": form.get("data-name"),
-                "data-price": form.get("data-price"),
-                "data-category": form.get("data-category"),
-                "data-variant": form.get("data-variant"),
-                "product": form.find_parent("li", {"class": "product"}),
-            }
-            for form in forms
-        ]
+    # def _extract_info_crystal_sync_vectorized(self, soup, site, card_names, scrapping_method):
+    #     forms = soup.find_all("form", {"class": "add-to-cart-form"})
 
-        df = pd.DataFrame(bulk_data)
-        df.dropna(
-            subset=[
-                "data-name",
-                "data-price",
-                "data-category",
-                "data-variant",
-                "product",
-            ],
-            inplace=True,
-        )
+    #     bulk_data = [
+    #         {
+    #             "data-name": form.get("data-name"),
+    #             "data-price": form.get("data-price"),
+    #             "data-category": form.get("data-category"),
+    #             "data-variant": form.get("data-variant"),
+    #             "product": form.find_parent("li", {"class": "product"}),
+    #             "product-link": form.find_previous("a", itemprop="url"),
+    #         }
+    #         for form in forms
+    #     ]
 
-        if df.empty:
-            return pd.DataFrame()
+    #     df = pd.DataFrame(bulk_data)
+    #     df.dropna(
+    #         subset=[
+    #             "data-name",
+    #             "data-price",
+    #             "data-category",
+    #             "data-variant",
+    #             "product",
+    #         ],
+    #         inplace=True,
+    #     )
 
-        # Vectorized checks and mappings
-        df["is_magic"] = df["product"].apply(self.is_magic_card)
-        df = df[df["is_magic"]]
-        if df.empty:
-            return pd.DataFrame()
+    #     if df.empty:
+    #         return pd.DataFrame()
 
-        df["parsed_name"] = df["data-name"].apply(parse_card_string)
-        df.dropna(subset=["parsed_name"], inplace=True)
+    #     # Filter Magic cards
+    #     df["is_magic"] = df["product"].apply(self.is_magic_card)
+    #     df = df[df["is_magic"]]
+    #     if df.empty:
+    #         return pd.DataFrame()
 
-        df["clean_name"] = df["parsed_name"].apply(lambda x: clean_card_name(x["Name"], card_names))
-        df.dropna(subset=["clean_name"], inplace=True)
+    #     # Parse card names
+    #     df["parsed_name"] = df["data-name"].apply(parse_card_string)
+    #     df.dropna(subset=["parsed_name"], inplace=True)
 
-        excluded_categories = set([...])  # use existing
-        df["exclude"] = df["data-category"].str.lower().apply(lambda cat: any(x in cat for x in excluded_categories))
-        df = df[~df["exclude"]]
-        if df.empty:
-            return pd.DataFrame()
+    #     df["clean_name"] = df["parsed_name"].apply(lambda x: clean_card_name(x["Name"], card_names))
+    #     df.dropna(subset=["clean_name"], inplace=True)
 
-        category_mapping = {cat: CardService.get_closest_set_name(cat) for cat in df["data-category"].unique()}
-        df["set_name"] = df["data-category"].map(category_mapping)
-        df.dropna(subset=["set_name"], inplace=True)
+    #     excluded_categories = {
+    #         "playmats",
+    #         "booster packs",
+    #         "booster box",
+    #         "cb consignment",
+    #         "mtg booster boxes",
+    #         "art series",
+    #         "fat packs and bundles",
+    #         "mtg booster packs",
+    #         "magic commander deck",
+    #         "world championship deck singles",
+    #         "the crimson moon's fairy tale",
+    #         "rpg accessories",
+    #         "scan other",
+    #         "intro packs and planeswalker decks",
+    #         "wall scrolls",
+    #         "lots of keycards",
+    #         "board games",
+    #         "token colorless",
+    #         "books",
+    #         "pbook",
+    #         "dice",
+    #         "pathfinder",
+    #         "oversized cards",
+    #         "promos: miscellaneous",
+    #         "brawl",
+    #     }
 
-        set_code_mapping = {sn: CardService.get_clean_set_code(sn) for sn in df["set_name"].unique()}
-        df["set_code"] = df["set_name"].map(set_code_mapping)
-        df.dropna(subset=["set_code"], inplace=True)
+    #     df["exclude"] = df["data-category"].str.lower().apply(lambda cat: any(x in cat for x in excluded_categories))
+    #     df = df[~df["exclude"]]
+    #     if df.empty:
+    #         return pd.DataFrame()
 
-        df[["quality", "language"]] = df["data-variant"].apply(self.extract_quality_language).tolist()
-        df["price"] = pd.to_numeric(df["data-price"], errors="coerce")
-        df["quantity"] = df["product"].apply(self.extract_quantity).fillna(1).astype(int)
-        df[["unclean_name", "version", "foil"]] = df["data-name"].apply(self.find_name_version_foil).tolist()
-        df["foil"] = df.apply(
-            lambda row: self.detect_foil(row["foil"], row["version"], row["data-variant"]),
-            axis=1,
-        )
-        df["version"] = df["version"].fillna("Standard").apply(CardVersion.normalize)
+    #     # Robust set name extraction with fallback
+    #     def extract_set_name_with_fallback(row):
+    #         category = row["data-category"]
+    #         set_name = CardService.get_closest_set_name(category)
+    #         if set_name and set_name.lower() != "unknown":
+    #             return set_name
 
-        final_df = (
-            df[
-                [
-                    "clean_name",
-                    "set_name",
-                    "set_code",
-                    "quality",
-                    "language",
-                    "price",
-                    "quantity",
-                    "foil",
-                    "version",
-                ]
-            ]
-            .rename(columns={"clean_name": "name"})
-            .drop_duplicates()
-        )
+    #         product_link = row["product-link"]
+    #         if product_link:
+    #             product_url = product_link.get("href", "")
+    #             fallback_set = CardService.extract_magic_set_from_href(product_url)
+    #             if fallback_set:
+    #                 logger.info(f"Fallback used for set '{category}' -> '{fallback_set}' using URL: {product_url}")
+    #                 return fallback_set
 
-        return final_df
+    #         logger.warning(
+    #             f"No valid fallback set found for '{category}' with URL: {product_url if product_link else 'None'}"
+    #         )
+    #         return None
+
+    #     df["set_name"] = df.apply(extract_set_name_with_fallback, axis=1)
+    #     df.dropna(subset=["set_name"], inplace=True)
+
+    #     # Map set codes
+    #     unique_set_names = df["set_name"].unique()
+    #     set_code_mapping = {sn: CardService.get_clean_set_code(sn) for sn in unique_set_names}
+    #     df["set_code"] = df["set_name"].map(set_code_mapping)
+
+    #     # Explicitly exclude unknown set codes
+    #     df = df[df["set_code"].str.lower() != "unknown"]
+    #     if df.empty:
+    #         return pd.DataFrame()
+
+    #     # Extract quality and language
+    #     df[["quality", "language"]] = df["data-variant"].apply(self.extract_quality_language).tolist()
+
+    #     # Numeric conversions
+    #     df["price"] = pd.to_numeric(df["data-price"].replace("[^\d.]", "", regex=True), errors="coerce")
+    #     df["quantity"] = df["product"].apply(self.extract_quantity).fillna(1).infer_objects(copy=False).astype(int)
+
+    #     # Parse name, version, foil status
+    #     df[["unclean_name", "version", "foil"]] = df["data-name"].apply(self.find_name_version_foil).tolist()
+    #     df["foil"] = df.apply(
+    #         lambda row: self.detect_foil(row["foil"], row["version"], row["data-variant"]),
+    #         axis=1,
+    #     )
+    #     df["version"] = df["version"].fillna("Standard").apply(CardVersion.normalize)
+
+    #     final_df = (
+    #         df[
+    #             [
+    #                 "clean_name",
+    #                 "set_name",
+    #                 "set_code",
+    #                 "quality",
+    #                 "language",
+    #                 "price",
+    #                 "quantity",
+    #                 "foil",
+    #                 "version",
+    #             ]
+    #         ]
+    #         .rename(columns={"clean_name": "name"})
+    #         .drop_duplicates()
+    #     )
+
+    #     # Ensure standard column names and types
+    #     standard_columns = {
+    #         "name": str,
+    #         "set_name": str,
+    #         "set_code": str,
+    #         "quality": str,
+    #         "language": str,
+    #         "price": float,
+    #         "quantity": int,
+    #         "foil": bool,
+    #         "version": str,
+    #     }
+
+    #     for col, dtype in standard_columns.items():
+    #         if col not in final_df.columns:
+    #             final_df[col] = dtype()
+    #         final_df[col] = final_df[col].astype(dtype)
+
+    #     return final_df.reset_index(drop=True)
+
+    # async def extract_info_crystal_scrapper(self, soup, site, card_names, scrapping_method):
+    #     """Extract card information with non-blocking execution"""
+
+    #     # Run the CPU-intensive operations in a thread pool
+    #     return await self.process_dataframe(
+    #         self._extract_info_crystal_scrapper_sync, soup, site, card_names, scrapping_method
+    #     )
+
+    # def _extract_info_crystal_scrapper_sync(self, soup, site, card_names, scrapping_method):
+    #     """
+    #     Extract card information using either form-based or scrapper scrapping_method.
+    #     """
+
+    #     excluded_categories = {
+    #         "playmats",
+    #         "booster packs",
+    #         "booster box",
+    #         "cb consignment",
+    #         "mtg booster boxes",
+    #         "art series",
+    #         "fat packs and bundles",
+    #         "mtg booster packs",
+    #         "magic commander deck",
+    #         "world championship deck singles",
+    #         "the crimson moon's fairy tale",
+    #         "rpg accessories",
+    #         "scan other",
+    #         "intro packs and planeswalker decks",
+    #         "wall scrolls",
+    #         "lots of keycards",
+    #         "board games",
+    #         "token colorless",
+    #         "scan other",
+    #         "books",
+    #         "pbook",
+    #         "dice",
+    #         "pathfinder",
+    #         "oversized cards",
+    #         "promos: miscellaneous",
+    #         "brawl",
+    #     }
+    #     promo_set_mappings = {
+    #         "CBL Bundle Promo": "Commander Legends: Battle for Baldur's Gate",
+    #         "Treasure Chest Promo": "ixalan promos",
+    #         "Bundle Promo": "Promo Pack",  # Generic bundle promos
+    #     }
+
+    #     if soup is None:
+    #         logger.warning(f"Soup is None for site {site.name}")
+    #         return pd.DataFrame()
+
+    #     cards = []
+    #     seen_variants = set()
+    #     # Original scrapper strategy with enhanced validation
+    #     content = soup.find(
+    #         "div",
+    #         {"class": ["content", "content clearfix", "content inner clearfix"]},
+    #     )
+    #     if content is None:
+    #         logger.error(f"Content div not found for site {site.name}")
+    #         return pd.DataFrame()
+
+    #     products_containers = content.find_all("div", {"class": "products-container browse"})
+    #     if not products_containers:
+    #         logger.warning(f"No variants container found for site {site.name}")
+    #         return pd.DataFrame()
+
+    #     for container in products_containers:
+    #         products = container.find_all("li", {"class": "product"})
+    #         for product in products:
+    #             if not self.is_magic_card(product):
+    #                 logger.debug(f"Skipping non-Magic card product")
+    #                 continue
+    #             variants_section = product.find("div", {"class": "variants"})
+    #             if not variants_section:
+    #                 continue
+
+    #             for variant in variants_section.find_all("div", {"class": "variant-row"}):
+    #                 if "no-stock" in variant.get("class", []):
+    #                     continue
+    #                 try:
+    #                     # Extract and validate quality and language
+    #                     variant_data = variant.find(
+    #                         "span",
+    #                         {"class": "variant-short-info variant-description"},
+    #                     ) or variant.find("span", {"class": "variant-short-info"})
+
+    #                     if not variant_data:
+    #                         continue
+
+    #                     # Get set name
+    #                     meta_div = product.find("div", {"class": "meta"})
+    #                     if not meta_div:
+    #                         logger.warning(f"Meta div not found for variant")
+    #                         continue
+
+    #                     # Get and validate name
+    #                     name_header = meta_div.find("h4", {"class": "name"}) if meta_div else None
+    #                     if not name_header:
+    #                         logger.warning(f"Name header not found for variant")
+    #                         continue
+
+    #                     parsed_card = parse_card_string(name_header.text)
+    #                     if not parsed_card:
+    #                         logger.warning(f"Failed to parse card name: {name_header.text}")
+    #                         continue
+
+    #                     clean_name = clean_card_name(parsed_card.get("Name", name_header.text), card_names)
+    #                     if not clean_name or (
+    #                         clean_name not in card_names and clean_name.split(" // ")[0].strip() not in card_names
+    #                     ):
+    #                         logger.debug(f"Invalid card name: {clean_name}")
+    #                         continue
+
+    #                     # Extract and validate quality and language
+    #                     quality_language = ExternalDataSynchronizer.normalize_variant_description(variant_data.text)
+    #                     # logger.info(f"after normalize_variant_description: {quality_language}")
+    #                     quality, language = self.extract_quality_language(quality_language)
+
+    #                     if not quality or not language:
+    #                         logger.warning(f"Quality or language not found for variant{quality_language}")
+    #                         continue
+
+    #                     # Extract and validate quantity
+    #                     quantity = self.extract_quantity(variant)
+    #                     if quantity is None or quantity <= 0:
+    #                         logger.warning(f"Invalid quantity for variant: {quantity}")
+    #                         continue
+
+    #                     # Extract and validate price
+    #                     price = self.extract_price(variant)
+    #                     if price is None or price <= 0:
+    #                         logger.warning(f"Invalid price for variant: {price}")
+    #                         continue
+
+    #                     set_elem = meta_div.find("span", {"class": "category"}) if meta_div else None
+    #                     if not set_elem:
+    #                         logger.warning(f"Set element not found for variant")
+    #                         continue
+
+    #                     if any(cat in set_elem.text.lower() for cat in excluded_categories):
+    #                         logger.warning(f"Excluded category found: {set_elem.text}")
+    #                         continue
+
+    #                     set_name = CardService.get_closest_set_name(set_elem.text.lower())
+    #                     if not set_name:
+    #                         logger.warning(f"Failed to get set name for variant: {set_elem.text}")
+    #                         continue
+    #                     set_code = CardService.get_clean_set_code(set_name)
+    #                     if not set_code:
+    #                         logger.warning(f"Failed to get set code for variant: {set_code}")
+    #                         continue
+
+    #                     # Determine foil status and version
+    #                     is_foil = parsed_card.get("Foil", False)
+    #                     version = CardVersion.normalize(parsed_card.get("Version", "Standard"))
+    #                     if not version:
+    #                         logger.warning(f"Failed to get version for variant: {parsed_card}")
+    #                         continue
+
+    #                     card_info = {
+    #                         "name": clean_name,
+    #                         "set_name": set_name,
+    #                         "set_code": set_code,
+    #                         "quality": quality,
+    #                         "language": language,
+    #                         "price": price,
+    #                         "quantity": quantity,
+    #                         "foil": is_foil,
+    #                         "version": version,
+    #                     }
+
+    #                     # Deduplicate variants
+    #                     variant_key = (
+    #                         card_info["name"],
+    #                         card_info["set_name"],
+    #                         card_info["set_code"],
+    #                         card_info["quality"],
+    #                         card_info["language"],
+    #                         card_info["foil"],
+    #                         card_info["version"],
+    #                     )
+    #                     if variant_key not in seen_variants:
+    #                         cards.append(card_info)
+    #                         seen_variants.add(variant_key)
+
+    #                 except Exception as e:
+    #                     logger.error(f"Error processing variant: {str(e)}", exc_info=True)
+    #                     continue
+
+    #     if not cards:
+    #         logger.warning(f"No valid cards found for {site.name}")
+    #         return pd.DataFrame()
+
+    #     try:
+    #         df = pd.DataFrame(cards)
+
+    #         # Ensure standard column names and data types
+    #         standard_columns = {
+    #             "name": str,
+    #             "set_name": str,
+    #             "price": float,
+    #             "version": str,
+    #             "foil": bool,
+    #             "quality": str,
+    #             "language": str,
+    #             "quantity": int,
+    #         }
+
+    #         # Add missing columns with default values and convert types
+    #         for col, dtype in standard_columns.items():
+    #             if col not in df.columns:
+    #                 df[col] = dtype()
+    #             df[col] = df[col].astype(dtype)
+
+    #         return df
+
+    #     except Exception as e:
+    #         logger.error(f"Error creating DataFrame for {site.name}: {str(e)}", exc_info=True)
+    #         return pd.DataFrame()
 
     def _extract_info_crystal_sync(self, soup, site, card_names, scrapping_method):
         """
@@ -478,7 +813,9 @@ class ExternalDataSynchronizer:
             "pbook",
             "dice",
             "pathfinder",
+            "oversized cards",
             "promos: miscellaneous",
+            "prerelease cards",
             "brawl",
         }
         promo_set_mappings = {
@@ -570,11 +907,11 @@ class ExternalDataSynchronizer:
                             if fallback_set:
                                 set_name = fallback_set
                                 logger.info(
-                                    f"Fallback used for set '{original_set_name}' -> '{set_name}' using URL: {product_url}"
+                                    f"[SET CODE] Fallback used for set '{original_set_name}' -> '{set_name}' using URL: {product_url}"
                                 )
                             else:
                                 logger.warning(
-                                    f"No valid fallback set found in URL for '{original_set_name}': {product_url}"
+                                    f"[SET CODE] No valid fallback set found in URL for '{original_set_name}': {product_url}"
                                 )
                                 continue  # Skip if still no valid set found
                         else:
@@ -582,10 +919,25 @@ class ExternalDataSynchronizer:
                             continue  # Skip if no URL found
 
                     # logger.info(f"after get_closest_set_name form: {set_name} ")
-                    set_code = CardService.get_clean_set_code(set_name)
-                    if not set_code or set_code.lower() == "unknown":
-                        logger.info(f"after get_clean_set_code: {set_code} for site: {site.name}\n {data}")
-                        continue
+                    set_code = CardService.get_clean_set_code_from_set_name(set_name)
+                    if not set_code:
+                        # Attempt fallback using parts of data-name
+                        name_parts = data.get("data-name", "").split(" - ")
+                        for part in reversed(name_parts):  # Start from the most specific suffix
+                            fallback_set_name = CardService.get_closest_set_name(part.strip())
+                            fallback_set_code = CardService.get_clean_set_code_from_set_name(fallback_set_name)
+                            if fallback_set_code:
+                                logger.info(
+                                    f"Fallback set code found from data-name part '{part}': {fallback_set_name} ({fallback_set_code})"
+                                )
+                                set_code = fallback_set_code
+                                set_name = fallback_set_name
+                                break
+                        if not set_code:
+                            logger.info(
+                                f"[SET CODE] Skipping card {name} unknown set: {set_code} for site: {site.name}\n {data}"
+                            )
+                            continue
                     if set_code.lower() == "pbook":
                         logger.info(
                             f"after pbook: {set_code} name:{set_name} for site: {site.name}\n data: {data}\n {data}"
@@ -615,12 +967,12 @@ class ExternalDataSynchronizer:
                         "name": name,
                         "set_name": set_name,
                         "set_code": set_code,
-                        "quality": quality,
-                        "language": language,
-                        "price": normalize_price(data["data-price"]),
-                        "quantity": quantity,
-                        "foil": is_foil,
                         "version": version,
+                        "language": language,
+                        "foil": is_foil,
+                        "quality": quality,
+                        "quantity": quantity,
+                        "price": normalize_price(data["data-price"]),
                     }
 
                     # Create variant key for deduplication
@@ -628,10 +980,11 @@ class ExternalDataSynchronizer:
                         card_info["name"],
                         card_info["set_name"],
                         card_info["set_code"],
-                        card_info["quality"],
+                        card_info["version"],
                         card_info["language"],
                         card_info["foil"],
-                        card_info["version"],
+                        card_info["quality"],
+                        card_info["price"],
                     )
 
                     if variant_key not in seen_variants:
@@ -738,10 +1091,25 @@ class ExternalDataSynchronizer:
                             if not set_name:
                                 logger.warning(f"Failed to get set name for variant: {set_elem.text}")
                                 continue
-                            set_code = CardService.get_clean_set_code(set_name)
+                            set_code = CardService.get_clean_set_code_from_set_name(set_name)
                             if not set_code:
-                                logger.warning(f"Failed to get set code for variant: {set_code}")
-                                continue
+                                # Attempt fallback using parts of data-name
+                                name_parts = name_header.split(" - ")
+                                for part in reversed(name_parts):  # Start from the most specific suffix
+                                    fallback_set_name = CardService.get_closest_set_name(part.strip())
+                                    fallback_set_code = CardService.get_clean_set_code_from_set_name(fallback_set_name)
+                                    if fallback_set_code:
+                                        logger.info(
+                                            f"Fallback set code found from data-name part '{part}': {fallback_set_name} ({fallback_set_code})"
+                                        )
+                                        set_code = fallback_set_code
+                                        set_name = fallback_set_name
+                                        break
+                                if not set_code:
+                                    logger.warning(
+                                        f"[SET CODE] Failed to get set code for variant set name: {set_name}"
+                                    )
+                                    continue
 
                             # Determine foil status and version
                             is_foil = parsed_card.get("Foil", False)
@@ -754,12 +1122,12 @@ class ExternalDataSynchronizer:
                                 "name": clean_name,
                                 "set_name": set_name,
                                 "set_code": set_code,
-                                "quality": quality,
                                 "language": language,
-                                "price": price,
-                                "quantity": quantity,
-                                "foil": is_foil,
                                 "version": version,
+                                "foil": is_foil,
+                                "quality": quality,
+                                "quantity": quantity,
+                                "price": price,
                             }
 
                             # Deduplicate variants
@@ -767,10 +1135,11 @@ class ExternalDataSynchronizer:
                                 card_info["name"],
                                 card_info["set_name"],
                                 card_info["set_code"],
-                                card_info["quality"],
                                 card_info["language"],
-                                card_info["foil"],
                                 card_info["version"],
+                                card_info["foil"],
+                                card_info["quality"],
+                                card_info["price"],
                             )
                             if variant_key not in seen_variants:
                                 cards.append(card_info)
@@ -785,27 +1154,32 @@ class ExternalDataSynchronizer:
             return pd.DataFrame()
 
         try:
-            df = pd.DataFrame(cards)
 
-            # Ensure standard column names and data types
-            standard_columns = {
-                "name": str,
-                "set_name": str,
-                "price": float,
-                "version": str,
-                "foil": bool,
-                "quality": str,
-                "language": str,
-                "quantity": int,
-            }
-
-            # Add missing columns with default values and convert types
-            for col, dtype in standard_columns.items():
-                if col not in df.columns:
-                    df[col] = dtype()
-                df[col] = df[col].astype(dtype)
-
+            df = self.standardize_card_dataframe(cards)
+            logger.info(f"[CRYSTAL] Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
             return df
+            # df = pd.DataFrame(cards)
+
+            # # Ensure standard column names and data types
+            # standard_columns = {
+            #     "name": str,
+            #     "set_name": str,
+            #     "set_code": str,
+            #     "price": float,
+            #     "version": str,
+            #     "foil": bool,
+            #     "quality": str,
+            #     "language": str,
+            #     "quantity": int,
+            # }
+
+            # # Add missing columns with default values and convert types
+            # for col, dtype in standard_columns.items():
+            #     if col not in df.columns:
+            #         df[col] = dtype()
+            #     df[col] = df[col].astype(dtype)
+
+            # return df
 
         except Exception as e:
             logger.error(f"Error creating DataFrame for {site.name}: {str(e)}", exc_info=True)
@@ -877,22 +1251,31 @@ class ExternalDataSynchronizer:
                             processed_cards.add(variant_key)
 
                             # Create card info dictionary
+                            quality = CardQuality.normalize(option_condition)
+                            set_name = doc.get("set", [""])[0]
+                            set_code = doc.get("set_code", [""])[0]
+                            if not set_code or set_code == "":
+                                test_code = CardService.get_clean_set_code_from_set_name(set_name)
+                                if not test_code:
+                                    logger.warning(
+                                        f"[SET CODE] Failed to get set code for set name: {set_name}, Skipping"
+                                    )
+                                    continue
+                                set_code = test_code
+                                logger.debug(
+                                    f"[HAWK] set_code was empty for {card_name} used set name to get it: {test_code}"
+                                )
                             card_info = {
                                 "name": card_name,
-                                "set_name": doc.get("set", [""])[0],
-                                "quality": option_condition,
+                                "set_name": set_name,
+                                "set_code": set_code,
                                 "language": "English",  # Default for F2F
-                                "quantity": inventory,
-                                "price": price,
                                 "version": "Standard",
                                 "foil": "Foil" in option_finish,
-                                "set_code": doc.get("set_code", [""])[0],
+                                "quality": quality,
+                                "quantity": inventory,
+                                "price": price,
                             }
-                            if card_info.get("set_code") == "":
-                                card_info["set_code"] = CardService.get_clean_set_code(card_info.get("set_name", ""))
-                                logger.debug(
-                                    f"[HAWK] set_code was empty for {card_info} using set_name: {card_info['set_code']}"
-                                )
                             cards.append(card_info)
 
                         except Exception as e:
@@ -906,36 +1289,21 @@ class ExternalDataSynchronizer:
                 logger.warning(f"No valid cards found in Hawk response for {site.name}")
                 return pd.DataFrame()
 
-            # Convert to DataFrame
-            df = pd.DataFrame(cards)
+            # # Convert to DataFrame
+            # df = pd.DataFrame(cards)
 
-            # Ensure standard column names and data types
-            standard_columns = {
-                "name": str,
-                "set_name": str,
-                "price": float,
-                "version": str,
-                "foil": bool,
-                "quality": str,
-                "language": str,
-                "quantity": int,
-                "set_code": str,
-            }
+            # # Normalize quality values
+            # df["quality"] = df["quality"].apply(CardQuality.normalize)
 
-            # Add missing columns with default values
-            for col, dtype in standard_columns.items():
-                if col not in df.columns:
-                    df[col] = dtype()
-                df[col] = df[col].astype(dtype)
+            # # Remove any remaining duplicates
+            # df = df.drop_duplicates(subset=["name", "set_name", "quality", "foil", "price"])
 
-            # Normalize quality values
-            df["quality"] = df["quality"].apply(CardQuality.normalize)
+            # logger.info(f"Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
 
-            # Remove any remaining duplicates
-            df = df.drop_duplicates(subset=["name", "set_name", "quality", "foil", "price"])
+            # return df
 
-            logger.info(f"Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
-
+            df = self.standardize_card_dataframe(cards)
+            logger.info(f"[HAWK] Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
             return df
 
         except Exception as e:
@@ -979,66 +1347,77 @@ class ExternalDataSynchronizer:
                         is_foil = "foil" in title
 
                         # Extract quality
-                        quality = "Near Mint"  # Default
+                        extracted_quality = "Near Mint"  # Default
                         if "near mint" in title or "nm" in title:
-                            quality = "Near Mint"
+                            extracted_quality = "Near Mint"
                         elif "lightly played" in title or "lp" in title:
-                            quality = "Lightly Played"
+                            extracted_quality = "Lightly Played"
                         elif "moderately played" in title or "mp" in title:
-                            quality = "Moderately Played"
+                            extracted_quality = "Moderately Played"
                         elif "heavily played" in title or "hp" in title:
-                            quality = "Heavily Played"
+                            extracted_quality = "Heavily Played"
                         elif "damaged" in title or "dmg" in title:
-                            quality = "Damaged"
+                            extracted_quality = "Damaged"
+                        # TODO quality = CardQuality.normalize(quality)
+                        quality = CardQuality.normalize(extracted_quality)
+
+                        set_code = product.get("setCode", "")
+                        if not set_code or set_code == "":
+                            test_code = CardService.get_clean_set_code_from_set_name(set_name)
+                            if not test_code:
+                                logger.warning(
+                                    f"[SET CODE] Skipping card {name} unknown set: {test_code} for site: {site.name}"
+                                )
+                                continue
+                            logger.debug(f"[SHOPIFY] set_code was empty for {name} setting to -> {test_code}")
+                            set_code = test_code
 
                         card_info = {
                             "name": name,
                             "set_name": set_name,
+                            "set_code": set_code,
+                            "language": "English",  # Default for Shopify stores
+                            "version": "Standard",
                             "foil": is_foil,
                             "quality": quality,
-                            "language": "English",  # Default for Shopify stores
                             "quantity": quantity,
                             "price": price,
-                            "version": "Standard",
-                            "collector_number": collector_number,
-                            "set_code": product.get("setCode", ""),
+                            # "collector_number": collector_number,
                         }
-                        if card_info.get("set_code") == "":
-                            logger.info(f"[SHOPIFY] set_code is empty for {card_info}")
-                            card_info["set_code"] = CardService.get_clean_set_code(card_info.get("set_name", ""))
-
                         cards.append(card_info)
 
             if not cards:
                 logger.warning(f"No valid cards found in Shopify response for {site.name}")
                 return pd.DataFrame()
 
-            df = pd.DataFrame(cards)
+            # df = pd.DataFrame(cards)
 
-            # Ensure standard column names and data types
-            standard_columns = {
-                "name": str,
-                "set_name": str,
-                "price": float,
-                "version": str,
-                "foil": bool,
-                "quality": str,
-                "language": str,
-                "quantity": int,
-            }
+            # # Ensure standard column names and data types
+            # standard_columns = {
+            #     "name": str,
+            #     "set_name": str,
+            #     "set_code": str,
+            #     "price": float,
+            #     "version": str,
+            #     "foil": bool,
+            #     "quality": str,
+            #     "language": str,
+            #     "quantity": int,
+            # }
 
-            # Add missing columns with default values
-            for col, dtype in standard_columns.items():
-                if col not in df.columns:
-                    df[col] = dtype()
-                df[col] = df[col].astype(dtype)
+            # # Add missing columns with default values
+            # for col, dtype in standard_columns.items():
+            #     if col not in df.columns:
+            #         df[col] = dtype()
+            #     df[col] = df[col].astype(dtype)
 
-            # Normalize quality and language values
-            df["quality"] = df["quality"].apply(CardQuality.normalize)
-            df["language"] = df["language"].apply(CardLanguage.normalize)
+            # # Normalize quality and language values
+            # df["quality"] = df["quality"].apply(CardQuality.normalize)
+            # df["language"] = df["language"].apply(CardLanguage.normalize)
 
+            df = self.standardize_card_dataframe(cards)
+            logger.info(f"[SHOPIFY] Processed {len(df)} unique variants for {len(df['name'].unique())} distinct cards")
             return df
-
         except Exception as e:
             logger.error(
                 f"Error processing Shopify JSON for {site.name}: {str(e)}",
@@ -1421,6 +1800,30 @@ class ExternalDataSynchronizer:
             logger.error(f"Error searching Shopify site {site.name}: {str(e)}", exc_info=True)
             return None
 
+    def standardize_card_dataframe(self, cards):
+        df = pd.DataFrame(cards)
+        # # Ensure standard column names and data types
+        standard_columns = {
+            "name": str,
+            "set_name": str,
+            "set_code": str,
+            "price": float,
+            "version": str,
+            "foil": bool,
+            "quality": str,
+            "language": str,
+            "quantity": int,
+        }
+
+        # Add missing columns with default values
+        for col, dtype in standard_columns.items():
+            if col not in df.columns:
+                df[col] = dtype()
+            df[col] = df[col].astype(dtype)
+
+        df = df.drop_duplicates(subset=["name", "set_name", "quality", "foil", "price"])
+        return df
+
     @staticmethod
     def parse_shopify_variant_title(title):
         """Parse title in format 'Card Name [Set Name] Quality [Foil]'"""
@@ -1569,7 +1972,7 @@ class ExternalDataSynchronizer:
                     # logger.info(f"Quantity text: {qty_text} -> {quantity}: {type(quantity)}")
 
                 if quantity <= 0:
-                    logger.info(f"Quantity {quantity} is negative...")
+                    logger.debug(f"Quantity {quantity} is negative...")
                     return None
                 return quantity
             except (ValueError, TypeError):

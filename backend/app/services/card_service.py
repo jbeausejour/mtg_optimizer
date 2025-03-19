@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-import traceback
+import functools
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -36,6 +36,30 @@ REDIS_CARDNAME_KEY = "scryfall_card_names"
 
 
 class CardService:
+
+    # Promo mappings for known catalog references or special sets
+    promo_mappings = {
+        "dmu extras": "Dominaria United",
+        "ikoria: extras": "Ikoria: Lair of Behemoths",
+        "znr extras": "zendikar rising",
+        "znr: extras": "Zendikar Rising",
+        "bro extras": "The Brothers' War",
+        "brothers' war extras": "The Brothers' War",
+        "brothers war extras": "The Brothers' War",
+        "mkm singles": "Murders at Karlov Manor",
+        "mkm": "Murders at Karlov Manor",
+        "afr extras": "Adventures in the Forgotten Realms",
+        "#045 - duel decks m14/m63/m64": "Duel Decks: Zendikar vs. Eldrazi",
+        "duel decks m14/m63/m64": "Duel Decks: Zendikar vs. Eldrazi",
+        "cbl bundle promo": "Commander Legends: Battle for Baldur's Gate",
+        "treasure chest promo": "Treasure Chest",
+        "promos: miscellaneous": "Judge Gift Cards",
+        "brawl deck exclusive": "Commander Collection",
+        "brawl": "Commander Collection",
+        "the list": "Mystery Booster: The List",
+        "set boosters reserved list": "Mystery Booster: The List",
+    }
+
     @contextmanager
     def transaction_context():
         """Context manager for database transactions"""
@@ -176,18 +200,18 @@ class CardService:
             logger.error(f"Error fetching Scryfall set codes: {str(e)}")
             return {}
 
-    @staticmethod
-    def is_valid_set_name(set_name):
-        """Check if a given set name exists in the cached Scryfall set list."""
-        redis_client = CardService.get_redis_client()
-        set_codes = redis_client.get(REDIS_SETS_KEY)
+    # @staticmethod
+    # def is_valid_set_name(set_name):
+    #     """Check if a given set name exists in the cached Scryfall set list."""
+    #     redis_client = CardService.get_redis_client()
+    #     set_codes = redis_client.get(REDIS_SETS_KEY)
 
-        if not set_codes:
-            set_codes = CardService.fetch_scryfall_set_codes()
-        else:
-            set_codes = json.loads(set_codes)
+    #     if not set_codes:
+    #         set_codes = CardService.fetch_scryfall_set_codes()
+    #     else:
+    #         set_codes = json.loads(set_codes)
 
-        return set_name.lower() in set_codes
+    #     return set_name.lower() in set_codes
 
     # Set Operations
     @staticmethod
@@ -216,244 +240,149 @@ class CardService:
         return []
 
     @classmethod
+    @functools.lru_cache(maxsize=1000)
     def _normalize_set_name(cls, name):
-        """Normalize set name with common variations"""
+        """Robustly normalize set name to ensure accurate matching."""
         if not name:
             return []
 
+        results = set()
+
         name_lower = name.lower().strip()
+        results.add(name_lower)
 
-        # Special handling for "Extras" suffix
-        extras_pattern = re.compile(r"^([^:]+)(?::|-)?\s*extras$")
-        extras_match = extras_pattern.match(name_lower)
-        if extras_match:
-            base_set = extras_match.group(1).strip()
-            # Get base set name if it exists
-            full_set_name = cls._find_full_set_name(base_set)
-            extras_variants = [
-                name_lower,  # Original form
-                base_set,  # Base set code
-                f"{base_set} extras",  # Space format
-                f"{base_set}: extras",  # Colon format
-                f"{base_set}:extras",  # No space format
-            ]
-            if full_set_name:
-                extras_variants.extend(
-                    [
-                        full_set_name,  # Full name
-                        f"{full_set_name} extras",  # Full name with extras
-                        f"{full_set_name}: extras",  # Full name with colon extras
-                    ]
-                )
-            return list(set(var for var in extras_variants if var))
-
-        # Special promo and product mappings
-        promo_mappings = {
-            "cbl bundle promo": "Commander Legends: Battle for Baldur's Gate",
-            "treasure chest promo": "Treasure Chest",
-            "ikoria: extras": "ikoria: lair of behemoths",
-            "znr: extras": "zendikar rising",
-            "afr extras": "adventures in the forgotten realms",
-            "promos: miscellaneous": "Judge Gift Cards",
-            "brawl deck exclusive": "Commander Collection",
-            "brawl": "Commander Collection",
-            "the list": "Mystery Booster: The List",
-            "#045 - Duel Decks M14/M63/M64": "Duel Decks: Zendikar vs. Eldrazi",
-            "set boosters reserved list": "Mystery Booster: The List",
-        }
-
-        # Handle catalog numbers first
-        catalog_match = re.match(r"#\d+\s*-\s*(.*)", name_lower)
-        if catalog_match:
-            cleaned_catalog = catalog_match.group(1).strip()
-            if cleaned_catalog in promo_mappings:
-                normalized = promo_mappings[cleaned_catalog]
-                return [name_lower, cleaned_catalog, normalized, normalized.lower()]
-
-        # Direct promo mapping check
-        if name_lower in promo_mappings:
-            normalized = promo_mappings[name_lower]
-            return [name_lower, normalized, normalized.lower()]
-
-        # Enhanced patterns for numbered editions and catalog numbers
         patterns_to_clean = [
-            (r"#\d+\s*-\s*", ""),  # Remove "#159 - " style prefixes
-            (r"\s*M\d+\s*$", ""),  # Remove "M58" style suffixes
-            (r"\(\d+\)\s*", ""),  # Remove "(16) " style prefixes
-            (r"\s+", " "),  # Normalize multiple spaces
+            (r"#\d+\s*-\s*", ""),
+            (r"\(\d+\)", ""),
+            (r"[/:,-]", " "),
+            (r"\s+m\d+\s*$", ""),
+            (r"\s+", " "),
         ]
 
-        # Apply cleanup patterns
         cleaned_name = name_lower
         for pattern, replacement in patterns_to_clean:
-            cleaned_name = re.sub(pattern, replacement, cleaned_name)
-        cleaned_name = cleaned_name.strip()
+            cleaned_name = re.sub(pattern, replacement, cleaned_name).strip()
+        results.add(cleaned_name)
 
-        # Add both original and cleaned versions to results
-        results = [name_lower, cleaned_name]
-
-        # Extra normalization patterns for numbered editions
-        edition_patterns = {
-            r"(\d+)(th|rd|nd|st) edition": lambda m: f"{m.group(1)}ed",
-            r"#\d+ - ": "",  # Remove catalog numbers
-            r"\(\d+\)": "",  # Remove parenthetical numbers
-        }
-
-        # Common set name mappings
-        set_mappings = {
-            # D&D Universe sets
-            "adventures in the forgotten realms": [
-                "afr",
-                "afr extras",
-                "afr: extras",
-                "afr:extras",
-                "forgotten realms",
-                "d&d",
-                "dungeons & dragons",
-            ],
-            # Zendikar sets
-            "zendikar rising": [
-                "znr",
-                "znr extras",
-                "znr: extras",
-                "znr:extras",
-                "zendikar",
-                "zendikar rising extras",
-            ],
-            # Other Modern Sets with Extras
-            "innistrad midnight hunt": [
-                "mid",
-                "mid extras",
-                "mid: extras",
-                "mid:extras",
-            ],
-            "innistrad crimson vow": ["vow", "vow extras", "vow: extras", "vow:extras"],
-            "kamigawa neon dynasty": ["neo", "neo extras", "neo: extras", "neo:extras"],
-            # Lord of the Rings sets
-            "tales of middle-earth": [
-                "ltr",
-                "lotr",
-                "lord of the rings",
-                "middle earth",
-            ],
-            # D&D Universe sets - separated by specific set
-            "commander legends: battle for baldurs gate": [
-                "clb",
-                "baldurs gate",
-                "baldur's gate",
-            ],
-            "commander legends": ["cmr"],  # Original Commander Legends
-            # Mystery Booster variants
-            "mystery booster": ["mb1"],
-            "mystery booster: the list": ["the list", "set boosters reserved list"],
-            # Promotional sets
-            "promotional": ["promo"],
-            "judge gift cards": ["j", "judge", "judge gift", "promos: miscellaneous"],
-            "pre-release promos": ["pr", "prerelease", "pre-release"],
-            # Special products
-            "commander collection": ["cc1", "cc2"],
-            "modern event deck": ["md1"],
-            # Expeditions/Special sets
-            "zendikar expeditions": ["exp", "zne"],
-            "masterpiece series": ["mps"],
-            # Universe Beyond
-            "universes beyond": ["ub"],
-            "warhammer 40,000": ["40k", "warhammer 40k"],
-            "doctor who": ["who", "dr who", "dr. who"],
-            # Standard sets
-            "kaldheim": ["khm"],
-            "origins": ["ori"],
-        }
-
-        # Additional prefixes to remove
         prefixes = [
-            "promo pack:",
-            "promo packs:",
-            "commander:",
-            "commander ",
-            "token:",
-            "tokens:",
-            "minigame:",
-            "minigames:",
-            "art series:",
-            "art cards:",
-            "promos:",
-            "promo:",
-            "extras:",
-            "extra:",
-            "box:",
-            "box set:",
-            "game day:",
-            "gameday:",
-            "prerelease:",
-            "pre-release:",
-            "release:",
-            "release event:",
-            "buy-a-box:",
-            "bundle:",
-            "media:",
-            "media insert:",
-            "universes beyond:",
-            "universe beyond:",
-            "singles:",
-            "singles",
-            "non-foil:",
-            "non-foil",
-            "foil:",
+            "promo pack",
+            "promotional",
+            "promo packs",
+            "commander",
+            "token",
+            "tokens",
+            "minigame",
+            "minigames",
+            "art series",
+            "art cards",
+            "promos",
+            "extras",
+            "extra",
+            "box set",
+            "game day",
+            "prerelease",
+            "release",
+            "buy a box",
+            "bundle",
+            "media insert",
+            "universes beyond",
+            "universe beyond",
+            "non foil",
             "foil",
-            "mps:",
-            "judge rewards:",
-            "unique & misc:",
-            "unique and misc:",
-            "modern event deck:",
-            "battle for zendikar:",
-            "extended art:",
-            "- extended art",
-            "commander: universe beyond:",
-            "commander: universes beyond:",
+            "mps",
+            "judge rewards",
+            "unique & misc",
+            "modern event deck",
+            "extended art",
+            "commander universes beyond",
         ]
+        prefix_found = True
+        while prefix_found:
+            prefix_found = False
+            for prefix in prefixes:
+                if cleaned_name.startswith(prefix):
+                    cleaned_name = cleaned_name[len(prefix) :].strip()
+                    prefix_found = True
+        results.add(cleaned_name)
 
-        # Apply edition pattern replacements
-        normalized = name_lower
-        for pattern, replacement in edition_patterns.items():
-            if callable(replacement):
-                normalized = re.sub(pattern, replacement, normalized)
-            else:
-                normalized = re.sub(pattern, replacement, normalized)
-        results.append(normalized)
+        simplified_variants = [
+            cleaned_name.replace(" ", ""),
+            cleaned_name.replace("'", ""),
+            cleaned_name.replace(":", ""),
+            cleaned_name.replace(",", ""),
+            cleaned_name.replace("-", ""),
+        ]
+        results.update(simplified_variants)
 
-        # Apply set mappings
-        for base, variants in set_mappings.items():
-            if base in name_lower:
-                results.extend(variants)
-                # Also add combinations with prefixes removed
-                for variant in variants:
-                    results.append(f"commander {variant}")
-                    results.append(f"universe beyond {variant}")
-                    results.append(f"universes beyond {variant}")
+        set_mappings = {
+            "festival foil etched": "30th Anniversary Misc Promos",
+            "launch weekend foil": "Wizards Play Network 2022",
+            "bring a friend": "Love Your LGS 2022",
+            "magicfest foil": "MagicFest 2019",
+            "warhammer 40,000 commander": [
+                "universes beyond warhammer 40000",
+                "universes beyond warhammer 40k",
+                "warhammer 40000 commander",
+                "warhammer 40k commander",
+                "cmdr - warhammer 40,000: universes beyond",
+                "warhammer 40k singles",
+                "universe beyond 40,000",
+            ],
+            "the lord of the rings: tales of middle-earth commander": [
+                "commander lord of the rings",
+                "universes beyond lord of the rings commander",
+                "universes beyond: lord of the rings - commander",
+                "lotr commander",
+            ],
+            "commander 2024": ["cmdr - 2024"],
+            "commander 2023": ["cmdr - 2023"],
+            "commander 2022": ["cmdr - 2022"],
+            "commander 2021": ["cmdr - 2021"],
+            "commander 2020": ["cmdr - 2020"],
+            "commander 2019": ["cmdr - 2019"],
+            "commander 2018": ["cmdr - 2018"],
+            "commander 2017": ["cmdr - 2017"],
+            "commander 2016": ["cmdr - 2016"],
+            "commander 2015": ["cmdr - 2015"],
+            "commander 2014": ["cmdr - 2014"],
+            "commander 2013": ["cmdr - 2013"],
+            "commander 2012": ["cmdr - 2012"],
+            "commander 2011": ["cmdr - 2011"],
+            "commander anthology volume ii": ["cmdr - anthology vol. ii", "commander anthology 2"],
+            "duel decks: zendikar vs. eldrazi": ["zendikar vs eldrazi duel decks"],
+            "the brothers' war retro artifacts": [
+                "magic's history: retro or schematic artifact",
+                "retro or schematic artifact",
+                "retro artifacts",
+                "brr",
+            ],
+            "secret lair drop": [
+                "secret lair: heads i win, tails you lose",
+                "secret lair",
+                "sld",
+            ],
+            "friday night magic 2022": ["fnm promos", "friday night magic", "fnm promo", "fnm cards"],
+            "mystery booster": ["the list", "mystery booster the list"],
+            "kamigawa: neon dynasty": ["kamigawa neon destiny"],
+            "jurassic world collection": ["universes beyond: jurassic world"],
+            "doctor who": ["dr. who (who)", "doctor who (who)" "Dr. Who (WHO)"],
+            "from the vault: twenty": ["ftv: twenty"],
+            "the brothers' war commander": ["commander brother's war"],
+            # "promo pack": [
+            #     "pre-release promos",
+            #     "shooting stars promos",
+            #     "unique promos",
+            #     "unique & misc promos",
+            # ],
+        }
 
-        # Remove prefixes and add results
-        for prefix in prefixes:
-            if name_lower.startswith(prefix):
-                clean_name = name_lower.replace(prefix, "").strip()
-                results.append(clean_name)
+        for candidate in list(results):
+            for official_name, variants in set_mappings.items():
+                if candidate in variants or candidate == official_name.lower():
+                    results.add(official_name.lower())
+                    results.update(variants)
 
-        # Add general cleanup variations
-        results.extend(
-            [
-                name_lower.replace(":", "").strip(),
-                name_lower.replace("  ", " ").strip(),
-                "".join(name_lower.split()),
-                " ".join(name_lower.split()),
-                name_lower.replace("-", " ").strip(),
-                name_lower.replace("_", " ").strip(),
-                name_lower.replace(",", "").strip(),
-                name_lower.replace("(", "").replace(")", "").strip(),
-            ]
-        )
-
-        # Remove duplicates and empty strings
-        return list(set(result for result in results if result))
+        return list(filter(None, results))
 
     @staticmethod
     def clean_set_name_for_matching(name):
@@ -467,14 +396,14 @@ class CardService:
         """Get set code from set name using exact match first, then fuzzy matching"""
         if not set_name:
             logger.warning("Empty set name provided")
-            return "unknown"  # Default fallback
+            return None
 
         logger.debug(f"Getting set code for: {set_name}")
 
         sets_data = cls.get_sets_data()
         if not sets_data:
             logger.error("No sets data available")
-            return "unknown"  # Default fallback
+            return None
 
         # Get all possible normalized forms of the set name
         normalized_names = cls._normalize_set_name(set_name)
@@ -541,7 +470,7 @@ class CardService:
 
         logger.warning(f"No match found for set: {set_name}.")
         logger.warning(f"Normalized names tried: {normalized_names}.")
-        return "unknown"  # Default fallback when no match found
+        return None
 
     @classmethod
     def get_closest_set_name(cls, unclean_set_name):
@@ -554,51 +483,70 @@ class CardService:
             str: The official set name if found, or the original name if no match
         """
         if not unclean_set_name:
+            logger.warning(f"[SET CODE] Empty set name received")
             return None
 
         sets_data = cls.get_sets_data()
         if not sets_data:
             return unclean_set_name
 
-        # Get normalized versions of the set name
         normalized_names = cls._normalize_set_name(unclean_set_name)
 
-        # Try exact matches first
-        for norm_name in normalized_names:
-            # Check against cached set names
-            for set_info in sets_data.values():
-                if norm_name == set_info["name"].lower():
-                    return set_info["name"]  # Return the official name
+        # Attempt direct exact match first
+        for name_normalized in normalized_names:
+            if name_normalized in sets_data:
+                return sets_data[name_normalized]["name"]
 
-        # If no exact match, try fuzzy matching
+            if name_normalized in cls.promo_mappings:
+                mapped_name = cls.promo_mappings[name_normalized].lower()
+                if mapped_name in sets_data:
+                    return sets_data[mapped_name]["name"]
+
+        # Attempt fuzzy match against each normalized candidate
+        best_match = None
+        best_score = 0
+
         try:
-            best_match = process.extractOne(
-                unclean_set_name.lower(),
-                [s["name"].lower() for s in sets_data.values()],
-                scorer=fuzz.token_set_ratio,
-                score_cutoff=75,
-            )
+            set_names_lower = [set_info["name"].lower() for set_info in sets_data.values()]
+            filtered_candidates = [candidate for candidate in normalized_names if candidate.strip()]
+
+            for candidate in filtered_candidates:
+                match = process.extractOne(
+                    candidate,
+                    set_names_lower,
+                    scorer=fuzz.token_set_ratio,
+                    score_cutoff=65,  # Lower cutoff to improve partial matching
+                )
+                if match and match[1] > best_score:
+                    best_match = match
+                    best_score = match[1]
 
             if best_match:
                 matched_name = best_match[0]
-                # Find and return the official name (with proper capitalization)
                 for set_info in sets_data.values():
                     if set_info["name"].lower() == matched_name:
+                        logger.debug(
+                            f"Fuzzy matched '{unclean_set_name}' to '{set_info['name']}' with score {best_score}"
+                        )
                         return set_info["name"]
 
         except Exception as e:
-            logger.error(f"Error during fuzzy matching of set name: {str(e)}", exc_info=True)
+            logger.error(f"[SET NAME] Error during fuzzy matching: {str(e)}")
 
-        # Check for "promo" in the name and match against promo sets
-        if "promo" in unclean_set_name.lower():
-            for set_info in sets_data.values():
-                if set_info["set_type"] == "promo":
-                    return set_info["name"]
+        # Fallback: try to match against set codes
+        input_lower = unclean_set_name.lower()
+        for set_info in sets_data.values():
+            if set_info["code"].lower() == input_lower or input_lower in set_info["code"].lower():
+                logger.debug(
+                    f"Matched '{unclean_set_name}' directly to set code '{set_info['code']}' ({set_info['name']})"
+                )
+                return set_info["name"]
 
-        return unclean_set_name  # Return original if no match found
+        logger.warning(f"[SET NAME] No match found for '{unclean_set_name}', returning original.")
+        return unclean_set_name
 
     @classmethod
-    def get_clean_set_code(cls, unclean_set_name):
+    def get_clean_set_code_from_set_name(cls, unclean_set_name):
         """Get the official set code from an unclean set name input.
 
         Args:
@@ -610,79 +558,80 @@ class CardService:
         # First get the proper set name
         clean_set_name = cls.get_closest_set_name(unclean_set_name)
         if not clean_set_name:
-            return "unknown"
+            logger.warning(f"[SET CODE] No clean set name found for: {unclean_set_name}")
+            return None
 
         # Then get the set code using the existing method
         return cls.get_set_code(clean_set_name)
 
-    @classmethod
-    def _find_full_set_name(cls, code):
-        """Find full set name from a set code."""
-        # Common set code to full name mappings
-        known_sets = {
-            "znr": "zendikar rising",
-            "afr": "adventures in the forgotten realms",
-            "neo": "kamigawa neon dynasty",
-            "dmu": "dominaria united",
-            "one": "phyrexia all will be one",
-            "mom": "march of the machine",
-            "ltr": "lord of the rings",
-            "bro": "the brothers war",
-            "woe": "wilds of eldraine",
-            "lci": "lost caverns of ixalan",
-            "mkm": "murders at karlov manor",
-            "who": "doctor who",
-            "mat": "march of the machine aftermath",
-            "mid": "innistrad midnight hunt",
-            "vow": "innistrad crimson vow",
-            "snc": "streets of new capenna",
-            "ncc": "new capenna commander",
-            "clb": "commander legends battle for baldurs gate",
-            "40k": "warhammer 40000",
-            "dmc": "dominaria united commander",
-            "brc": "brother's war commander",
-            # Add more as needed
-        }
-        return known_sets.get(code.lower())
+    # @classmethod
+    # def _find_full_set_name(cls, code):
+    #     """Find full set name from a set code."""
+    #     # Common set code to full name mappings
+    #     known_sets = {
+    #         "znr": "zendikar rising",
+    #         "afr": "adventures in the forgotten realms",
+    #         "neo": "kamigawa neon dynasty",
+    #         "dmu": "dominaria united",
+    #         "one": "phyrexia all will be one",
+    #         "mom": "march of the machine",
+    #         "ltr": "lord of the rings",
+    #         "bro": "the brothers war",
+    #         "woe": "wilds of eldraine",
+    #         "lci": "lost caverns of ixalan",
+    #         "mkm": "murders at karlov manor",
+    #         "who": "doctor who",
+    #         "mat": "march of the machine aftermath",
+    #         "mid": "innistrad midnight hunt",
+    #         "vow": "innistrad crimson vow",
+    #         "snc": "streets of new capenna",
+    #         "ncc": "new capenna commander",
+    #         "clb": "commander legends battle for baldurs gate",
+    #         "40k": "warhammer 40000",
+    #         "dmc": "dominaria united commander",
+    #         "brc": "brother's war commander",
+    #         # Add more as needed
+    #     }
+    #     return known_sets.get(code.lower())
 
-    @classmethod
-    def _get_all_set_variants(cls, set_name):
-        """Get all possible variants of a set name including extras versions."""
-        variants = []
-        name_lower = set_name.lower()
+    # @classmethod
+    # def _get_all_set_variants(cls, set_name):
+    #     """Get all possible variants of a set name including extras versions."""
+    #     variants = []
+    #     name_lower = set_name.lower()
 
-        # Base variants
-        variants.extend(
-            [
-                name_lower,
-                name_lower.replace(" ", ""),
-                name_lower.replace(":", ""),
-                name_lower.replace(":", " "),
-            ]
-        )
+    #     # Base variants
+    #     variants.extend(
+    #         [
+    #             name_lower,
+    #             name_lower.replace(" ", ""),
+    #             name_lower.replace(":", ""),
+    #             name_lower.replace(":", " "),
+    #         ]
+    #     )
 
-        # Add extras variants
-        extras_variants = [
-            f"{name_lower} extras",
-            f"{name_lower}: extras",
-            f"{name_lower}:extras",
-        ]
-        variants.extend(extras_variants)
+    #     # Add extras variants
+    #     extras_variants = [
+    #         f"{name_lower} extras",
+    #         f"{name_lower}: extras",
+    #         f"{name_lower}:extras",
+    #     ]
+    #     variants.extend(extras_variants)
 
-        # If it's a known set code, add full name variants
-        full_name = cls._find_full_set_name(name_lower)
-        if full_name:
-            full_variants = [
-                full_name,
-                f"{full_name} extras",
-                f"{full_name}: extras",
-                full_name.replace(" ", ""),
-                full_name.replace(":", ""),
-            ]
-            variants.extend(full_variants)
+    #     # If it's a known set code, add full name variants
+    #     full_name = cls._find_full_set_name(name_lower)
+    #     if full_name:
+    #         full_variants = [
+    #             full_name,
+    #             f"{full_name} extras",
+    #             f"{full_name}: extras",
+    #             full_name.replace(" ", ""),
+    #             full_name.replace(":", ""),
+    #         ]
+    #         variants.extend(full_variants)
 
-        # Remove duplicates and empty strings
-        return list(set(v for v in variants if v))
+    #     # Remove duplicates and empty strings
+    #     return list(set(v for v in variants if v))
 
     @staticmethod
     def extract_magic_set_from_href(url):
@@ -777,7 +726,9 @@ class CardService:
                 # Get set code if set_name is provided
                 set_code = None
                 if set_name:
-                    set_code = CardService.get_clean_set_code(set_name)
+                    set_code = CardService.get_clean_set_code_from_set_name(set_name)
+                    if not set_code:
+                        raise ValueError(f"Invalid set name: {set_name}")
                     logger.info(f"Mapped set name '{set_name}' to code '{set_code}'")
 
                 if card_id:
@@ -797,8 +748,8 @@ class CardService:
                 else:
                     card = UserBuylistCard(
                         name=name,
-                        set_code=set_code,
                         set_name=set_name,
+                        set_code=set_code,
                         language=language,
                         quality=quality,
                         quantity=quantity,
