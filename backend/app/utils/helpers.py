@@ -1,7 +1,6 @@
-import json
 import logging
 import re
-import uuid
+from app.constants import CardLanguage, CardQuality
 
 logger = logging.getLogger(__name__)
 
@@ -88,4 +87,114 @@ def normalize_price(price_string):
             return 0.0
     except Exception as e:
         logger.error(f"Fatal error in normalize_price: {str(e)}")
+        return None
+
+
+def detect_foil(product_foil=None, product_version=None, variant_data=None):
+    try:
+        if not any([product_foil, product_version, variant_data]):
+            return False
+        check_strings = [s.lower() for s in [product_foil, product_version, variant_data] if s is not None]
+        return any("foil" in s for s in check_strings)
+    except Exception as e:
+        logger.exception(f"Error in detect_foil {str(e)}")
+        return None
+
+
+def extract_price(variant):
+    try:
+        price_elem = (
+            variant.find("span", {"class": "regular price"})
+            or variant.find("span", {"class": "price"})
+            or variant.find("span", {"class": "variant-price"})
+        )
+        if not price_elem:
+            return None
+        price_value = normalize_price(price_elem.text.strip())
+        return price_value if price_value and price_value > 0 else None
+    except Exception as e:
+        logger.error(f"Error extracting price: {str(e)}")
+        return None
+
+
+def extract_quantity(variant):
+    try:
+        qty_elem = (
+            variant.find("span", {"class": "variant-short-info variant-qty"})
+            or variant.find("span", {"class": "variant-short-info"})
+            or variant.find("span", {"class": "variant-qty"})
+            or variant.find("input", {"class": "qty", "type": "number"})
+        )
+        if not qty_elem:
+            return None
+        if qty_elem.name == "input":
+            qty = qty_elem.get("max") or qty_elem.get("value")
+            return int(qty) if qty and int(qty) > 0 else None
+        qty_text = qty_elem.text.strip()
+        return extract_numbers(qty_text) or None
+    except Exception as e:
+        logger.error(f"Error in extract_quantity: {str(e)}")
+        return None
+
+
+def extract_quality_language(quality_language):
+    try:
+        if not quality_language:
+            return "DMG", "Unknown"
+        if isinstance(quality_language, list):
+            quality_language = ", ".join(str(x) for x in quality_language)
+        variant_parts = quality_language.split(",")
+        raw_quality = variant_parts[0].strip() if len(variant_parts) >= 1 else "DMG"
+        raw_language = variant_parts[1].strip() if len(variant_parts) >= 2 else "Unknown"
+        quality = CardQuality.normalize(raw_quality)
+        language = CardLanguage.normalize(raw_language)
+        return quality, language
+    except Exception as e:
+        logger.error(f"Error in extract_quality_language: {str(e)}")
+        return "DMG", "Unknown"
+
+
+def find_name_version_foil(place_holder):
+    try:
+        items = re.split(r" - ", place_holder)
+        items = [x.strip() for x in items]
+        product_name = items[0]
+        product_version = ""
+        product_foil = ""
+        for item in items[1:]:
+            item_lower = item.lower()
+            if "foil" in item_lower:
+                product_foil = item
+                version_part = re.sub(r"\bfoil\b", "", item, flags=re.IGNORECASE).strip()
+                if version_part:
+                    product_version = version_part
+            elif item:
+                product_version = item
+        return product_name, product_version, product_foil
+    except Exception as e:
+        logger.error(f"Error in find_name_version_foil: {str(e)}")
+        return None
+
+
+def parse_shopify_variant_title(title):
+    try:
+        set_match = re.search(r"\[(.*?)\]", title)
+        if not set_match:
+            return None
+        set_name = set_match.group(1).strip()
+        remaining = title.split("]")[-1].strip()
+        is_foil = "Foil" in remaining
+        quality = remaining.replace("Foil", "").strip()
+        return set_name, quality, is_foil
+    except Exception as e:
+        logger.error(f"Error parsing shopify variant title: {str(e)}")
+        return None
+
+
+def normalize_variant_description(variant_description):
+    try:
+        cleaned_description = variant_description.split(":")[-1].strip()
+        return [part.strip() for part in cleaned_description.split(",")]
+    except Exception as e:
+        logger.error(f"Error normalizing variant description: {str(e)}")
         return None

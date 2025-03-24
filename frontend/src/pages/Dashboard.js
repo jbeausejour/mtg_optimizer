@@ -10,7 +10,7 @@ const { Title } = Typography;
 
 const Dashboard = ({ userId }) => {
   const [totalSites, setTotalSites] = useState(0);
-  const [totalCards, setTotalCards] = useState(0);
+  const [totalBuylists, setTotalBuylists] = useState(0);
   const [latestScans, setLatestScans] = useState([]);
   const [latestOptimizations, setLatestOptimizations] = useState([]);
   const [topBuylists, setTopBuylists] = useState([]);
@@ -35,16 +35,16 @@ const Dashboard = ({ userId }) => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [sitesRes, cardsRes, scansRes, optimizationsRes, buylistsRes] = await Promise.all([
+        const [sitesRes, BuylistRes, scansRes, optimizationsRes, buylistsRes] = await Promise.all([
           api.get('/sites', { params: { user_id: userId } }), // Add user ID
           api.get('/buylists', { params: { user_id: userId } }), // Add user ID
-          api.get('/scans?limit=5', { params: { user_id: userId } }), // Add user ID
-          api.get('/results?limit=5', { params: { user_id: userId } }), // Add user ID
-          api.get('/buylists/top', { params: { user_id: userId, limit: 3 } }) // Fetch top 3 buylists
+          api.get('/scans', { params: { user_id: userId } }), // Add user ID
+          api.get('/results', { params: { user_id: userId } }), // Add user ID
+          api.get('/buylists/top', { params: { user_id: userId} }) // Fetch top 3 buylists
         ]);
 
         setTotalSites(sitesRes.data.length);
-        setTotalCards(cardsRes.data.length);
+        setTotalBuylists(BuylistRes.data.length);
         setLatestScans(scansRes.data);
         setTopBuylists(buylistsRes.data); // Set top buylists
         
@@ -209,12 +209,12 @@ const Dashboard = ({ userId }) => {
         </Col>
         <Col span={8}>
           <Card 
-            title="Total Cards" 
+            title="Total Buylists" 
             bordered={false}
             onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
-            {totalCards}
+            {totalBuylists}
           </Card>
         </Col>
         <Col span={8}>

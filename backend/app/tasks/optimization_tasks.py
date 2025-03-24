@@ -61,20 +61,20 @@ class OptimizationTaskManager:
             "unknown_qualities": set(),
         }
 
-    def create_new_scan(self):
+    def create_new_scan(self, buylist_id):
         """Create a new scan and store its ID in the instance"""
         try:
-            self.current_scan_id = ScanService.create_scan()
+            self.current_scan_id = ScanService.create_scan(buylist_id)
             logger.info(f"Created new scan with ID: {self.current_scan_id}")
             return self.current_scan_id
         except Exception as e:
             logger.error(f"Error in create_new_scan: {str(e)}")
             raise
 
-    async def handle_scraping(self, min_age_seconds):
+    async def handle_scraping(self, min_age_seconds, buylist_id):
         try:
             if not self.current_scan_id:
-                self.create_new_scan()
+                self.create_new_scan(buylist_id)
 
             processed_combinations = set()
             # Check which cards need updating
@@ -113,6 +113,7 @@ class OptimizationTaskManager:
                             "quality": r.quality,
                             "quantity": int(r.quantity),
                             "price": round(float(r.price), 2),
+                            "variant_id": r.variant_id,
                         }
                         for r in fresh_query_results
                     ]
@@ -148,6 +149,7 @@ class OptimizationTaskManager:
                         result["foil"],
                         result["quality"],
                         result["price"],
+                        result["variant_id"],
                     )
                     if combo_key not in processed_combinations:
                         processed_combinations.add(combo_key)
@@ -212,6 +214,12 @@ class OptimizationTaskManager:
 
             logger.info(f"Processed {len(card_listings)} card listings results in {elapsed_time} seconds")
 
+            for result in scraping_results:
+                if "variant_id" not in result or result["variant_id"] is None:
+                    logger.warning(
+                        f"Scraped card missing variant_id: {result.get('name')} from site_id: {result.get('site_id')}"
+                    )
+
             if not card_listings:
                 logger.error("No card listings created")
                 return None, None
@@ -263,6 +271,7 @@ class OptimizationTaskManager:
                     "foil": bool(r.get("foil", False)),
                     "language": r.get("language", "English"),
                     "site_id": r["site_id"],
+                    "variant_id": r.get("variant_id"),
                     # "weighted_price": round(float(r["price"]), 2),
                 }
             )
@@ -313,6 +322,10 @@ class OptimizationTaskManager:
             avg_price = site_data["price"].mean()
             sum_cheapest = site_data.groupby("name")["price"].min().sum()
 
+            # Calculate quality distribution
+            quality_counts = site_data["quality"].value_counts().to_dict()
+            quality_distribution = ", ".join([f"{q}({c})" for q, c in quality_counts.items()])
+
             sites_stats[site] = {
                 "nbr_cards_in_buylist": nbr_cards_in_buylist,
                 "total_cards": total_cards,
@@ -320,12 +333,15 @@ class OptimizationTaskManager:
                 "max_price": max_price,
                 "avg_price": avg_price,
                 "sum_cheapest": sum_cheapest,
+                "quality_distribution": quality_distribution,
             }
 
-        logger.info("Available Sites Statistics:")
-        logger.info("=" * 90)
-        logger.info("Site                      # Cards  Total Cards  Min $   Max $   Avg $   Sum $")
-        logger.info("-" * 90)
+        logger.info("Sites Statistics:")
+        logger.info("=" * 120)
+        logger.info(
+            "Site                      # Cards  Total Cards  Min $   Max $   Avg $   Sum $    Quality Distribution"
+        )
+        logger.info("-" * 120)
 
         for site, stats in sorted(
             sites_stats.items(),
@@ -339,14 +355,16 @@ class OptimizationTaskManager:
                 max_price = stats["max_price"]
                 avg_price = stats["avg_price"]
                 sum_cheapest = stats["sum_cheapest"]
+                quality_distribution = stats["quality_distribution"]
 
                 logger.info(
-                    f"{site:<25} {nbr_cards_in_buylist:<8} {total_cards:<12} {min_price:<7.2f} {max_price:<7.2f} {avg_price:<7.2f} {sum_cheapest:<6.2f}"
+                    f"{site:<25} {nbr_cards_in_buylist:<8} {total_cards:<12} {min_price:<7.2f} {max_price:<7.2f} "
+                    f"{avg_price:<7.2f} {sum_cheapest:<7.2f} {quality_distribution}"
                 )
             except KeyError as e:
                 logger.error(f"Missing key {e} in site stats for {site}")
 
-        logger.info("=" * 80)
+        logger.info("=" * 120)
 
         return len(sites_stats)
 
@@ -436,7 +454,7 @@ def serialize_results(obj):
 
 @celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
 def start_scraping_task(
-    self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store, min_age_seconds
+    self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store, min_age_seconds, buylist_id
 ) -> Dict:
     """
     Execute optimization task for given cards and sites.
@@ -450,7 +468,7 @@ def start_scraping_task(
 
         async def async_scraping_task(task_manager):
             """Runs the scraping process asynchronously using the existing task_manager"""
-            return await task_manager.handle_scraping(min_age_seconds)
+            return await task_manager.handle_scraping(min_age_seconds, buylist_id)
 
         try:
             # Start total time tracking
@@ -550,7 +568,7 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
     best_solution = optimization_result.get("best_solution", {})
     iterations = optimization_result.get("iterations", [])
 
-    # logger.info(f"handle_success: processing solution with {len(iterations) + 1} total solutions")
+    logger.info(f"handle_success: processing solution with {len(iterations) + 1} total solutions")
 
     # Convert solutions to DTO format
     solutions = []
@@ -561,6 +579,12 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
         if isinstance(best_solution.get("stores"), list):
             for store_data in best_solution["stores"]:
                 if isinstance(store_data, dict):
+                    for card in store_data.get("cards", []):
+                        if "variant_id" not in card or card["variant_id"] is None:
+                            logger.warning(
+                                f"Card missing variant_id in final solution: {card.get('name')} from {store_data.get('site_name')}"
+                            )
+
                     stores.append(
                         StoreInSolution(
                             site_id=store_data.get("site_id"),

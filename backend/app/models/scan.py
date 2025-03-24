@@ -18,6 +18,8 @@ class Scan(db.Model):
         cascade="all, delete-orphan",
         overlaps="optimization_results",
     )
+    buylist_id = db.Column(db.Integer, db.ForeignKey("user_buylist.id"))
+    buylist = relationship("UserBuylist", backref="scans")
 
     def to_dict(self):
         """Scan metadata and raw results only"""
@@ -40,6 +42,7 @@ class ScanResult(BaseCard):
     scan_id = db.Column(db.Integer, db.ForeignKey("scan.id"))
     site_id = db.Column(db.Integer, db.ForeignKey("site.id"))
     price = db.Column(db.Float)
+    variant_id = db.Column(db.String, nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
     site = relationship("Site", backref="scan_results")
 
@@ -56,6 +59,7 @@ class ScanResult(BaseCard):
             "set_code": self.set_code,
             "language": self.language,
             "version": self.version,
+            "variant_id": self.variant_id,
             "site_name": self.site.name if self.site else None,
         }
 

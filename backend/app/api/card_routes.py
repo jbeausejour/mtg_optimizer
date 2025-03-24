@@ -1,4 +1,6 @@
 import logging
+import logging
+from flask import Blueprint, request, jsonify
 
 from app.services.card_service import CardService
 from app.services.optimization_service import OptimizationService
@@ -7,6 +9,7 @@ from app.services.site_service import SiteService
 from app.tasks.optimization_tasks import celery_app, start_scraping_task
 from celery.backends.base import DisabledBackend
 from celery.result import AsyncResult
+import requests
 from flask import Blueprint, current_app, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,8 @@ def get_buylists():
             return jsonify({"error": "User ID is required"}), 400
 
         buylists = CardService.get_all_buylists(user_id)
-        logger.info(f"Found {len(buylists)} buylists for user {user_id}: data={buylists}")
+        logger.info(f"Found {len(buylists)} buylists for user {user_id}")
+        # logger.info(f"Found {len(buylists)} buylists for user {user_id}: data={buylists}")
         return jsonify(buylists)
     except Exception as e:
         current_app.logger.error(f"Error fetching buylists: {str(e)}")
@@ -142,7 +146,7 @@ def rename_buylist(id):
             return jsonify({"error": "User ID and new buylist name are required"}), 400
 
         updated_buylist = CardService.update_user_buylist_name(id, user_id, new_name)
-        return jsonify(updated_buylist), 200
+        return jsonify(updated_buylist.to_dict()), 200
 
     except Exception as e:
         current_app.logger.error(f"Error renaming buylist {id}: {str(e)}")
@@ -154,13 +158,12 @@ def get_top_buylists():
     """Get the top 3 buylists for a specific user."""
     try:
         user_id = request.args.get("user_id")
-        limit = request.args.get("limit", 3, type=int)
         if not user_id:
             logger.error("User ID is missing in the request")
             return jsonify({"error": "User ID is required"}), 400
 
-        buylists = CardService.get_top_buylists(user_id, limit)
-        logger.info(f"Found top {limit} buylists for user {user_id}: data={buylists}")
+        buylists = CardService.get_top_buylists(user_id)
+        logger.info(f"Found top buylists for user {user_id}: data={buylists}")
         return jsonify(buylists)
     except Exception as e:
         current_app.logger.error(f"Error fetching top buylists: {str(e)}")
@@ -361,8 +364,6 @@ def get_card_suggestions():
 ############################################################################################################
 # Task Operations
 ############################################################################################################
-
-
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
 def task_status(task_id):
     try:
@@ -381,7 +382,7 @@ def task_status(task_id):
                 "progress": task.info.get("progress", 0),
             }
 
-        logger.info(f"Task {task_id} response: {response}")
+        # logger.info(f"Task {task_id} response: {response}")
         return jsonify(response), 200
 
     except Exception as e:
@@ -404,14 +405,91 @@ def start_scraping():
     min_store = data.get("min_store", 1)
     find_min_store = data.get("find_min_store", False)
     min_age_seconds = data.get("min_age_seconds", 1800)
+    buylist_id = data.get("buylist_id", None)
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
 
     task = start_scraping_task.apply_async(
-        args=[site_ids, card_list_from_frontend, strategy, min_store, find_min_store, min_age_seconds]
+        args=[site_ids, card_list_from_frontend, strategy, min_store, find_min_store, min_age_seconds, buylist_id]
     )
     return jsonify({"task_id": task.id}), 202
+
+
+# @card_routes.route("/proxy", methods=["POST"])
+# def handle_proxy_request():
+#     try:
+#         logger.info(f"Received proxy request: {request.json}")
+#         data = request.json
+
+#         # Parse the body if double-encoded, otherwise use data directly
+#         body_data = data
+#         if "body" in data:
+#             body_data = json.loads(data["body"])
+
+#         purchase_url = body_data.get("purchase_url")
+#         payload = body_data.get("payload")
+
+#         if not purchase_url or not payload:
+#             return jsonify({"status": "error", "message": "Missing purchase_url or payload"}), 400
+
+#         parsed_url = urlparse(purchase_url)
+#         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+#         headers = {
+#             "Content-Type": "application/json",
+#             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+#             "Referer": base_url,
+#             "Origin": base_url,
+#             "Accept": "application/json, text/javascript, */*; q=0.01",
+#             "Accept-Language": "en-US,en;q=0.9",
+#             "Accept-Encoding": "gzip, deflate, br",
+#         }
+
+#         # Forward browser cookies if present
+#         cookies = request.cookies
+#         if cookies:
+#             cookie_header = "; ".join([f"{key}={value}" for key, value in cookies.items()])
+#             headers["Cookie"] = cookie_header
+
+#         logger.info(f"Sending proxy request to {purchase_url} with forwarded cookies")
+#         response = requests.post(purchase_url, headers=headers, json=payload)
+#         logger.info(f"Received proxy response: {response.status_code}")
+#         response.raise_for_status()
+#         logger.info(f"Response content: {response.text}")
+
+#         try:
+#             content = response.json()
+#         except Exception:
+#             logger.info(f"Error parsing response content: {response.text}")
+#             content = response.text
+
+#         return jsonify({"status": "success", "response": content}), response.status_code
+
+#     except requests.exceptions.HTTPError as errh:
+#         logger.info(f"HTTP Error: {errh}")
+#         return (
+#             jsonify({"status": "error", "message": str(errh), "response": errh.response.text}),
+#             errh.response.status_code,
+#         )
+#     except Exception as e:
+#         logger.exception(f"Unexpected error: {str(e)}")
+#         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# @card_routes.route("/purchase_order_search", methods=["POST"])
+# def generate_multisearch_links():
+#     try:
+#         data = request.json
+#         purchase_data = data.get("purchase_data", [])
+
+#         active_sites = {site.id: site for site in SiteService.get_all_sites()}
+#         results = CardService.generate_search_links(purchase_data, active_sites)
+#         return jsonify(results), 200
+
+#     except Exception as e:
+#         logger.error(f"Error generating multisearch links: {str(e)}")
+#         return jsonify({"error": "Failed to generate search links"}), 500
 
 
 @card_routes.route("/purchase_order", methods=["POST"])
@@ -420,13 +498,71 @@ def generate_purchase_links():
         data = request.json
         purchase_data = data.get("purchase_data", [])
 
-        results = CardService.generate_purchase_links(purchase_data)
+        active_sites = {site.id: site for site in SiteService.get_all_sites()}
+        results = CardService.generate_purchase_links(purchase_data, active_sites)
         # logger.info(f"return data: {results}")
         return jsonify(results), 200
 
     except Exception as e:
         logger.error(f"Error generating purchase links: {str(e)}")
         return jsonify({"error": "Failed to generate purchase links"}), 500
+
+
+# async def fill_cart_and_get_cart_url(purchase_url, payload, base_url):
+#     async with async_playwright() as p:
+#         browser = await p.chromium.launch(headless=True)
+#         context = await browser.new_context()
+#         page = await context.new_page()
+
+#         await page.goto(base_url)
+#         print(f"Opened base URL: {base_url}")
+
+#         post_response = await page.evaluate(
+#             """async ({ purchaseUrl, payloadData }) => {
+#                 const response = await fetch(purchaseUrl, {
+#                     method: 'POST',
+#                     headers: { 'Content-Type': 'application/json' },
+#                     body: JSON.stringify(payloadData),
+#                     credentials: 'include'
+#                 });
+#                 return await response.json();
+#             }""",
+#             {"purchaseUrl": purchase_url, "payloadData": payload},
+#         )
+
+#         print("Post response received:", post_response)
+
+#         cart_url = None
+#         if post_response.get("carts"):
+#             cart_link = post_response["carts"][0]["links"].get("cart")
+#             if cart_link:
+#                 cart_url = f"{base_url}{cart_link}"
+
+#         await browser.close()
+#         return cart_url
+
+
+# @card_routes.route("/headless_cart_fill", methods=["POST"])
+# def headless_cart_fill():
+#     try:
+#         data = request.json
+#         purchase_url = data.get("purchase_url")
+#         payload = data.get("payload")
+#         base_url = data.get("base_url")
+
+#         if not purchase_url or not payload or not base_url:
+#             return jsonify({"status": "error", "message": "Missing required parameters."}), 400
+
+#         cart_url = asyncio.run(fill_cart_and_get_cart_url(purchase_url, payload, base_url))
+
+#         if cart_url:
+#             return jsonify({"status": "success", "cart_url": cart_url}), 200
+#         else:
+#             return jsonify({"status": "error", "message": "Cart fill did not return a cart URL."}), 500
+
+#     except Exception as e:
+#         logger.exception("Error in headless_cart_fill")
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 ############################################################################################################
@@ -477,9 +613,8 @@ def get_scan_results(scan_id):
 
 @card_routes.route("/scans", methods=["GET"])
 def get_all_scans():
-    limit = request.args.get("limit", 0, type=int)
     try:
-        scans = ScanService.get_all_scan_results(limit)
+        scans = ScanService.get_all_scan_results()
         return jsonify(
             [
                 {
@@ -586,11 +721,10 @@ def update_site(site_id):
 @card_routes.route("/results", methods=["GET"])
 def get_optimization_results():
     """Get recent optimization results"""
-    limit = request.args.get("limit", 5, type=int)
-    results = OptimizationService.get_optimization_results(limit)
-
+    results = OptimizationService.get_optimization_results()
+    logger.info(f"Found {len(results)} optimization results")
     response = []
-    for opt_result in results:
+    for opt_result, scan, buylist in results:
         response.append(
             {
                 "id": opt_result.scan_id,
@@ -601,9 +735,11 @@ def get_optimization_results():
                 "sites_scraped": opt_result.sites_scraped,
                 "cards_scraped": opt_result.cards_scraped,
                 "errors": opt_result.errors,
+                "buylist_name": buylist.name if buylist else None,
             }
         )
 
+    # logger.info(f"Optimization results: {response}")
     return jsonify(response)
 
 

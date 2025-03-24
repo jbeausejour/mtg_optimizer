@@ -6,6 +6,7 @@ from app.dto.optimization_dto import OptimizationResultDTO
 from app.extensions import db
 from app.models.optimization_results import OptimizationResult
 from app.models.scan import Scan
+from app.models.buylist import UserBuylist
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +67,18 @@ class OptimizationService:
             raise
 
     @staticmethod
-    def get_optimization_results(limit: int = 5) -> List[OptimizationResult]:
+    def get_optimization_results() -> List[OptimizationResult]:
         """Get recent optimization results"""
         try:
-            results = (
-                OptimizationResult.query.order_by(OptimizationResult.created_at.desc()).limit(limit).all()
-            )  # Make sure we use .all() to get a list
+            query = (
+                db.session.query(OptimizationResult, Scan, UserBuylist)
+                .join(Scan, OptimizationResult.scan_id == Scan.id)
+                .outerjoin(UserBuylist, Scan.buylist_id == UserBuylist.id)
+                .order_by(OptimizationResult.created_at.desc())
+            )
+
+            # logger.info(f"SQL Query: {str(query.statement.compile(compile_kwargs={'literal_binds': True}))}")
+            results = query.all()
             return results
         except Exception as e:
             logger.error(f"Error fetching optimization results: {str(e)}")

@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import functools
-import uuid
+from urllib.parse import urlparse
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -12,7 +12,7 @@ from app.constants.card_mappings import CardLanguage, CardVersion
 from app.extensions import db
 from app.models.buylist import UserBuylist
 from app.models.UserBuylistCard import UserBuylistCard
-from app.services.site_service import SiteService
+
 from flask import current_app
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql import func
@@ -468,8 +468,8 @@ class CardService:
             logger.error(f"Error during fuzzy matching: {str(e)}")
             return "unknown"  # Fallback on error
 
-        logger.warning(f"No match found for set: {set_name}.")
-        logger.warning(f"Normalized names tried: {normalized_names}.")
+        logger.debug(f"No match found for set: {set_name}.")
+        logger.debug(f"Normalized names tried: {normalized_names}.")
         return None
 
     @classmethod
@@ -542,7 +542,7 @@ class CardService:
                 )
                 return set_info["name"]
 
-        logger.warning(f"[SET NAME] No match found for '{unclean_set_name}', returning original.")
+        logger.debug(f"[SET NAME] No match found for '{unclean_set_name}', returning original.")
         return unclean_set_name
 
     @classmethod
@@ -820,22 +820,23 @@ class CardService:
     def get_all_buylists(user_id):
         """Retrieve all unique buylists for a specific user."""
         try:
-            buylists = db.session.query(UserBuylist.id, UserBuylist.name).filter(UserBuylist.user_id == user_id).all()
+            buylists = UserBuylist.query.filter_by(user_id=user_id).all()
+            # buylists = db.session.query(UserBuylist.id, UserBuylist.name).filter(UserBuylist.user_id == user_id).all()
 
-            return [{"id": buylist.id, "name": buylist.name or "Unnamed Buylist"} for buylist in buylists]
+            return [buylist.to_dict() for buylist in buylists]
         except Exception as e:
             logger.error(f"Error fetching buylists: {str(e)}")
             raise
 
     @staticmethod
-    def get_top_buylists(user_id, limit=3):
-        """Get the top 'limit' buylists for a specific user, sorted by most recently updated."""
+    def get_top_buylists(user_id):
+        """Get the top buylists for a specific user, sorted by most recently updated."""
         try:
             buylists = (
                 db.session.query(UserBuylist.id, UserBuylist.name)
                 .filter(UserBuylist.user_id == user_id)
                 .order_by(UserBuylist.updated_at.desc())
-                .limit(limit)
+                .limit(3)
                 .all()
             )
 
@@ -965,24 +966,6 @@ class CardService:
         except Exception as e:
             logger.error(f"Error deleting card '{card_name}' from buylist ID {id}: {str(e)}")
             return False
-
-    # @staticmethod
-    # def get_buylist_by_id(buylist_id):
-    #     """Get a saved buylist by ID."""
-    #     try:
-    #         return UserBuylistCard.query.get(buylist_id)
-    #     except Exception as e:
-    #         logger.error(f"Error fetching buylist: {str(e)}")
-    #         raise
-
-    # @staticmethod
-    # def get_buylist_by_name(buylist_name):
-    #     """Get a saved buylist by name."""
-    #     try:
-    #         return UserBuylist.query.filter_by(name=buylist_name).all()
-    #     except Exception as e:
-    #         logger.error(f"Error fetching buylist: {str(e)}")
-    #         raise
 
     @staticmethod
     def get_buylist_cards_by_id(id):
@@ -1151,7 +1134,114 @@ class CardService:
         return errors
 
     @staticmethod
-    def generate_purchase_links(purchase_data):
+    def create_shopify_url_and_payload(site, card_names):
+        try:
+            # Format the payload
+            payload = [{"card": name, "quantity": 1} for name in card_names]
+            # URLs
+            api_url = ""
+            base_url = "https://api.binderpos.com/external/shopify/decklist"
+            alternate_url = "https://portal.binderpos.com/external/shopify/decklist"
+
+            # Determine the correct API URL based on site name
+            if hasattr(site, "api_url") and site.api_url:
+                if "kingdomtitans" in site.url:
+                    api_url = alternate_url + f"?storeUrl={site.api_url}&type=mtg"
+                else:
+                    api_url = base_url + f"?storeUrl={site.api_url}&type=mtg"
+
+            # Make the request
+            json_payload = json.dumps(payload)  # Convert list to JSON string
+            return api_url, json_payload
+        except Exception as e:
+            logger.error(f"Error creating Shopify request for {site.name}: {str(e)}")
+            return None
+
+    def create_f2f_url_and_payload(site, cards):
+        """
+        Generate the cart POST request payload for FaceToFace (Shopify).
+        cards: list of dicts with each containing 'variant_id' and 'quantity'.
+        """
+        items = []
+        for card in cards:
+            variant_id = card.get("variant_id")  # <-- Make sure your scraping results store this!
+            if variant_id:
+                items.append({"id": variant_id, "quantity": card.get("quantity", 1)})
+
+        payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
+        return "https://facetofacegames.com/cart/add.js", payload
+
+    def create_crystal_url_and_payload(site, cards):
+        """
+        Generate the cart POST request payload for FaceToFace (Shopify).
+        cards: list of dicts with each containing 'variant_id' and 'quantity'.
+        """
+        items = []
+        for card in cards:
+            variant_id = card.get("variant_id")  # <-- Make sure your scraping results store this!
+            if variant_id:
+                items.append({"id": variant_id, "quantity": card.get("quantity", 1)})
+
+        payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
+        return "https://facetofacegames.com/cart/add.js", payload
+
+    # @staticmethod
+    # def generate_search_links(purchase_data, active_sites):
+    #     results = []
+    #     try:
+    #         for store in purchase_data:
+    #             site_id = store.get("site_id")
+    #             cards = store.get("cards", [])
+
+    #             if not site_id or not cards:
+    #                 continue
+
+    #             site = active_sites.get(site_id)
+    #             if not site:
+    #                 continue
+
+    #             site_method = site.method.lower()
+    #             card_names = [card.get("name") for card in cards if card.get("name")]
+    #             base_url = f"{site.url.rstrip('/')}"
+    #             query = "+".join([name.replace(" ", "+") for name in card_names])
+
+    #             payload = None
+    #             request_headers = None
+
+    #             if site_method == "shopify":
+    #                 generated_search_url = f"{base_url}/products/multi_search?q={query}"
+
+    #             elif site_method == "f2f":
+    #                 generated_search_url = f"{base_url}/products/multi_search?q={query}"
+
+    #             elif site_method in ["crystal", "scrapper"]:
+    #                 generated_search_url = base_url
+    #                 payload, request_headers = generate_search_payload_crystal(site, card_names)
+
+    #             else:
+    #                 generated_search_url = None
+
+    #             if generated_search_url:
+    #                 results.append(
+    #                     {
+    #                         "site_name": site.name,
+    #                         "site_id": site_id,
+    #                         "method": site_method,
+    #                         "cards": cards,
+    #                         "card_count": len(cards),
+    #                         "generated_search_url": generated_search_url,
+    #                         "payload": payload,
+    #                         "request_headers": request_headers,
+    #                     }
+    #                 )
+
+    #     except Exception as e:
+    #         logger.error(f"Error generating search links: {str(e)}", exc_info=True)
+
+    #     return results
+
+    @staticmethod
+    def generate_purchase_links(purchase_data, active_sites):
         """
         Generate properly formatted purchase URLs for cards grouped by site.
 
@@ -1163,14 +1253,14 @@ class CardService:
         """
         results = []
         try:
-            # Fetch all active sites from SiteService
-            active_sites = {site.id: site for site in SiteService.get_all_sites()}
 
             # Process each store's cards
             for store in purchase_data:
                 try:
                     site_id = store.get("site_id")
                     cards = store.get("cards", [])
+
+                    card_names = [card.get("name", "") for card in cards if card.get("name")]
 
                     if not site_id:
                         logger.warning(f"Missing site_id in store data: {store}")
@@ -1190,6 +1280,7 @@ class CardService:
                     site_method = site.method.lower() if hasattr(site, "method") else ""
 
                     if site_method in ["crystal", "scrapper"]:
+                        # payload, request_headers = generate_search_payload_crystal(site, card_names)
                         payload = {
                             "authenticity_token": "Dwn7IuTOGRMC6ekxD8lNnJWrsg45BVs85YplhjuFzbM=",
                             "query": "\n".join(card.get("name", "") for card in cards if card.get("name")),
@@ -1197,10 +1288,20 @@ class CardService:
                         }
                         purchase_url = site.url
                     elif site_method == "shopify":
-                        card_names = [card.get("name", "") for card in cards if card.get("name")]
                         purchase_url, payload = CardService.create_shopify_url_and_payload(site, card_names)
-                    elif site_method == "hawk":
-                        purchase_url, payload = CardService.create_hawk_url_and_payload(site, cards)
+                    elif site_method == "f2f":
+
+                        # Prepare payload for this batch
+                        payload = {
+                            "pageSize": 0,
+                            # "sort": False,
+                            "filters": [
+                                {"field": "Card Name", "values": card_names},
+                                {"field": "in_stock", "values": ["1"]},
+                            ],
+                        }
+                        purchase_url = site.api_url
+
                     else:
                         logger.warning(f"Unsupported purchase method '{site_method}' for site ID {site_id}.")
                         continue
@@ -1231,59 +1332,67 @@ class CardService:
 
         return results
 
-    @staticmethod
-    def create_shopify_url_and_payload(site, card_names):
-        try:
-            # Format the payload
-            payload = [{"card": name, "quantity": 1} for name in card_names]
-            # URLs
-            api_url = ""
-            base_url = "https://api.binderpos.com/external/shopify/decklist"
-            alternate_url = "https://portal.binderpos.com/external/shopify/decklist"
+    # @staticmethod
+    # def create_crystal_purchase_link(site, cards):
+    #     parsed_url = urlparse(site.url)
+    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    #     purchase_url = f"{base_url}/api/v1/cart/line_items"
+    #     line_items = []
+    #     skipped_cards = []
 
-            # Determine the correct API URL based on site name
-            if hasattr(site, "api_url") and site.api_url:
-                if "kingdomtitans" in site.url:
-                    api_url = alternate_url + f"?storeUrl={site.api_url}&type=mtg"
-                else:
-                    api_url = base_url + f"?storeUrl={site.api_url}&type=mtg"
+    #     for card in cards:
+    #         variant_id = card.get("variant_id")
+    #         qty = card.get("quantity", 1)
 
-            # Make the request
-            json_payload = json.dumps(payload)  # Convert list to JSON string
-            return api_url, json_payload
-        except Exception as e:
-            logger.error(f"Error creating Shopify request for {site.name}: {str(e)}")
-            return None
+    #         if not variant_id:
+    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
+    #             skipped_cards.append(card.get("name"))
+    #             continue
+    #         line_items.append({"variant_id": int(variant_id), "qty": qty})
 
-    def create_hawk_url_and_payload(site, card_name):
-        try:
-            api_url = "https://essearchapi-na.hawksearch.com/api/v2/search"
-            # Format query based on card name type
-            if "//" in card_name:
-                # Handle double-faced cards
-                front, back = map(str.strip, card_name.split("//"))
-                query = f'card\\ name.text: "{front}" AND card\\ name\\ 2.text: "{back}"'
-            else:
-                # Handle regular cards including those with quotes or special characters
-                # Keep any existing quotes in the name
-                escaped_name = card_name.replace('"', '\\"')  # Escape any existing quotes
-                if '"' in card_name:
-                    # Card already has quotes, use as is
-                    query = f'card\\ name.text: "{escaped_name}"'
-                else:
-                    # Regular card name
-                    query = f'card\\ name.text: "{escaped_name}"'
+    #     payload = {"line_items": line_items}
+    #     return purchase_url, payload, skipped_cards
 
-            payload = {
-                "ClientData": {"VisitorId": str(uuid.uuid4())},
-                "ClientGuid": "30c874915d164f71bf6f84f594bf623f",
-                "FacetSelections": {"tab": ["Magic"], "child_inventory_level": ["1"]},
-                "query": query,
-                "SortBy": "score",
-            }
+    # @staticmethod
+    # def create_shopify_purchase_link(site, cards):
+    #     parsed_url = urlparse(site.url)
+    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    #     purchase_url = f"{base_url}/cart/add.js"
 
-            json_payload = json.dumps(payload)
-            return api_url, json_payload
-        except Exception as e:
-            logger.error(f"Error creating hawk request for {site.name}: {str(e)}")
-            return None
+    #     items = []
+    #     skipped_cards = []
+
+    #     for card in cards:
+    #         variant_id = card.get("variant_id")
+    #         qty = card.get("quantity", 1)
+
+    #         if not variant_id:
+    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
+    #             skipped_cards.append(card.get("name"))
+    #             continue
+    #         items.append({"id": variant_id, "quantity": qty})
+
+    #     payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
+    #     return purchase_url, payload, skipped_cards
+
+    # @staticmethod
+    # def create_f2f_purchase_link(site, cards):
+    #     parsed_url = urlparse(site.url)
+    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    #     purchase_url = f"{base_url}/cart/add.js"
+
+    #     items = []
+    #     skipped_cards = []
+
+    #     for card in cards:
+    #         variant_id = card.get("variant_id")
+    #         qty = card.get("quantity", 1)
+
+    #         if not variant_id:
+    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
+    #             skipped_cards.append(card.get("name"))
+    #             continue
+    #         items.append({"id": variant_id, "quantity": qty})
+
+    #     payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
+    #     return purchase_url, payload, skipped_cards

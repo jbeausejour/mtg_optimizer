@@ -78,6 +78,12 @@ const Results = ({ userId }) => {
       sorter: (a, b) => new Date(b.created_at) - new Date(a.created_at),
     },
     {
+      title: 'Buylist',
+      dataIndex: 'buylist_name',
+      key: 'buylist_name',
+      render: (text) => text || <Tag color="red">Unknown</Tag>,
+    },
+    {
       title: 'Stats',
       key: 'stats',
       render: (_, record) => (

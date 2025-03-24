@@ -100,6 +100,7 @@ class CardInSolution(BaseModel):
     version: str = Field(default="Standard")
     foil: bool = Field(default=False)
     language: str = "English"
+    variant_id: int
     site_id: Optional[int] = None
 
     class Config:

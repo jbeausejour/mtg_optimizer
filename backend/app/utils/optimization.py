@@ -102,6 +102,9 @@ class PurchaseOptimizer:
             except Exception as e:
                 logger.warning(f"Error normalizing qualities: {e}")
 
+        # min_quality_weight = QUALITY_WEIGHTS.get("DMG", 0)  # Use DMG instead of HP
+        # df = df[df["quality"].apply(lambda q: QUALITY_WEIGHTS[q] >= min_quality_weight)]
+
         return df
 
     def _validate_input_data(self):
@@ -245,7 +248,9 @@ class PurchaseOptimizer:
                     "unknown_qualities": list(error_collector.unknown_qualities),
                 }
                 formatted_summary = self.format_optimization_summary(final_result)
-                logger.info(f"Summary of optimization: \n{formatted_summary}")
+                logger.info(f"Summary of optimization:")
+                for item in formatted_summary:
+                    logger.info(item)
                 return final_result
             else:
                 logger.error("Optimization failed to produce valid results")
@@ -328,7 +333,7 @@ class PurchaseOptimizer:
                 f"Solutions Tried:    {len(iterations)}",
                 "",
                 "Quality Distribution:",
-                "-" * 30,
+                "-" * 50,
             ]
 
             if total_cards > 0:
@@ -341,12 +346,12 @@ class PurchaseOptimizer:
             # Add store distribution if available
             summary.append("")
             summary.append("Store Distribution")
-            summary.append("-" * 30)
+            summary.append("-" * 50)
             if isinstance(best_solution, dict) and "list_stores" in best_solution:
                 for store in best_solution["list_stores"].split(", "):
                     summary.append(store)
 
-            return "\n".join(summary)
+            return summary
 
         except Exception as e:
             logger.error(f"Error formatting optimization summary: {str(e)}", exc_info=True)
@@ -987,6 +992,9 @@ class PurchaseOptimizer:
                         total_card_nbr += quantity
                         store_usage[store] += 1
 
+                        if "variant_id" not in card_data or card_data.get("variant_id") is None:
+                            logger.warning(f"Card missing variant_id during optimization: {card} at {store}")
+
                         results.append(
                             {
                                 "site_name": store,
@@ -1000,6 +1008,7 @@ class PurchaseOptimizer:
                                 "quality": card_data["quality"],
                                 "quantity": int(quantity),
                                 "price": actual_price,
+                                "variant_id": card_data.get("variant_id"),
                             }
                         )
 

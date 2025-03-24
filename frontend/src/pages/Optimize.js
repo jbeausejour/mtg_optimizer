@@ -104,6 +104,7 @@ const Optimize = ({ userId }) => {
         min_store: minStore,
         find_min_store: findMinStore,
         min_age_seconds: minAge,  
+        buylist_id: selectedBuylist,  
         card_list: cards.map(card => ({
           name: card.name,
           quantity: card.quantity,
@@ -423,7 +424,7 @@ const Optimize = ({ userId }) => {
                       <Option value="all">All Platforms</Option>
                       <Option value="crystal">Crystal ({getMethodCounts().crystal || 0})</Option>
                       <Option value="shopify">Shopify ({getMethodCounts().shopify || 0})</Option>
-                      <Option value="hawk">Hawk ({getMethodCounts().hawk || 0})</Option>
+                      <Option value="f2f">F2F ({getMethodCounts().f2f || 0})</Option>
                     </Select>
                     <Select 
                       value={siteType} 

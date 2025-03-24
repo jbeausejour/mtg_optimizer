@@ -32,7 +32,8 @@ const BuylistManagement = ({ userId }) => {
   const [savedBuylists, setSavedBuylists] = useState([]);
   const [currentBuylistId, setCurrentBuylistId] = useState(initialBuylistId || null); 
   const [currentBuylistName, setCurrentBuylistName] = useState(initialBuylistName);
-
+  const [loadedBuylistName, setLoadedBuylistName] = useState("");
+  
   const [suggestions, setSuggestions] = useState([]);
   const [cardVersions, setCardVersions] = useState(null);
   const [sets, setSets] = useState([]);
@@ -56,10 +57,12 @@ const BuylistManagement = ({ userId }) => {
           if (initialBuylistId) {
             setCurrentBuylistId(initialBuylistId);
             setCurrentBuylistName(initialBuylistName);
+            setLoadedBuylistName(initialBuylistName);
           } else {
             const firstBuylist = response.data[0];
             setCurrentBuylistId(firstBuylist.id);
             setCurrentBuylistName(firstBuylist.name);
+            setLoadedBuylistName(firstBuylist.name);
           }
         }
       } catch (error) {
@@ -115,6 +118,7 @@ const BuylistManagement = ({ userId }) => {
         setCurrentBuylistId(response.data[0]?.id);
         console.log('currentBuylistId in fetchSavedBuylists:', currentBuylistId);
         setCurrentBuylistName(response.data[0]?.name);
+        setLoadedBuylistName(response.data[0]?.name);
       }
     } catch (error) {
       console.error('Debug: Failed to fetch saved buylists', error);
@@ -129,20 +133,28 @@ const BuylistManagement = ({ userId }) => {
       message.error('Buylist ID and name are required.');
       return;
     }
-
+  
     try {
-      await api.put(`/buylists/${currentBuylistId}/rename`, {
+      const response = await api.put(`/buylists/${currentBuylistId}/rename`, {
         name: currentBuylistName,
         user_id: userId
       });
-
+  
+      const updatedBuylist = response.data;
+  
+      // Update saved buylists in state:
+      setSavedBuylists(prev =>
+        prev.map(buylist =>
+          buylist.id === currentBuylistId ? { ...buylist, name: updatedBuylist.name } : buylist
+        )
+      );
+  
       message.success('Buylist name updated successfully.');
     } catch (error) {
       message.error('Failed to rename buylist.');
       console.error('Error renaming buylist:', error);
     }
   };
-
 
   // const handleLoadBuylist = async (buylistId) => {
   //   try {
@@ -389,7 +401,11 @@ const BuylistManagement = ({ userId }) => {
 
   const handleNewBuylist = async () => {
     setErrorCards([]);
-    const trimmedBuylistName = currentBuylistName.trim() || "Untitled Buylist";
+
+    const trimmedBuylistName = 
+      currentBuylistName.trim() !== loadedBuylistName.trim()
+          ? currentBuylistName.trim() || "Untitled Buylist"
+          : "Untitled Buylist";
 
     try {
       const response = await api.post("/buylists", {
@@ -398,10 +414,12 @@ const BuylistManagement = ({ userId }) => {
           cards: []
       });
 
+
       const newBuylist = response.data;
 
       setCurrentBuylistId(newBuylist.id);
       setCurrentBuylistName(newBuylist.name);
+      setLoadedBuylistName(newBuylist.name);
       setCards([]);
       setFilteredCards([]);
       setSearchText("");
@@ -439,7 +457,8 @@ const BuylistManagement = ({ userId }) => {
               
               if (currentBuylistId === buylistId) {
                   setCurrentBuylistId(null);
-                  setCurrentBuylistName("");
+                  setCurrentBuylistName("");                  
+                  setLoadedBuylistName("");
                   setCards([]);
               }
           } catch (error) {
@@ -630,6 +649,7 @@ const BuylistManagement = ({ userId }) => {
                   onClick={() => {
                     setCurrentBuylistId(item.id);
                     setCurrentBuylistName(item.name);
+                    setLoadedBuylistName(item.name);
                   }}
                   style={{ marginRight: 8 }}
                 >
@@ -642,7 +662,7 @@ const BuylistManagement = ({ userId }) => {
                   onClick={() => handleDeleteBuylist(item.id)}
                 >
                 </Button>
-                {item.name}
+                {item.name} {item.cards_count !== undefined ? `(${item.cards_count})` : ''}
               </List.Item>
             )}
           />

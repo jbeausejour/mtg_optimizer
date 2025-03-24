@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 import re
 import time
 from typing import Optional, Union
@@ -26,7 +27,7 @@ class MethodRateLimiter:
         return {
             "crystal": 6,  # moderately high, usually stable
             "scrapper": 6,  # similar to crystal
-            "hawk": 2,  # lower concurrency for Hawk API (sensitive to burst requests)
+            "f2f": 2,  # lower concurrency for f2f API (sensitive to burst requests)
             "shopify": 4,  # Shopify/Binder tends to throttle heavily, keep lower
         }.get(method, 4)
 
@@ -36,7 +37,7 @@ class MethodRateLimiter:
         return {
             "crystal": 1.5,  # ~1.5 req/sec is safe and stable
             "scrapper": 1.5,
-            "hawk": 0.35,  # 0.5 req/sec (1 request every 2 seconds) more reliable
+            "f2f": 0.35,  # 0.5 req/sec (1 request every 2 seconds) more reliable
             "shopify": 0.5,  # Shopify/Binder safe rate is around 1 req/sec
         }.get(method, 1.0)
 
@@ -145,11 +146,7 @@ class NetworkDriver:
         await self.close()
 
     async def post_request(
-        self,
-        url: str,
-        payload: Union[dict, str, list],
-        headers: dict = None,
-        site: any = None,
+        self, url: str, payload: Union[dict, str, list], headers: dict = None, site: any = None, use_json=False
     ) -> Optional[str]:
         """Enhanced POST request with detailed error tracking and Selenium fallback"""
         await self._ensure_session()
@@ -183,69 +180,71 @@ class NetworkDriver:
                     start_time = time.time()
                     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers) as session:
                         try:
-                            async with session.post(url, data=payload) as response:
-                                elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+                            if use_json:
+                                response = await session.post(url, json=payload, headers=headers, timeout=timeout)
+                            else:
+                                response = await session.post(url, data=payload, headers=headers, timeout=timeout)
 
-                                connection_info.update(
-                                    {
-                                        "status": response.status,
-                                        "elapsed_time": f"{elapsed_time:.2f}s",
-                                        "headers": dict(response.headers),
-                                    }
-                                )
+                            elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
 
-                                # Log extra connection details
-                                if hasattr(response, "connection") and response.connection:
-                                    if hasattr(response.connection, "transport") and response.connection.transport:
-                                        connection_info.update(
-                                            {
-                                                "peername": response.connection.transport.get_extra_info(
-                                                    "peername", "N/A"
-                                                ),
-                                                "ssl": bool(
-                                                    response.connection.transport.get_extra_info("ssl_object", None)
-                                                ),
-                                            }
-                                        )
+                            connection_info.update(
+                                {
+                                    "status": response.status,
+                                    "elapsed_time": f"{elapsed_time:.2f}s",
+                                    "headers": dict(response.headers),
+                                }
+                            )
 
-                                logger.debug(f"Connection details for {site.name}: {connection_info}")
-
-                                if response.status == 200:
-                                    if retry_count > 1:
-                                        logger.info(
-                                            f"Success posting to {site.name} after {retry_count} attempts in {elapsed_time} seconds"
-                                        )
-                                    else:
-                                        logger.info(f"Success posting to {site.name} in {elapsed_time} seconds")
-
-                                    return await response.text()
-
-                                elif response.status in (301, 302, 303, 307, 308):
-                                    redirect_url = response.headers.get("Location")
-                                    if redirect_url:
-                                        logger.info(f"Following redirect to {redirect_url}")
-                                        url = redirect_url
-                                        continue
-                                elif response.status == 404:
-                                    logger.error(f"URL not found: {url} (Took {elapsed_time} seconds)")
-                                    return None
-                                elif response.status == 401:
-                                    # logger.error(f"401 received, headers are: {headers_used}")
-                                    logger.error(f"Response 401 received, response are: {response}")
-                                    continue
-                                elif response.status == 429:
-                                    wait_time = int(response.headers.get("Retry-After", 60))
-                                    logger.warning(
-                                        f"Rate limited on {site.name}, waiting {wait_time}s (Took {elapsed_time} seconds)"
+                            # Log extra connection details
+                            if hasattr(response, "connection") and response.connection:
+                                if hasattr(response.connection, "transport") and response.connection.transport:
+                                    connection_info.update(
+                                        {
+                                            "peername": response.connection.transport.get_extra_info("peername", "N/A"),
+                                            "ssl": bool(
+                                                response.connection.transport.get_extra_info("ssl_object", None)
+                                            ),
+                                        }
                                     )
-                                    await asyncio.sleep(wait_time)
-                                    continue
+
+                            logger.debug(f"Connection details for {site.name}: {connection_info}")
+
+                            if response.status == 200:
+                                if retry_count > 1:
+                                    logger.info(
+                                        f"Success posting to {site.name} after {retry_count} attempts in {elapsed_time} seconds"
+                                    )
                                 else:
-                                    logger.error(
-                                        f"Error {response.status} from {site.name} (Attempt {retry_count}/{max_retries}) - Took {elapsed_time} seconds"
-                                    )
-                                    await asyncio.sleep(wait_time)
+                                    logger.info(f"Success posting to {site.name} in {elapsed_time} seconds")
+
+                                return await response.text()
+
+                            elif response.status in (301, 302, 303, 307, 308):
+                                redirect_url = response.headers.get("Location")
+                                if redirect_url:
+                                    logger.info(f"Following redirect to {redirect_url}")
+                                    url = redirect_url
                                     continue
+                            elif response.status == 404:
+                                logger.error(f"URL not found: {url} (Took {elapsed_time} seconds)")
+                                return None
+                            elif response.status == 401:
+                                # logger.error(f"401 received, headers are: {headers_used}")
+                                logger.error(f"Response 401 received, response are: {response}")
+                                continue
+                            elif response.status == 429:
+                                wait_time = int(response.headers.get("Retry-After", 60))
+                                logger.warning(
+                                    f"Rate limited on {site.name}, waiting {wait_time}s (Took {elapsed_time} seconds)"
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                logger.error(
+                                    f"Error {response.status} from {site.name} (Attempt {retry_count}/{max_retries}) - Took {elapsed_time} seconds"
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
 
                         except asyncio.TimeoutError:
                             elapsed_time = round(time.time() - start_time, 2)
@@ -277,118 +276,118 @@ class NetworkDriver:
 
         return None
 
-    async def post_request2(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
-        """Enhanced POST request with detailed error tracking and Selenium fallback"""
-        await self._ensure_session()
+    # async def post_request2(self, url: str, payload: Union[dict, str, list], headers: dict = None) -> Optional[str]:
+    #     """Enhanced POST request with detailed error tracking and Selenium fallback"""
+    #     await self._ensure_session()
 
-        max_retries = 5
-        retry_count = 0
-        backoff_factor = 1
-        wait_time = 1
+    #     max_retries = 5
+    #     retry_count = 0
+    #     backoff_factor = 1
+    #     wait_time = 1
 
-        while retry_count < max_retries:
-            connection_info = {
-                "attempt": retry_count + 1,
-                "max_retries": max_retries,
-            }  # Initialize with basic info
+    #     while retry_count < max_retries:
+    #         connection_info = {
+    #             "attempt": retry_count + 1,
+    #             "max_retries": max_retries,
+    #         }  # Initialize with basic info
 
-            try:
-                retry_count += 1
+    #         try:
+    #             retry_count += 1
 
-                # Enhanced timeout configuration
-                timeout = aiohttp.ClientTimeout(total=50, connect=15, sock_read=50, sock_connect=10)
-                connection_info["timeout"] = str(timeout)
+    #             # Enhanced timeout configuration
+    #             timeout = aiohttp.ClientTimeout(total=50, connect=15, sock_read=50, sock_connect=10)
+    #             connection_info["timeout"] = str(timeout)
 
-                connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
+    #             connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
 
-                # Track the start time for detailed timing
-                start_time = asyncio.get_event_loop().time()
+    #             # Track the start time for detailed timing
+    #             start_time = asyncio.get_event_loop().time()
 
-                async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers) as session:
-                    try:
-                        async with session.post(url, data=payload) as response:
-                            elapsed_time = asyncio.get_event_loop().time() - start_time
+    #             async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers) as session:
+    #                 try:
+    #                     async with session.post(url, data=payload) as response:
+    #                         elapsed_time = asyncio.get_event_loop().time() - start_time
 
-                            # Update connection info with response data
-                            connection_info.update(
-                                {
-                                    "status": response.status,
-                                    "elapsed_time": f"{elapsed_time:.2f}s",
-                                    "headers": dict(response.headers),
-                                }
-                            )
+    #                         # Update connection info with response data
+    #                         connection_info.update(
+    #                             {
+    #                                 "status": response.status,
+    #                                 "elapsed_time": f"{elapsed_time:.2f}s",
+    #                                 "headers": dict(response.headers),
+    #                             }
+    #                         )
 
-                            # Add transport info if available
-                            if hasattr(response, "connection") and response.connection:
-                                if hasattr(response.connection, "transport") and response.connection.transport:
-                                    connection_info.update(
-                                        {
-                                            "peername": response.connection.transport.get_extra_info("peername", "N/A"),
-                                            "ssl": bool(
-                                                response.connection.transport.get_extra_info("ssl_object", None)
-                                            ),
-                                        }
-                                    )
+    #                         # Add transport info if available
+    #                         if hasattr(response, "connection") and response.connection:
+    #                             if hasattr(response.connection, "transport") and response.connection.transport:
+    #                                 connection_info.update(
+    #                                     {
+    #                                         "peername": response.connection.transport.get_extra_info("peername", "N/A"),
+    #                                         "ssl": bool(
+    #                                             response.connection.transport.get_extra_info("ssl_object", None)
+    #                                         ),
+    #                                     }
+    #                                 )
 
-                            # Log connection info for debugging
-                            logger.debug(f"Connection details for {url}: {connection_info}")
+    #                         # Log connection info for debugging
+    #                         logger.debug(f"Connection details for {url}: {connection_info}")
 
-                            if response.status == 200:
-                                if retry_count > 1:
-                                    logger.info(f"Success posting to {url} after {retry_count} attempts")
-                                return await response.text()
+    #                         if response.status == 200:
+    #                             if retry_count > 1:
+    #                                 logger.info(f"Success posting to {url} after {retry_count} attempts")
+    #                             return await response.text()
 
-                            elif response.status in (
-                                301,
-                                302,
-                                303,
-                                307,
-                                308,
-                            ):  # Handle redirects manually if needed
-                                redirect_url = response.headers.get("Location")
-                                if redirect_url:
-                                    logger.info(f"Following redirect to {redirect_url}")
-                                    url = redirect_url
-                                    continue
-                            elif response.status == 404:
-                                logger.error(f"URL not found: {url}")
-                                return None
-                            elif response.status == 429:
-                                wait_time = int(response.headers.get("Retry-After", 60))
-                                logger.warning(f"Rate limited on {url}, waiting {wait_time}s")
-                                await asyncio.sleep(wait_time)
-                                continue
-                            else:
-                                logger.error(f"Error response from {url} (attempt {retry_count}/{max_retries})")
-                                logger.error(f"Connection details: {connection_info}")
-                                await asyncio.sleep(wait_time)
-                                continue
+    #                         elif response.status in (
+    #                             301,
+    #                             302,
+    #                             303,
+    #                             307,
+    #                             308,
+    #                         ):  # Handle redirects manually if needed
+    #                             redirect_url = response.headers.get("Location")
+    #                             if redirect_url:
+    #                                 logger.info(f"Following redirect to {redirect_url}")
+    #                                 url = redirect_url
+    #                                 continue
+    #                         elif response.status == 404:
+    #                             logger.error(f"URL not found: {url}")
+    #                             return None
+    #                         elif response.status == 429:
+    #                             wait_time = int(response.headers.get("Retry-After", 60))
+    #                             logger.warning(f"Rate limited on {url}, waiting {wait_time}s")
+    #                             await asyncio.sleep(wait_time)
+    #                             continue
+    #                         else:
+    #                             logger.error(f"Error response from {url} (attempt {retry_count}/{max_retries})")
+    #                             logger.error(f"Connection details: {connection_info}")
+    #                             await asyncio.sleep(wait_time)
+    #                             continue
 
-                    except asyncio.TimeoutError:
-                        elapsed = asyncio.get_event_loop().time() - start_time
-                        logger.error(
-                            f"Timeout after {elapsed:.2f}s posting to {url} (attempt {retry_count}/{max_retries})"
-                        )
-                        connection_info["error"] = "Timeout"
-                        # logger.error(f"Request timeout: {connection_info}")
-                        await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
-                        continue
+    #                 except asyncio.TimeoutError:
+    #                     elapsed = asyncio.get_event_loop().time() - start_time
+    #                     logger.error(
+    #                         f"Timeout after {elapsed:.2f}s posting to {url} (attempt {retry_count}/{max_retries})"
+    #                     )
+    #                     connection_info["error"] = "Timeout"
+    #                     # logger.error(f"Request timeout: {connection_info}")
+    #                     await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+    #                     continue
 
-            except aiohttp.ClientError as e:
-                connection_info["error"] = f"Client error: {str(e)}"
-                logger.error(f"Connection failed: {connection_info}")
-                await asyncio.sleep(backoff_factor)
-                continue
+    #         except aiohttp.ClientError as e:
+    #             connection_info["error"] = f"Client error: {str(e)}"
+    #             logger.error(f"Connection failed: {connection_info}")
+    #             await asyncio.sleep(backoff_factor)
+    #             continue
 
-            except Exception as e:
-                connection_info["error"] = f"Unexpected error: {str(e)}"
-                logger.error(f"Request failed: {connection_info}")
-                await asyncio.sleep(backoff_factor)
-                continue
+    #         except Exception as e:
+    #             connection_info["error"] = f"Unexpected error: {str(e)}"
+    #             logger.error(f"Request failed: {connection_info}")
+    #             await asyncio.sleep(backoff_factor)
+    #             continue
 
-            backoff_factor *= 2
+    #         backoff_factor *= 2
 
-        return None
+    #     return None
 
     async def fetch_url(self, url: str) -> Optional[str]:
         """Enhanced fetch URL with detailed diagnostics and Selenium fallback"""
@@ -585,3 +584,6 @@ class NetworkDriver:
                 return match.group(1)
 
         return None
+
+
+network = NetworkDriver()

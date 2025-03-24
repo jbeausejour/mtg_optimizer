@@ -23,4 +23,5 @@ class UserBuylist(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "cards": [card.to_dict() for card in self.cards],  # Include associated cards
+            "cards_count": len(self.cards),  # Add this line
         }

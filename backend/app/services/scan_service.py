@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from app.extensions import db
 from app.models.scan import Scan, ScanResult
-from app.services.site_service import SiteService
+from app.models.site import Site
 from sqlalchemy import and_, func
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -37,10 +37,10 @@ class ScanService:
         return datetime.now(timezone.utc).replace(microsecond=0)
 
     @staticmethod
-    def create_scan():
+    def create_scan(buylist_id):
         """Create and persist a new scan"""
         try:
-            scan = Scan()
+            scan = Scan(buylist_id=buylist_id)
             db.session.add(scan)
             db.session.flush()  # Get the ID without committing
             scan_id = scan.id  # Store the ID
@@ -134,6 +134,7 @@ class ScanService:
                 quality=result.get("quality"),
                 language=result.get("language", "English"),
                 quantity=result.get("quantity", 0),
+                variant_id=result.get("variant_id"),
                 updated_at=ScanService._get_current_time(),
             )
             db.session.add(scan_result)
@@ -163,7 +164,8 @@ class ScanService:
 
         # Convert results to include site names
         if results:
-            sites = SiteService.get_sites_by_ids([r.site_id for r in results])
+            site_ids = [r.site_id for r in results]
+            sites = Site.query.filter(Site.id.in_(site_ids)).all()
             site_map = {site.id: site.name for site in sites}
             results_with_sites = [(*r[:-1], site_map.get(r.site_id, "Unknown Site")) for r in results]
             return latest_scan, results_with_sites
@@ -179,10 +181,8 @@ class ScanService:
         return scan
 
     @staticmethod
-    def get_all_scan_results(limit=5):
-        if limit == 0:
-            return Scan.query.order_by(Scan.created_at.desc()).all()
-        return Scan.query.order_by(Scan.created_at.desc()).limit(limit).all()
+    def get_all_scan_results():
+        return Scan.query.order_by(Scan.created_at.desc()).all()
 
     @staticmethod
     def delete_scan(scan_id):

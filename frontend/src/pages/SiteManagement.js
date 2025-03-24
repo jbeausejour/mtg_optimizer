@@ -234,7 +234,7 @@ const SiteManagement = ({ userId }) => {
     }
 
     const currentForm = formType === 'edit' ? editForm : addForm;
-    if (value !== 'shopify' && value !== 'hawk') {
+    if (value !== 'shopify' && value !== 'f2f') {
       currentForm.setFieldsValue({
         api_url: undefined
       });
@@ -269,16 +269,16 @@ const SiteManagement = ({ userId }) => {
           <Select onChange={(value) => handleMethodChange(value, form)}>
             <Select.Option value="crystal">Crystal</Select.Option>
             <Select.Option value="shopify">Shopify</Select.Option>
-            <Select.Option value="hawk">Hawk</Select.Option>
+            <Select.Option value="f2f">F2F</Select.Option>
             <Select.Option value="scrapper">Scrapper</Select.Option>
             <Select.Option value="other">Other</Select.Option>
           </Select>
         </Form.Item>
-        {(methodValue === 'shopify' || methodValue === 'hawk') && (
+        {(methodValue === 'shopify' || methodValue === 'f2f') && (
           <Form.Item
             name="api_url"
             label="API URL"
-            rules={[{ required: true, message: 'API URL is required for Shopify/Hawk sites' }]}
+            rules={[{ required: true, message: 'API URL is required for Shopify sites' }]}
           >
             <Input />
           </Form.Item>
@@ -328,7 +328,7 @@ const SiteManagement = ({ userId }) => {
       filters: [
         { text: 'Crystal', value: 'crystal' },
         { text: 'Shopify', value: 'shopify' },
-        { text: 'Hawk', value: 'hawk' },
+        { text: 'F2F', value: 'f2f' },
         { text: 'Scrapper', value: 'scrapper' },
         { text: 'Other', value: 'other' },
       ],
