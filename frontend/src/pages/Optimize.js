@@ -218,11 +218,11 @@ const Optimize = ({ userId }) => {
     return counts;
   };
 
-  useEffect(() => {
-    console.log('Current sites:', sites);
-    console.log('Site type:', siteType);
-    console.log('Filtered sites:', filteredSites);
-  }, [sites, siteType, selectedSites]);
+  // useEffect(() => {
+  //   console.log('Current sites:', sites);
+  //   console.log('Site type:', siteType);
+  //   console.log('Filtered sites:', filteredSites);
+  // }, [sites, siteType, selectedSites]);
 
   useEffect(() => {
     setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);

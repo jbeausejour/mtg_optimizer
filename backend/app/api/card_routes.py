@@ -1,6 +1,9 @@
 import logging
 import logging
-from flask import Blueprint, request, jsonify
+import re
+from urllib.parse import urlparse
+from flask import Blueprint, make_response, redirect, request, jsonify
+import requests
 
 from app.services.card_service import CardService
 from app.services.optimization_service import OptimizationService
@@ -9,7 +12,6 @@ from app.services.site_service import SiteService
 from app.tasks.optimization_tasks import celery_app, start_scraping_task
 from celery.backends.base import DisabledBackend
 from celery.result import AsyncResult
-import requests
 from flask import Blueprint, current_app, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ def get_buylists():
         # logger.info(f"Found {len(buylists)} buylists for user {user_id}: data={buylists}")
         return jsonify(buylists)
     except Exception as e:
-        current_app.logger.error(f"Error fetching buylists: {str(e)}")
+        logger.error(f"Error fetching buylists: {str(e)}")
         return jsonify({"error": "Failed to fetch buylists"}), 500
 
 
@@ -52,12 +54,12 @@ def create_buylist():
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
 
-        current_app.logger.info(f"Creating new buylist '{name}' for user {user_id}")
+        logger.info(f"Creating new buylist '{name}' for user {user_id}")
         new_buylist = CardService.create_buylist(name=name, user_id=user_id)
         return jsonify(new_buylist.to_dict()), 201
 
     except Exception as e:
-        current_app.logger.error(f"Error creating buylist: {str(e)}")
+        logger.error(f"Error creating buylist: {str(e)}")
         return jsonify({"error": "Failed to create buylist"}), 500
 
 
@@ -70,18 +72,18 @@ def load_buylist(id=None):
             return jsonify({"error": "User ID is required"}), 400
 
         if id:
-            current_app.logger.info(f"Loading buylist {id} for user {user_id}")
+            logger.info(f"Loading buylist {id} for user {user_id}")
             buylist_cards = CardService.get_buylist_cards_by_id(id)
-            current_app.logger.info(f"Loaded {len(buylist_cards)} cards for buylist {id}")
+            logger.info(f"Loaded {len(buylist_cards)} cards for buylist {id}")
         else:
-            current_app.logger.info(f"Loading all buylist cards for user {user_id}")
+            logger.info(f"Loading all buylist cards for user {user_id}")
             buylist_cards = CardService.get_all_user_buylist_cards(user_id)
-            current_app.logger.info(f"Loaded all {len(buylist_cards)} cards for user {user_id}")
+            logger.info(f"Loaded all {len(buylist_cards)} cards for user {user_id}")
 
         return jsonify([card.to_dict() for card in buylist_cards]), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error loading buylist: {str(e)}")
+        logger.error(f"Error loading buylist: {str(e)}")
         return jsonify({"error": "Failed to load buylist"}), 500
 
 
@@ -103,7 +105,7 @@ def delete_buylist(id):
         else:
             return jsonify({"error": "Buylist not found or could not be deleted"}), 404
     except Exception as e:
-        current_app.logger.error(f"Error deleting buylist {id}: {str(e)}")
+        logger.error(f"Error deleting buylist {id}: {str(e)}")
         return jsonify({"error": "Failed to delete buylist"}), 500
 
 
@@ -123,12 +125,12 @@ def add_cards_to_buylist(id):
         if not cards:
             return jsonify({"error": "No cards provided"}), 400
 
-        current_app.logger.info(f"Adding cards to buylist {id} for user {user_id}")
+        logger.info(f"Adding cards to buylist {id} for user {user_id}")
         updated_buylist = CardService.add_card_to_buylist(id, user_id, cards)
         return jsonify(updated_buylist.to_dict()), 201
 
     except Exception as e:
-        current_app.logger.error(f"Error adding cards to buylist {id}: {str(e)}")
+        logger.error(f"Error adding cards to buylist {id}: {str(e)}")
         return jsonify({"error": "Failed to add cards to buylist"}), 500
 
 
@@ -149,7 +151,7 @@ def rename_buylist(id):
         return jsonify(updated_buylist.to_dict()), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error renaming buylist {id}: {str(e)}")
+        logger.error(f"Error renaming buylist {id}: {str(e)}")
         return jsonify({"error": "Failed to rename buylist"}), 500
 
 
@@ -166,7 +168,7 @@ def get_top_buylists():
         logger.info(f"Found top buylists for user {user_id}: data={buylists}")
         return jsonify(buylists)
     except Exception as e:
-        current_app.logger.error(f"Error fetching top buylists: {str(e)}")
+        logger.error(f"Error fetching top buylists: {str(e)}")
         return jsonify({"error": "Failed to fetch top buylists"}), 500
 
 
@@ -206,12 +208,12 @@ def delete_cards():
             if deleted:
                 deleted_cards.append({"name": card_name, "quantity": quantity})
             else:
-                current_app.logger.warning(f"Card not found or could not be deleted: {card_name}")
+                logger.warning(f"Card not found or could not be deleted: {card_name}")
 
         return jsonify({"deletedCards": deleted_cards}), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error deleting cards: {str(e)}")
+        logger.error(f"Error deleting cards: {str(e)}")
         return jsonify({"error": "Failed to delete cards"}), 500
 
 
@@ -246,16 +248,16 @@ def import_cards_to_buylist():
                     buylist_id=id,
                     user_id=user_id,
                 )
-                current_app.logger.info(f"card {card_name} found")
+                logger.info(f"card {card_name} found")
                 added_cards.append({"name": card_name, "quantity": quantity})
             else:
-                current_app.logger.info(f"card {card_name} not found")
+                logger.info(f"card {card_name} not found")
                 not_found_cards.append({"name": card_name})
 
         return jsonify({"addedCards": added_cards, "notFoundCards": not_found_cards}), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error importing cards: {str(e)}")
+        logger.error(f"Error importing cards: {str(e)}")
         return jsonify({"error": "Failed to import cards"}), 500
 
 
@@ -270,18 +272,18 @@ def update_user_buylist_card(card_id):
         if not user_id or not id:
             return jsonify({"error": "User ID and Buylist ID are required"}), 400
 
-        current_app.logger.info(f"Received update request for card {card_id}: {data}")
+        logger.info(f"Received update request for card {card_id}: {data}")
 
         updated_card = CardService.update_user_buylist_card(card_id, data)
         if not updated_card:
             return jsonify({"error": "Card not found in user's buylist"}), 404
 
         result = updated_card.to_dict()
-        current_app.logger.info(f"Successfully updated card: {result}")
+        logger.info(f"Successfully updated card: {result}")
         return jsonify(result), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error updating card: {str(e)}")
+        logger.error(f"Error updating card: {str(e)}")
         return jsonify({"error": f"Failed to update card: {str(e)}"}), 500
 
 
@@ -298,9 +300,7 @@ def fetch_scryfall_card():
     language = request.args.get("language")
     version = request.args.get("version")
 
-    current_app.logger.info(
-        f"Fetching card with params: name={card_name}, set_code={set_code}, lang={language}, ver={version}"
-    )
+    logger.info(f"Fetching card with params: name={card_name}, set_code={set_code}, lang={language}, ver={version}")
 
     if not card_name:
         return jsonify({"error": "Missing parameter", "details": "Card name is required"}), 400
@@ -311,7 +311,7 @@ def fetch_scryfall_card():
             error_msg = f"Card not found: '{card_name}'"
             if set_code:
                 error_msg += f" in set '{set_code}'"
-            current_app.logger.warning(error_msg)
+            logger.warning(error_msg)
 
             return (
                 jsonify(
@@ -341,7 +341,7 @@ def fetch_scryfall_card():
 
     except Exception as e:
         error_msg = f"Error fetching card data: {str(e)}"
-        current_app.logger.error(error_msg)
+        logger.error(error_msg)
         return (
             jsonify(
                 {
@@ -397,7 +397,7 @@ def task_status(task_id):
 def start_scraping():
     """Starts the scraping task."""
     data = request.json
-    # current_app.logger.info("Received data: %s", data)
+    # logger.info("Received data: %s", data)
 
     site_ids = data.get("sites", [])
     card_list_from_frontend = data.get("card_list", [])
@@ -416,82 +416,6 @@ def start_scraping():
     return jsonify({"task_id": task.id}), 202
 
 
-# @card_routes.route("/proxy", methods=["POST"])
-# def handle_proxy_request():
-#     try:
-#         logger.info(f"Received proxy request: {request.json}")
-#         data = request.json
-
-#         # Parse the body if double-encoded, otherwise use data directly
-#         body_data = data
-#         if "body" in data:
-#             body_data = json.loads(data["body"])
-
-#         purchase_url = body_data.get("purchase_url")
-#         payload = body_data.get("payload")
-
-#         if not purchase_url or not payload:
-#             return jsonify({"status": "error", "message": "Missing purchase_url or payload"}), 400
-
-#         parsed_url = urlparse(purchase_url)
-#         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-
-#         headers = {
-#             "Content-Type": "application/json",
-#             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-#             "Referer": base_url,
-#             "Origin": base_url,
-#             "Accept": "application/json, text/javascript, */*; q=0.01",
-#             "Accept-Language": "en-US,en;q=0.9",
-#             "Accept-Encoding": "gzip, deflate, br",
-#         }
-
-#         # Forward browser cookies if present
-#         cookies = request.cookies
-#         if cookies:
-#             cookie_header = "; ".join([f"{key}={value}" for key, value in cookies.items()])
-#             headers["Cookie"] = cookie_header
-
-#         logger.info(f"Sending proxy request to {purchase_url} with forwarded cookies")
-#         response = requests.post(purchase_url, headers=headers, json=payload)
-#         logger.info(f"Received proxy response: {response.status_code}")
-#         response.raise_for_status()
-#         logger.info(f"Response content: {response.text}")
-
-#         try:
-#             content = response.json()
-#         except Exception:
-#             logger.info(f"Error parsing response content: {response.text}")
-#             content = response.text
-
-#         return jsonify({"status": "success", "response": content}), response.status_code
-
-#     except requests.exceptions.HTTPError as errh:
-#         logger.info(f"HTTP Error: {errh}")
-#         return (
-#             jsonify({"status": "error", "message": str(errh), "response": errh.response.text}),
-#             errh.response.status_code,
-#         )
-#     except Exception as e:
-#         logger.exception(f"Unexpected error: {str(e)}")
-#         return jsonify({"status": "error", "message": str(e)}), 500
-
-
-# @card_routes.route("/purchase_order_search", methods=["POST"])
-# def generate_multisearch_links():
-#     try:
-#         data = request.json
-#         purchase_data = data.get("purchase_data", [])
-
-#         active_sites = {site.id: site for site in SiteService.get_all_sites()}
-#         results = CardService.generate_search_links(purchase_data, active_sites)
-#         return jsonify(results), 200
-
-#     except Exception as e:
-#         logger.error(f"Error generating multisearch links: {str(e)}")
-#         return jsonify({"error": "Failed to generate search links"}), 500
-
-
 @card_routes.route("/purchase_order", methods=["POST"])
 def generate_purchase_links():
     try:
@@ -508,63 +432,6 @@ def generate_purchase_links():
         return jsonify({"error": "Failed to generate purchase links"}), 500
 
 
-# async def fill_cart_and_get_cart_url(purchase_url, payload, base_url):
-#     async with async_playwright() as p:
-#         browser = await p.chromium.launch(headless=True)
-#         context = await browser.new_context()
-#         page = await context.new_page()
-
-#         await page.goto(base_url)
-#         print(f"Opened base URL: {base_url}")
-
-#         post_response = await page.evaluate(
-#             """async ({ purchaseUrl, payloadData }) => {
-#                 const response = await fetch(purchaseUrl, {
-#                     method: 'POST',
-#                     headers: { 'Content-Type': 'application/json' },
-#                     body: JSON.stringify(payloadData),
-#                     credentials: 'include'
-#                 });
-#                 return await response.json();
-#             }""",
-#             {"purchaseUrl": purchase_url, "payloadData": payload},
-#         )
-
-#         print("Post response received:", post_response)
-
-#         cart_url = None
-#         if post_response.get("carts"):
-#             cart_link = post_response["carts"][0]["links"].get("cart")
-#             if cart_link:
-#                 cart_url = f"{base_url}{cart_link}"
-
-#         await browser.close()
-#         return cart_url
-
-
-# @card_routes.route("/headless_cart_fill", methods=["POST"])
-# def headless_cart_fill():
-#     try:
-#         data = request.json
-#         purchase_url = data.get("purchase_url")
-#         payload = data.get("payload")
-#         base_url = data.get("base_url")
-
-#         if not purchase_url or not payload or not base_url:
-#             return jsonify({"status": "error", "message": "Missing required parameters."}), 400
-
-#         cart_url = asyncio.run(fill_cart_and_get_cart_url(purchase_url, payload, base_url))
-
-#         if cart_url:
-#             return jsonify({"status": "success", "cart_url": cart_url}), 200
-#         else:
-#             return jsonify({"status": "error", "message": "Cart fill did not return a cart URL."}), 500
-
-#     except Exception as e:
-#         logger.exception("Error in headless_cart_fill")
-#         return jsonify({"status": "error", "message": str(e)}), 500
-
-
 ############################################################################################################
 # Set Operations
 ############################################################################################################
@@ -574,7 +441,7 @@ def get_sets():
         sets = CardService.fetch_all_sets()
         return jsonify(sets)
     except Exception as e:
-        current_app.logger.error(f"Error fetching sets: {str(e)}")
+        logger.error(f"Error fetching sets: {str(e)}")
         return jsonify({"error": "Failed to fetch sets"}), 500
 
 
@@ -591,7 +458,7 @@ def save_set_selection():
         # For now, just return success
         return jsonify({"message": f"Set {set_code} selected successfully"}), 200
     except Exception as e:
-        current_app.logger.error(f"Error saving set selection: {str(e)}")
+        logger.error(f"Error saving set selection: {str(e)}")
         return jsonify({"error": "Failed to save set selection"}), 500
 
 
@@ -607,7 +474,7 @@ def get_scan_results(scan_id):
 
         return jsonify(scan.to_dict())
     except Exception as e:
-        current_app.logger.error(f"Error fetching scan results: {str(e)}")
+        logger.error(f"Error fetching scan results: {str(e)}")
         return jsonify({"error": "Failed to fetch scan results"}), 500
 
 
@@ -627,7 +494,7 @@ def get_all_scans():
             ]
         )
     except Exception as e:
-        current_app.logger.error(f"Error fetching scans: {str(e)}")
+        logger.error(f"Error fetching scans: {str(e)}")
         return jsonify({"error": "Failed to fetch scans"}), 500
 
 
@@ -659,7 +526,7 @@ def delete_scan(scan_id):
         else:
             return jsonify({"error": "Scan not found"}), 404
     except Exception as e:
-        current_app.logger.error(f"Error deleting scan: {str(e)}")
+        logger.error(f"Error deleting scan: {str(e)}")
         return jsonify({"error": "Failed to delete scan"}), 500
 
 
@@ -679,7 +546,7 @@ def add_site():
         new_site = SiteService.add_site(data)
         return jsonify(new_site.to_dict()), 201
     except Exception as e:
-        current_app.logger.error(f"Error adding site: {str(e)}")
+        logger.error(f"Error adding site: {str(e)}")
         return jsonify({"error": "Failed to add site"}), 500
 
 
@@ -711,7 +578,7 @@ def update_site(site_id):
     except ValueError as ve:
         return jsonify({"status": "warning", "message": str(ve)}), 400
     except Exception as e:
-        current_app.logger.error(f"Unexpected error: {str(e)}")
+        logger.error(f"Unexpected error: {str(e)}")
         return jsonify({"status": "error", "message": "An unexpected error occurred while updating the site"}), 500
 
 

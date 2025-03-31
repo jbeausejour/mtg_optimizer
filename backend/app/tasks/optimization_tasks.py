@@ -91,7 +91,7 @@ class OptimizationTaskManager:
             logger.info("=============================")
             # Fix: Use string join method on the list of card names
             if fresh_cards:
-                logger.info(f"Fresh cards:\n - {'\n - '.join(fresh_cards)}")
+                logger.info("Fresh cards:\n - " + "\n - ".join(fresh_cards))
                 logger.info("=============================")
 
             # Get fresh results first
@@ -126,7 +126,7 @@ class OptimizationTaskManager:
                     return []
 
                 # Fix: Same correction for outdated cards
-                logger.info(f"Scraping outdated cards:\n - {'\n - '.join([card['name'] for card in outdated_cards])}")
+                logger.info("Scraping outdated cards:\n - " + "\n - ".join([card["name"] for card in outdated_cards]))
                 logger.info("=============================")
 
                 scraper = ExternalDataSynchronizer()

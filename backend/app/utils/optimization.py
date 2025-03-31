@@ -148,7 +148,7 @@ class PurchaseOptimizer:
             # logger.info(f"Available cards ({len(available_cards)}): {available_cards}")
 
             logger.info(f"Starting optimization with {len(card_names)} cards")
-            logger.info(f"Found {self.filtered_listings_df['site_name'].nunique()}/{config["max_store"]} unique sites")
+            logger.info(f"Found {self.filtered_listings_df['site_name'].nunique()}/{config['max_store']} unique sites")
             # logger.info(f"Unique sites: {self.filtered_listings_df['site_name'].unique().tolist()}")
 
             final_result = None

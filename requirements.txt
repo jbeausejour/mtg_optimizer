@@ -14,6 +14,11 @@ SQLAlchemy==2.0.38  # ORM for database interactions
 celery==5.4.0  # Distributed task queue framework
 redis==5.0.1  # Redis client (required by Celery and Flask-RQ2)
 
+# Add this line
+colorama==0.4.6
+gunicorn==20.1.0
+python-dotenv==1.0.0
+
 # Web scraping and data processing:
 requests==2.32.2  # HTTP requests library
 beautifulsoup4==4.12.3  # HTML and XML parser

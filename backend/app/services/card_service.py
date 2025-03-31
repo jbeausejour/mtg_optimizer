@@ -9,7 +9,7 @@ from datetime import datetime
 import redis
 import requests
 from app.constants.card_mappings import CardLanguage, CardVersion
-from app.extensions import db
+from app.extensions import db, redis_host
 from app.models.buylist import UserBuylist
 from app.models.UserBuylistCard import UserBuylistCard
 
@@ -28,7 +28,6 @@ SCRYFALL_API_NAMED_URL = f"{SCRYFALL_API_BASE}/cards/named"
 SCRYFALL_API_SEARCH_URL = f"{SCRYFALL_API_BASE}/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
-REDIS_HOST = "192.168.68.15"
 REDIS_PORT = 6379
 CACHE_EXPIRATION = 86400  # 24 hours (same as card names)
 REDIS_SETS_KEY = "scryfall_set_codes"
@@ -50,6 +49,7 @@ class CardService:
         "mkm": "Murders at Karlov Manor",
         "afr extras": "Adventures in the Forgotten Realms",
         "#045 - duel decks m14/m63/m64": "Duel Decks: Zendikar vs. Eldrazi",
+        "#045 - duel decks m14/63/64/67": "Duel Decks: Zendikar vs. Eldrazi",
         "duel decks m14/m63/m64": "Duel Decks: Zendikar vs. Eldrazi",
         "cbl bundle promo": "Commander Legends: Battle for Baldur's Gate",
         "treasure chest promo": "Treasure Chest",
@@ -83,7 +83,7 @@ class CardService:
     @staticmethod
     def get_redis_client():
         """Returns a Redis client instance."""
-        return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+        return redis.Redis(host=redis_host, port=REDIS_PORT, db=0, decode_responses=True)
 
     # ====== 🔹 Caching Scryfall Card Names 🔹 ======
     @staticmethod
@@ -1289,6 +1289,7 @@ class CardService:
                         purchase_url = site.url
                     elif site_method == "shopify":
                         purchase_url, payload = CardService.create_shopify_url_and_payload(site, card_names)
+                        purchase_url = site.url
                     elif site_method == "f2f":
 
                         # Prepare payload for this batch

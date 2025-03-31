@@ -38,20 +38,22 @@ def create_app(config_class=get_config()):
     with app.app_context():
         from app.api.admin_routes import admin_routes
         from app.api.card_routes import card_routes
+        from app.api.headless_cart_routes import headless_cart_routes
 
         app.register_blueprint(admin_routes, url_prefix="/api/v1")
         app.register_blueprint(card_routes, url_prefix="/api/v1")
+        app.register_blueprint(headless_cart_routes, url_prefix="/api/v1")
 
     # Setup logging with duplicate prevention
     # Get the app logger
-    app_logger = logging.getLogger("app")
-    if not app_logger.handlers:
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
         console_handler, file_handler = setup_logging("logs/flask_app.log")
-        app_logger.addHandler(console_handler)
-        app_logger.addHandler(file_handler)
-        app_logger.setLevel(logging.INFO)
-        app_logger.propagate = False
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+        root_logger.setLevel(logging.INFO)
+        root_logger.propagate = False
 
-    app_logger.info("MTG Optimizer startup")
+    root_logger.info("MTG Optimizer startup")
 
     return app
