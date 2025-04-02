@@ -60,7 +60,6 @@ class OptimizationTaskManager:
             "unknown_languages": set(),
             "unknown_qualities": set(),
         }
-        self.progress = 0
 
     def create_new_scan(self, buylist_id):
         """Create a new scan and store its ID in the instance"""
@@ -452,6 +451,9 @@ def start_scraping_task(
     """
     app = create_app()  # Create the Flask app
     with app.app_context():
+        # Ensure the celery task object has a progress attribute
+        if not hasattr(self, "progress"):
+            self.progress = 0
 
         def update_progress(status: str, progress: int):
             self.update_state(state="PROCESSING", meta={"status": status, "progress": progress})
@@ -473,12 +475,12 @@ def start_scraping_task(
                 config.min_store,
                 config.find_min_store,
             )
-            task_manager.progress = 10
+            self.progress = 10
             logger = task_manager.logger
 
             # Scraping phase (Parallelized)
             # progress = 10
-            update_progress("Scraping started", task_manager.progress)
+            update_progress("Scraping started", self.progress)
             scrape_start_time = time.time()
 
             # ✅ Run the async scraping function with the existing task_manager
@@ -495,9 +497,9 @@ def start_scraping_task(
 
             # Data preparation phase
 
-            task_manager.progress += 5
+            self.progress += 5
             # progress = 45 --> 50
-            update_progress("Preparing data", task_manager.progress)
+            update_progress("Preparing data", self.progress)
             data_prep_start_time = time.time()
             filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
             data_prep_elapsed_time = round(time.time() - data_prep_start_time, 2)
@@ -509,9 +511,9 @@ def start_scraping_task(
             logger.info(f"Data preparation completed in {data_prep_elapsed_time} seconds")
 
             # Optimization phase
-            task_manager.progress += 10
+            self.progress += 10
             # progress = 50 --> 60
-            update_progress("Running optimization", task_manager.progress)
+            update_progress("Running optimization", self.progress)
             optimization_start_time = time.time()
             optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df, self)
             optimization_elapsed_time = round(time.time() - optimization_start_time, 2)
@@ -524,7 +526,7 @@ def start_scraping_task(
             logger.info(f"Optimization completed in {optimization_elapsed_time} seconds")
 
             # Result processing
-            task_manager.progress += 10
+            self.progress += 10
             # progress = 70 --> 80
             update_progress("Processing results", 80)
             best_solution = optimization_result.get("best_solution", {})

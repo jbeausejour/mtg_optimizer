@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Table, AutoComplete, Modal, Button, message, Spin, Space, Popconfirm, Checkbox, List, Input, Select } from 'antd';
-import { EditOutlined, DeleteOutlined, EyeOutlined, SaveOutlined, FolderOpenOutlined, SearchOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined, EyeOutlined, SaveOutlined, FolderOpenOutlined, SearchOutlined, FilterOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import CardDetail from '../components/CardDetail';
 import api from '../utils/api';
-import { getStandardTableColumns } from '../utils/tableConfig';
+import { getStandardTableColumns, getColumnSearchProps } from '../utils/tableConfig';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import ImportCardsToBuylist from '../components/CardManagement/ImportCardsToBuylist';
 import debounce from 'lodash/debounce';
@@ -17,11 +17,12 @@ const BuylistManagement = ({ userId }) => {
   const location = useLocation();
   const initialBuylistName = location?.state?.buylistName || '';
   const initialBuylistId = location?.state?.buylistId;
-
   
   const [cards, setCards] = useState([]);
   const [filteredCards, setFilteredCards] = useState([]);
-  const [searchText, setSearchText] = useState('');
+  const [searchText, setSearchText] = useState({});
+  const [filteredInfo, setFilteredInfo] = useState({});
+  const [searchedColumn, setSearchedColumn] = useState('');
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modalMode, setModalMode] = useState('view');
   const [selectedCard, setSelectedCard] = useState(null);
@@ -40,8 +41,9 @@ const BuylistManagement = ({ userId }) => {
   const [cardText, setCardText] = useState('');
   const [errorCards, setErrorCards] = useState([]);
 
-  const [selectedCardIds, setSelectedCardIds] = useState(new Set()); // ✅ Store selected card IDs
-  const [selectAllChecked, setSelectAllChecked] = useState(false); // ✅ Track "Select All" state
+  const [selectedCardIds, setSelectedCardIds] = useState(new Set());
+  const [selectAllChecked, setSelectAllChecked] = useState(false);
+  const searchInput = useRef(null);
 
   // Fetch saved buylists and set the initial buylist
   useEffect(() => {
@@ -74,7 +76,6 @@ const BuylistManagement = ({ userId }) => {
     initializeBuylists();
   }, [userId, initialBuylistId, initialBuylistName]);
 
-
   // Load cards for the current buylist
   useEffect(() => {
     setErrorCards([]);
@@ -84,16 +85,16 @@ const BuylistManagement = ({ userId }) => {
       try {
         const response = await api.get(`/buylists/${buylistId}`, { params: { user_id: userId } });
 
-        // ✅ Ensure response.data is always an array
+        // Ensure response.data is always an array
         const cards = Array.isArray(response.data) ? response.data : [];
 
         setCards(cards);
         setFilteredCards(cards);
 
         if (cards.length > 0) {
-            message.success(`Buylist "${currentBuylistName}" loaded successfully.`);
+          message.success(`Buylist "${currentBuylistName}" loaded successfully.`);
         } else {
-            message.info(`Buylist "${currentBuylistName}" is empty.`);
+          message.info(`Buylist "${currentBuylistName}" is empty.`);
         }
       } catch (error) {
         console.error('Failed to load buylist:', error);
@@ -104,11 +105,76 @@ const BuylistManagement = ({ userId }) => {
     loadBuylist(currentBuylistId);
   }, [currentBuylistId]);
 
+  // Handle search text changes and filter cards
+  useEffect(() => {
+    const applyFilters = () => {
+      let filtered = [...cards];
+      
+      // Apply search text filtering
+      if (searchText.name) {
+        filtered = filtered.filter(card => 
+          card.name.toLowerCase().includes(searchText.name.toLowerCase())
+        );
+      }
+      
+      if (searchText.set_name) {
+        filtered = filtered.filter(card => 
+          card.set_name?.toLowerCase().includes(searchText.set_name.toLowerCase())
+        );
+      }
+      
+      // Apply other filters from filteredInfo
+      if (filteredInfo.quality?.length) {
+        filtered = filtered.filter(card => 
+          filteredInfo.quality.includes(card.quality)
+        );
+      }
+      
+      if (filteredInfo.language?.length) {
+        filtered = filtered.filter(card => 
+          filteredInfo.language.includes(card.language)
+        );
+      }
+      
+      setFilteredCards(filtered);
+    };
+    
+    applyFilters();
+  }, [cards, searchText, filteredInfo]);
+
+  // Console logs for debugging
   useEffect(() => {
     setErrorCards([]);
     console.log("Updated buylistId:", currentBuylistId);
     console.log("Updated buylistName:", currentBuylistName);
   }, [currentBuylistId, currentBuylistName]);
+
+  // Search handlers
+  const handleSearch = (selectedKeys, confirm, dataIndex) => {
+    confirm();
+    setSearchText({ ...searchText, [dataIndex]: selectedKeys[0] });
+    setSearchedColumn(dataIndex);
+  };
+
+  const handleReset = (clearFilters, dataIndex) => {
+    clearFilters();
+    setSearchText(prev => ({ ...prev, [dataIndex]: '' }));
+    setFilteredInfo(prev => ({ ...prev, [dataIndex]: null }));
+  };
+
+  const handleResetAllFilters = () => {
+    setFilteredInfo({});
+    setSearchText({});
+    setSearchedColumn('');
+    if (searchInput.current) {
+      Object.values(searchInput.current).forEach(input => {
+        if (input) {
+          input.value = '';
+        }
+      });
+    }
+    setFilteredCards(cards);
+  };
 
   const fetchSavedBuylists = async () => {
     try {
@@ -125,7 +191,6 @@ const BuylistManagement = ({ userId }) => {
       message.error('Failed to fetch saved buylists');
     }
   };
-
 
   const handleSaveBuylist = async () => {
     setErrorCards([]);
@@ -155,21 +220,6 @@ const BuylistManagement = ({ userId }) => {
       console.error('Error renaming buylist:', error);
     }
   };
-
-  // const handleLoadBuylist = async (buylistId) => {
-  //   try {
-  //     const response = await api.get(`/buylists/${buylistId}`, {
-  //       params: { user_id: userId }
-  //     });
-  //     setCards(response.data);
-  //     setFilteredCards(response.data);
-  //     setCurrentBuylistId(buylistId); 
-  //     setCurrentBuylistName(response.data[0]?.name || ''); 
-  //   } catch (error) {
-  //     console.error('Debug: Failed to load buylist', error);
-  //     message.error(`Failed to load buylist: ${error.message}`);
-  //   }
-  // };
   
   const handleCardImport = (addedCards) => {
     setErrorCards([]);
@@ -178,13 +228,6 @@ const BuylistManagement = ({ userId }) => {
       const uniqueCards = addedCards.filter(card => !existingNames.has(card.name.toLowerCase()));
 
       return [...prevCards, ...uniqueCards];
-    });
-
-    setFilteredCards((prevCards) => {
-        const existingNames = new Set(prevCards.map(card => card.name.toLowerCase()));
-        const uniqueCards = addedCards.filter(card => !existingNames.has(card.name.toLowerCase()));
-
-        return [...prevCards, ...uniqueCards];
     });
 
     message.success('Cards imported successfully.');
@@ -210,7 +253,7 @@ const BuylistManagement = ({ userId }) => {
         set: card.set || card.set_code || card.set_name,
         language: card.language || 'en',
         version: card.version || 'Normal',
-        user_id: userId // Add user ID
+        user_id: userId
       };
       console.log('Request params:', params);
 
@@ -243,7 +286,7 @@ const BuylistManagement = ({ userId }) => {
           set: card.set,
           language: card.language,
           version: card.version,
-          user_id: userId // Add user ID
+          user_id: userId
         }
       });
 
@@ -285,15 +328,15 @@ const BuylistManagement = ({ userId }) => {
     const updatedCard = {
       id: selectedCard.id,
       name: selectedPrinting.name,
-      set_code: selectedPrinting.set_code, // Ensuring consistency with backend field names
+      set_code: selectedPrinting.set_code,
       set_name: selectedPrinting.set_name,
       language: selectedPrinting.language || selectedCard.language,
       quantity: selectedCard.quantity,
       version: selectedPrinting.version || selectedCard.version,
       foil: selectedCard.foil,
-      buylist_id: selectedCard.buylist_id, // Ensure buylist_id is retained
-      user_id: userId // Include user ID for validation
-  };
+      buylist_id: selectedCard.buylist_id,
+      user_id: userId
+    };
     console.log('3. Updating card with:', updatedCard);
 
     try {
@@ -305,11 +348,6 @@ const BuylistManagement = ({ userId }) => {
       }
 
       setCards((prevCards) =>
-        prevCards.map((card) =>
-          card.id === response.data.id ? response.data : card
-        )
-      );
-      setFilteredCards((prevCards) =>
         prevCards.map((card) =>
           card.id === response.data.id ? response.data : card
         )
@@ -334,7 +372,7 @@ const BuylistManagement = ({ userId }) => {
 
     try {
         await api.delete("/buylist/cards", {
-            data: {  // ✅ Ensure DELETE request has body
+            data: {
                 id: currentBuylistId,
                 user_id: userId,
                 cards: selectedCards,
@@ -343,11 +381,10 @@ const BuylistManagement = ({ userId }) => {
 
         message.success(`${selectedCards.length} card(s) deleted successfully.`);
 
-        // ✅ Update state: Remove deleted cards from the UI
+        // Update state: Remove deleted cards from the UI
         setCards((prev) => prev.filter((card) => !selectedCards.some((c) => c.id === card.id)));
-        setFilteredCards((prev) => prev.filter((card) => !selectedCards.some((c) => c.id === card.id)));
 
-        // ✅ Clear selection after deletion
+        // Clear selection after deletion
         setSelectedCardIds(new Set());
         setSelectAllChecked(false);
     } catch (error) {
@@ -356,7 +393,7 @@ const BuylistManagement = ({ userId }) => {
     }
   };
 
-  // ✅ Handle individual checkbox selection
+  // Handle individual checkbox selection
   const handleCheckboxChange = (cardId) => {
     setErrorCards([]);
     setSelectedCardIds((prev) => {
@@ -366,25 +403,24 @@ const BuylistManagement = ({ userId }) => {
       } else {
           newSelection.add(cardId);
       }
-      setSelectAllChecked(newSelection.size === filteredCards.length); // Update select all checkbox state
+      setSelectAllChecked(newSelection.size === filteredCards.length);
       return newSelection;
     });
   };
 
-  // ✅ Handle "Select All" checkbox
+  // Handle "Select All" checkbox
   const handleSelectAll = () => {
     setErrorCards([]);
     if (selectAllChecked) {
-      setSelectedCardIds(new Set()); // Unselect all
+      setSelectedCardIds(new Set());
     } else {
-      setSelectedCardIds(new Set(filteredCards.map((card) => card.id))); // Select all
+      setSelectedCardIds(new Set(filteredCards.map((card) => card.id)));
     }
     setSelectAllChecked(!selectAllChecked);
   };
 
-  const handleSearch = (value) => {
+  const handleSuggestionSearch = (value) => {
     setErrorCards([]);
-    setSearchText(value);
     debouncedFetchSuggestions(value);
   };
 
@@ -414,7 +450,6 @@ const BuylistManagement = ({ userId }) => {
           cards: []
       });
 
-
       const newBuylist = response.data;
 
       setCurrentBuylistId(newBuylist.id);
@@ -422,11 +457,11 @@ const BuylistManagement = ({ userId }) => {
       setLoadedBuylistName(newBuylist.name);
       setCards([]);
       setFilteredCards([]);
-      setSearchText("");
+      setSearchText({});
       setErrorCards([]);
       setCardText("");
 
-      // ✅ Update Saved Buylists list immediately
+      // Update Saved Buylists list immediately
       setSavedBuylists((prevBuylists) => [
           ...prevBuylists,
           { id: newBuylist.id, name: newBuylist.name }
@@ -438,8 +473,6 @@ const BuylistManagement = ({ userId }) => {
       console.error("Error creating new buylist:", error);
     }
   };
-
-
 
   const handleDeleteBuylist = async (buylistId) => {
     setErrorCards([]);
@@ -512,11 +545,18 @@ const BuylistManagement = ({ userId }) => {
     };
     setCards([...cards, newCard]);
     setFilteredCards([...filteredCards, newCard]);
-    setSearchText('');
+    setSuggestions([]);
   };
 
-  const columns = [
-    ...getStandardTableColumns(handleViewCard),
+  // Create columns with the shared utility
+  const tableColumns = [
+    ...getStandardTableColumns(
+      handleViewCard, 
+      searchInput, 
+      filteredInfo, 
+      handleSearch, 
+      handleReset
+    ),
     {
       title: "Actions",
       key: "actions",
@@ -550,7 +590,7 @@ const BuylistManagement = ({ userId }) => {
         <Checkbox
           checked={selectAllChecked}
           onChange={(e) => {
-              e.stopPropagation(); // ✅ Prevent triggering card view
+              e.stopPropagation();
               handleSelectAll();
           }}
         />
@@ -575,16 +615,12 @@ const BuylistManagement = ({ userId }) => {
       <h1>Buylist Management</h1>
       <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 150px', minWidth: '150px', marginLeft: '16px' , marginRight: '16px' }}>
-          {currentBuylistId && <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Current buylist: {currentBuylistName}</h3>} {/* Indicate current buylist */}
+          {currentBuylistId && <h3 style={{ fontWeight: 'bold', marginTop: 0 }}>Current buylist: {currentBuylistName}</h3>}
           <AutoComplete
-            value={searchText}
             options={suggestions}
-            onSearch={(text) => {
-              setSearchText(text);
-              handleSearch(text);
-            }}
+            onSearch={handleSuggestionSearch}
             onSelect={handleSelectCard}
-            placeholder="Search cards..."
+            placeholder="Add card..."
             style={{ 
               marginBottom: 16,
               width: '100%'
@@ -596,10 +632,10 @@ const BuylistManagement = ({ userId }) => {
               buylistId={currentBuylistId}
               onCardsAdded={handleCardImport}
               userId={userId}
-              cardText={cardText}  // ✅ Pass state
-              setCardText={setCardText}  // ✅ Pass state updater
-              errorCards={errorCards}  // ✅ Pass state
-              setErrorCards={setErrorCards}  // ✅ Pass state updater
+              cardText={cardText}
+              setCardText={setCardText}
+              errorCards={errorCards}
+              setErrorCards={setErrorCards}
             />
           </div>
         </div>
@@ -661,6 +697,7 @@ const BuylistManagement = ({ userId }) => {
                   icon={<DeleteOutlined />}
                   onClick={() => handleDeleteBuylist(item.id)}
                 >
+                  Delete
                 </Button>
                 {item.name} {item.cards_count !== undefined ? `(${item.cards_count})` : ''}
               </List.Item>
@@ -669,32 +706,48 @@ const BuylistManagement = ({ userId }) => {
         </div>
       </div>
       <h3 style={{ fontWeight: 'bold', marginTop: 24 , marginLeft: '16px'}}>Buylist Cards</h3>
-        {/* ✅ Show delete button only when at least one checkbox is selected */}
+      <div style={{ marginBottom: 16, marginLeft: '16px' }}>
         {selectedCardIds.size > 0 && (
           <Button
             type="primary"
             danger
+            icon={<DeleteOutlined />}
             onClick={() => handleDeleteCards(filteredCards.filter((card) => selectedCardIds.has(card.id)))}
-            style={{ marginBottom: 16 }}
+            style={{ marginRight: 8 }}
           >
-              Delete Selected
+            Delete Selected ({selectedCardIds.size})
           </Button>
         )}
+        <Button
+          onClick={handleResetAllFilters}
+          icon={<ClearOutlined />}
+        >
+          Reset All Filters
+        </Button>
+      </div>
       <Table
         dataSource={filteredCards}
-        columns={columns}
+        columns={tableColumns}
         rowKey="id"
         className={`ant-table ${theme}`}
         onRow={(record) => ({
           onClick: (e) => {
             if ((!e.target.closest(".actions-column")) && 
                  !e.target.closest(".ant-checkbox-wrapper")) 
-            {  // ✅ Ignore clicks inside buttons
+            {  // Ignore clicks inside buttons
               handleViewCard(record);
             }
           },
         })}
-        pagination={false}
+        onChange={(pagination, filters) => {
+          setFilteredInfo(filters);
+        }}
+        pagination={{
+          pageSize: 20,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`
+        }}
         style={{ marginLeft: '16px', marginRight: '16px' }}
       />
       {selectedCard && (

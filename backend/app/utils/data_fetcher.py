@@ -227,7 +227,7 @@ class ExternalDataSynchronizer:
 
             await asyncio.gather(
                 *[
-                    process_group(method, method_sites, progress_increment, celery_taks=celery_task)
+                    process_group(method, method_sites, progress_increment, celery_task=celery_task)
                     for method, method_sites in sites_by_method.items()
                 ]
             )

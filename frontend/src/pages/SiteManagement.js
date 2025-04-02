@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Table, Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select, Popconfirm } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
-import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import api from '../utils/api';
+import { getColumnSearchProps } from '../utils/tableConfig';
 
 const { Title } = Typography;
 
@@ -48,52 +49,11 @@ const SiteManagement = ({ userId }) => {
 
   const handleReset = (clearFilters, dataIndex) => {
     clearFilters();
-    setSearchText({ ...searchText, [dataIndex]: '' });
+    setSearchText(prev => ({ ...prev, [dataIndex]: '' }));
+    setFilteredInfo(prev => ({ ...prev, [dataIndex]: null }));
   };
 
-  const getColumnSearchProps = (dataIndex) => ({
-    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-      <div style={{ padding: 8 }}>
-        <Input
-          ref={node => {
-            if (node && !searchInput.current) {
-              searchInput.current = {};
-            }
-            if (node) {
-              searchInput.current[dataIndex] = node;
-            }
-          }}
-          placeholder={`Search ${dataIndex}`}
-          value={selectedKeys[0]}
-          onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-          onPressEnter={() => handleSearch(selectedKeys, confirm, dataIndex)}
-          style={{ width: 188, marginBottom: 8, display: 'block' }}
-        />
-        <Space>
-          <Button
-            type="primary"
-            onClick={() => handleSearch(selectedKeys, confirm, dataIndex)}
-            icon={<SearchOutlined />}
-            size="small"
-            style={{ width: 90 }}
-          >
-            Search
-          </Button>
-          <Button onClick={() => handleReset(clearFilters, dataIndex)} size="small" style={{ width: 90 }}>
-            Reset
-          </Button>
-        </Space>
-      </div>
-    ),
-    filterIcon: filtered => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-    filteredValue: filteredInfo[dataIndex] || null,
-    onFilter: (value, record) => 
-      record[dataIndex]
-        ? record[dataIndex].toString().toLowerCase().includes(value.toLowerCase())
-        : ''
-  });
-
-  const handleResetFilters = () => {
+  const handleResetAllFilters = () => {
     setFilteredInfo({});
     setSearchText({});
     setSearchedColumn('');
@@ -106,7 +66,6 @@ const SiteManagement = ({ userId }) => {
     }
     fetchSites();
   };
-
 
   const getUniqueCountries = () => {
     return [
@@ -171,9 +130,8 @@ const SiteManagement = ({ userId }) => {
   const handleEditSubmit = async () => {
     try {
       const values = await editForm.validateFields();
-      const response = await api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }); // Add user ID
+      const response = await api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId });
       
-      // Handle different response statuses
       switch (response.data.status) {
         case 'success':
           message.success(response.data.message);
@@ -204,7 +162,7 @@ const SiteManagement = ({ userId }) => {
   const handleAddSubmit = async () => {
     try {
       const values = await addForm.validateFields();
-      const response = await api.post('/sites', { ...values}); 
+      const response = await api.post('/sites', { ...values }); 
       if (response.data) {
         setSites([...sites, response.data]);
         message.success('Site added successfully');
@@ -218,7 +176,7 @@ const SiteManagement = ({ userId }) => {
   const handleDelete = async (id) => {
     try {
       await api.delete(`/sites/${id}`, {
-        params: { user_id: userId } // Add user ID
+        params: { user_id: userId }
       });
       setSites(sites.filter(site => site.id !== id));
       message.success('Site deleted successfully');
@@ -226,6 +184,7 @@ const SiteManagement = ({ userId }) => {
       message.error('Failed to delete site');
     }
   };
+
   const handleMethodChange = (value, formType) => {
     if (formType === 'edit') {
       setEditMethodValue(value);
@@ -311,14 +270,13 @@ const SiteManagement = ({ userId }) => {
     );
   };
 
-
   const columns = [
     {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
       sorter: (a, b) => a.name.localeCompare(b.name),
-      ...getColumnSearchProps('name'),
+      ...getColumnSearchProps('name', searchInput, filteredInfo, 'Search site name'),
     },
     {
       title: 'Method',
@@ -376,7 +334,7 @@ const SiteManagement = ({ userId }) => {
       dataIndex: 'url',
       key: 'url',
       render: (text) => <a href={text} target="_blank" rel="noopener noreferrer">{text}</a>,
-      ...getColumnSearchProps('url'),
+      ...getColumnSearchProps('url', searchInput, filteredInfo, 'Search URL'),
     },
     {
       title: 'Status',
@@ -396,18 +354,7 @@ const SiteManagement = ({ userId }) => {
       sorter: (a, b) => Number(a.active) - Number(b.active),
     },
     {
-      title: (
-        <div>
-          Actions
-          <Button
-            size="small"
-            style={{ marginLeft: 8 }}
-            onClick={handleResetFilters}
-          >
-            Reset All Filters
-          </Button>
-        </div>
-      ),
+      title: 'Actions',
       key: 'actions',
       render: (_, record) => (
         <Space>
@@ -437,7 +384,7 @@ const SiteManagement = ({ userId }) => {
   return (
     <div className={`site-management section ${theme}`}>
       <Title level={2}>Site Management</Title>
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -445,13 +392,24 @@ const SiteManagement = ({ userId }) => {
         >
           Add Site
         </Button>
+        <Button
+          onClick={handleResetAllFilters}
+          icon={<ClearOutlined />}
+        >
+          Reset All Filters
+        </Button>
       </div>
       <Card>
         <Table
           dataSource={sites}
           columns={columns}
           rowKey="id"
-          pagination={false}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`
+          }}
           onChange={(pagination, filters) => {
             setFilteredInfo(filters);
           }}
