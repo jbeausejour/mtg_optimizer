@@ -129,7 +129,7 @@ class PurchaseOptimizer:
                 if not pd.to_numeric(df["quantity"], errors="coerce").notnull().all():
                     raise ValueError("Quantity column contains non-numeric values")
 
-    def run_optimization(self, card_names, config):
+    def run_optimization(self, card_names, config, celery_task=None):
         try:
             error_collector = ErrorCollector.get_instance()  # Initialize error_collector
             milp_result = None
@@ -155,6 +155,14 @@ class PurchaseOptimizer:
             best_solution_records = None
             if config["milp_strat"] or config["hybrid_strat"]:
                 logger.info("Running MILP optimization...")
+
+                if celery_task:
+                    celery_task.progress += 5
+                    # progress = 60 --> 65
+                    celery_task.update_state(
+                        state="PROCESSING",
+                        meta={"status": "Running MILP Optimization", "progress": celery_task.progress},
+                    )
                 best_solution, all_milp_solutions = self.run_milp_optimization()
                 self.filtered_listings_df = self._cleanup_temporary_columns(df=self.filtered_listings_df)
 
@@ -171,11 +179,6 @@ class PurchaseOptimizer:
                     milp_iterations = []
                     if all_milp_solutions:
                         for solution in all_milp_solutions:
-                            # iteration_copy = self._create_standardized_solution(
-                            #     solution['sorted_results_df'] if isinstance(solution['sorted_results_df'], pd.DataFrame)
-                            #     else solution['sorted_results_df']
-                            # )
-                            # formatted_iterations.append(iteration_copy)
                             milp_iterations.append(solution)
 
                     milp_result = {
@@ -196,6 +199,13 @@ class PurchaseOptimizer:
                 logger.info("Running NSGA-II optimization...")
                 milp_solution = None
 
+                if celery_task:
+                    celery_task.progress += 5
+                    # progress = 65 --> 70
+                    celery_task.update_state(
+                        state="PROCESSING",
+                        meta={"status": "Running NSGA-II Optimization", "progress": celery_task.progress},
+                    )
                 if config["hybrid_strat"] and milp_result and milp_result.get("best_solution"):
                     milp_solution = best_solution_records
                     # milp_solution = final_result["best_solution"]

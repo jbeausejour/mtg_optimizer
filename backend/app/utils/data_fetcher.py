@@ -156,12 +156,16 @@ class ExternalDataSynchronizer:
 
         return "unknown", None
 
-    async def scrape_multiple_sites(self, sites, card_names):
+    async def scrape_multiple_sites(self, sites, card_names, celery_task=None):
         """Enhanced scraping with proper Selenium integration"""
         scrape_stats = SiteScrapeStats()
         try:
             start_time = time.time()  # Start timing
             results = []
+            total_sites = len(sites)
+            # Define how much progress to add per site (e.g. 20% distributed over all sites)
+            # progress = 20 --> 40
+            progress_increment = 20 // total_sites if total_sites else 0
 
             # Group sites by their scraping method
             sites_by_method = defaultdict(list)
@@ -177,7 +181,7 @@ class ExternalDataSynchronizer:
 
             logger.info(f"Processing {len(sites)} sites, grouped by scraping method.")
 
-            async def process_group(method, method_sites):
+            async def process_group(method, method_sites, progress_increment, celery_task=None):
                 """Process a group of sites sharing the same method."""
                 limiter = MethodRateLimiter()
                 concurrency = limiter.get_concurrency(method)
@@ -206,13 +210,26 @@ class ExternalDataSynchronizer:
 
                 # Collect valid results
                 for result in scraped_data:
+                    if celery_task:
+                        celery_task.progress += progress_increment
+                        # progress = 20 --> 40
+                        celery_task.update_state(
+                            state="PROCESSING",
+                            meta={
+                                "status": f"Completed scraping site: {result.site_name}",
+                                "progress": celery_task.progress,
+                            },
+                        )
                     if isinstance(result, list):  # Ensure it's a valid list of results
                         results.extend(result)
 
                     # Process each method's sites concurrently
 
             await asyncio.gather(
-                *[process_group(method, method_sites) for method, method_sites in sites_by_method.items()]
+                *[
+                    process_group(method, method_sites, progress_increment, celery_taks=celery_task)
+                    for method, method_sites in sites_by_method.items()
+                ]
             )
 
             elapsed_time = round(time.time() - start_time, 2)

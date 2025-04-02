@@ -45,9 +45,17 @@ def update_settings():
 
 @admin_routes.route("/login", methods=["POST"])
 def login():
+    forwarded_user = request.headers.get("X-Forwarded-User")
+    if forwarded_user:
+        current_app.logger.info(f"Login via Authelia for user: {forwarded_user}")
+        user = User.query.filter_by(username=forwarded_user).first()
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+        access_token = create_access_token(identity=user.id)
+        return jsonify(access_token=access_token, userId=user.id), 200
+
     data = request.json
     current_app.logger.info(f"Login attempt for user: {data.get('username')}")
-
     user = User.query.filter_by(username=data["username"]).first()
     if user and user.check_password(data["password"]):
         access_token = create_access_token(identity=user.id)

@@ -44,7 +44,7 @@ const Optimize = ({ userId }) => {
       setIsOptimizing(true);
       const interval = setInterval(() => {
         checkTaskStatus(taskId);
-      }, 2000);
+      }, 5000);
       return () => clearInterval(interval);
     }
   }, [taskId]);

@@ -1292,7 +1292,7 @@ class CardService:
                         purchase_url = site.url
                     elif site_method == "f2f":
 
-                        # Prepare payload for this batch
+                        # Prepare payload for this batch //Not Used
                         payload = {
                             "pageSize": 0,
                             # "sort": False,
@@ -1301,7 +1301,7 @@ class CardService:
                                 {"field": "in_stock", "values": ["1"]},
                             ],
                         }
-                        purchase_url = site.api_url
+                        purchase_url = site.url
 
                     else:
                         logger.warning(f"Unsupported purchase method '{site_method}' for site ID {site_id}.")

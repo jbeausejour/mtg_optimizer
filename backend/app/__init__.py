@@ -38,11 +38,9 @@ def create_app(config_class=get_config()):
     with app.app_context():
         from app.api.admin_routes import admin_routes
         from app.api.card_routes import card_routes
-        from app.api.headless_cart_routes import headless_cart_routes
 
         app.register_blueprint(admin_routes, url_prefix="/api/v1")
         app.register_blueprint(card_routes, url_prefix="/api/v1")
-        app.register_blueprint(headless_cart_routes, url_prefix="/api/v1")
 
     # Setup logging with duplicate prevention
     # Get the app logger

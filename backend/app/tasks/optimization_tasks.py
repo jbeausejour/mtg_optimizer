@@ -60,6 +60,7 @@ class OptimizationTaskManager:
             "unknown_languages": set(),
             "unknown_qualities": set(),
         }
+        self.progress = 0
 
     def create_new_scan(self, buylist_id):
         """Create a new scan and store its ID in the instance"""
@@ -71,8 +72,14 @@ class OptimizationTaskManager:
             logger.error(f"Error in create_new_scan: {str(e)}")
             raise
 
-    async def handle_scraping(self, min_age_seconds, buylist_id):
+    async def handle_scraping(self, min_age_seconds, buylist_id, celery_task=None):
         try:
+            if celery_task:
+                celery_task.progress += 5
+                # progress = 15
+                celery_task.update_state(
+                    state="PROCESSING", meta={"status": "Creating new scan", "progress": celery_task.progress}
+                )
             if not self.current_scan_id:
                 self.create_new_scan(buylist_id)
 
@@ -119,7 +126,7 @@ class OptimizationTaskManager:
                     ]
                 return []  # ✅ Always return an empty list instead of None
 
-            async def scrape_outdated_data():
+            async def scrape_outdated_data(celery_task=None):
                 if not outdated_cards:
                     logger.info("All cards have fresh data, skipping scraping :)")
                     logger.info("=============================")
@@ -128,7 +135,13 @@ class OptimizationTaskManager:
                 # Fix: Same correction for outdated cards
                 logger.info("Scraping outdated cards:\n - " + "\n - ".join([card["name"] for card in outdated_cards]))
                 logger.info("=============================")
-
+                if celery_task:
+                    celery_task.progress += 5
+                    # progress = 20
+                    celery_task.update_state(
+                        state="PROCESSING",
+                        meta={"status": f"Scraping outdated cards", "progress": celery_task.progress},
+                    )
                 scraper = ExternalDataSynchronizer()
 
                 deduplicated_new_results = []
@@ -137,7 +150,10 @@ class OptimizationTaskManager:
                 # try:
                 scan_id = self.current_scan_id
 
-                new_results = await scraper.scrape_multiple_sites(self.sites, [card["name"] for card in outdated_cards])
+                # progress = 20 --> 40
+                new_results = await scraper.scrape_multiple_sites(
+                    self.sites, [card["name"] for card in outdated_cards], celery_task
+                )
                 for result in new_results:
                     combo_key = (
                         result["site_id"],
@@ -160,44 +176,18 @@ class OptimizationTaskManager:
                 return deduplicated_new_results
 
             # Run database fetching and web scraping in parallel
-            fresh_results, new_results = await asyncio.gather(fetch_fresh_data(), scrape_outdated_data())
+            fresh_results, new_results = await asyncio.gather(fetch_fresh_data(), scrape_outdated_data(celery_task))
 
+            if celery_task:
+                celery_task.progress = 45
+                # progress = 45
+                celery_task.update_state(
+                    state="PROCESSING", meta={"status": "Scraping complete", "progress": celery_task.progress}
+                )
             all_results = fresh_results + new_results
             logger.info(f"Total results collected: {len(all_results)}")
             return all_results
 
-            # new_results = loop.run_until_complete(
-            #     scraper.scrape_multiple_sites(
-            #         self.sites,
-            #         [card['name'] for card in outdated_cards]
-            #     )
-            # )
-            # Deduplicate new results before saving
-            # deduplicated_new_results = []
-            # if new_results:
-            #     for result in new_results:
-            #         combo_key = (
-            #             result['site_id'],
-            #             result['name'],
-            #             result['set_name'],
-            #             result['set_code'],
-            #             result['price'],
-            #             result['version'],
-            #             result['foil'],
-            #             result['quality'],
-            #             result['language']
-            #         )
-            #         if combo_key not in processed_combinations:
-            #             processed_combinations.add(combo_key)
-            #             deduplicated_new_results.append(result)
-            #             ScanService.save_scan_result(scan_id, result)
-
-            # Combine fresh and deduplicated new results
-            #     all_results = fresh_results + deduplicated_new_results
-            #     logger.info(f"Total unique card-site combinations in final results: {len(processed_combinations)}")
-            #     return all_results
-            # finally:
-            #     loop.close()
         except Exception as e:
             logger.exception(f"Error in handle_scraping: {str(e)}")
             raise  # Let the outer transaction handle rollback
@@ -368,7 +358,7 @@ class OptimizationTaskManager:
 
         return len(sites_stats)
 
-    def run_optimization(self, filtered_listings_df, user_wishlist_df):
+    def run_optimization(self, filtered_listings_df, user_wishlist_df, celery_task=None):
         """Run optimization with the prepared data"""
 
         logger.info("=== Starting Optimization Process ===")
@@ -398,7 +388,7 @@ class OptimizationTaskManager:
 
             optimizer = PurchaseOptimizer(filtered_listings_df, user_wishlist_df, config=config)
 
-            optimization_results = optimizer.run_optimization(self.card_names, config)
+            optimization_results = optimizer.run_optimization(self.card_names, config, celery_task)
 
             # Collect errors from ErrorCollector
             error_collector = ErrorCollector.get_instance()
@@ -466,9 +456,9 @@ def start_scraping_task(
         def update_progress(status: str, progress: int):
             self.update_state(state="PROCESSING", meta={"status": status, "progress": progress})
 
-        async def async_scraping_task(task_manager):
+        async def async_scraping_task(task_manager, celery_task):
             """Runs the scraping process asynchronously using the existing task_manager"""
-            return await task_manager.handle_scraping(min_age_seconds, buylist_id)
+            return await task_manager.handle_scraping(min_age_seconds, buylist_id, celery_task)
 
         try:
             # Start total time tracking
@@ -483,14 +473,18 @@ def start_scraping_task(
                 config.min_store,
                 config.find_min_store,
             )
+            task_manager.progress = 10
             logger = task_manager.logger
 
             # Scraping phase (Parallelized)
-            update_progress("Scraping started", 20)
+            # progress = 10
+            update_progress("Scraping started", task_manager.progress)
             scrape_start_time = time.time()
 
             # ✅ Run the async scraping function with the existing task_manager
-            scraping_results = asyncio.run(async_scraping_task(task_manager))
+
+            # progress = 10 --> 45
+            scraping_results = asyncio.run(async_scraping_task(task_manager, self))
 
             scrape_elapsed_time = round(time.time() - scrape_start_time, 2)
             if not scraping_results:
@@ -500,7 +494,10 @@ def start_scraping_task(
             logger.info(f"Scraping completed in {scrape_elapsed_time} seconds")
 
             # Data preparation phase
-            update_progress("Preparing data", 40)
+
+            task_manager.progress += 5
+            # progress = 45 --> 50
+            update_progress("Preparing data", task_manager.progress)
             data_prep_start_time = time.time()
             filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
             data_prep_elapsed_time = round(time.time() - data_prep_start_time, 2)
@@ -512,9 +509,11 @@ def start_scraping_task(
             logger.info(f"Data preparation completed in {data_prep_elapsed_time} seconds")
 
             # Optimization phase
-            update_progress("Running optimization", 60)
+            task_manager.progress += 10
+            # progress = 50 --> 60
+            update_progress("Running optimization", task_manager.progress)
             optimization_start_time = time.time()
-            optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df)
+            optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df, self)
             optimization_elapsed_time = round(time.time() - optimization_start_time, 2)
 
             if not optimization_result or optimization_result.get("status") != "success":
@@ -525,6 +524,8 @@ def start_scraping_task(
             logger.info(f"Optimization completed in {optimization_elapsed_time} seconds")
 
             # Result processing
+            task_manager.progress += 10
+            # progress = 70 --> 80
             update_progress("Processing results", 80)
             best_solution = optimization_result.get("best_solution", {})
             iterations = optimization_result.get("iterations", [])

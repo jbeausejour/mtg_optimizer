@@ -245,6 +245,55 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
       setError(`Error adding items to ${store.site_name}: ${err.message}`);
       return false;
     }
+  };
+
+  // URL-based approach for Shopify cart
+  const handleF2FCart = async (store) => {
+    try {
+      setStoreStatus(prev => ({...prev, [store.site_name]: 'processing'}));
+      console.log(`🛒 Processing F2F cart for: ${store.site_name}`);
+      
+      // Extract base URL
+      const parsedUrl = new URL(store.purchase_url);
+      const baseUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+      console.log(`🔗 Base URL: ${baseUrl}`);
+      
+      // Create the cart URL with all items
+      let cartUrl = `${baseUrl}/cart/`;
+      
+      // Add each variant ID to the URL
+      store.cards.forEach((card, index) => {
+        // Format: {variant_id}:{quantity}
+        const quantity = card.quantity || 1;
+        cartUrl += `${index === 0 ? '' : ','}${card.variant_id}:${quantity}`;
+      });
+      
+      console.log(`🔗 Generated cart URL: ${cartUrl}`);
+      
+      // Show a notification
+      const notification = document.createElement('div');
+      notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background-color: #52c41a; color: white; padding: 15px; border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 10000; font-family: Arial, sans-serif;';
+      notification.textContent = `Opening ${store.site_name} cart with ${store.cards.length} items...`;
+      document.body.appendChild(notification);
+      
+      // // Open the cart URL in a new tab
+      window.open(cartUrl, '_blank');
+      
+      // Remove notification after 3 seconds
+      setTimeout(() => {
+        if (document.body.contains(notification)) {
+          document.body.removeChild(notification);
+        }
+      }, 3000);
+      
+      setStoreStatus(prev => ({...prev, [store.site_name]: 'success'}));
+      return true;
+    } catch (err) {
+      console.error(`💥 F2F cart error for ${store.site_name}:`, err);
+      setStoreStatus(prev => ({...prev, [store.site_name]: 'error'}));
+      setError(`Error adding items to ${store.site_name}: ${err.message}`);
+      return false;
+    }
   };  
 
   const handleBuyAll = async () => {
@@ -256,6 +305,8 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         purchaseData.map(store => {
           if (store.method === "shopify") {
             return handleShopifyCart(store);
+          } else if (store.method === "f2f") {
+            return handleF2FCart(store);
           } else {
             return submitStoreForm(store);
           }
@@ -429,6 +480,8 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
                             onClick={() => {
                               if (store.method === "shopify") {
                                 handleShopifyCart(store);
+                              } else if (store.method === "f2f") {
+                                handleF2FCart(store);
                               } else {
                                 submitStoreForm(store);
                               }

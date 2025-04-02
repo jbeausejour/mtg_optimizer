@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL,
+  withCredentials: true, // ensure cookies are sent along
 });
 
 api.interceptors.request.use(
