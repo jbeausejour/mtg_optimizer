@@ -6,7 +6,7 @@ from app.extensions import db
 from app.models.site import Site
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from bs4 import BeautifulSoup
-from app.utils.selenium_driver import network
+from app.utils.selenium_driver import get_network_driver
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 class SiteService:
 
     site_details_cache = {}
+
+    @property
+    def network(self):
+        """Lazy initialize the network driver when needed"""
+        if self._network is None:
+            self._network = get_network_driver()
+        return self._network
 
     @staticmethod
     @contextmanager
@@ -104,6 +111,7 @@ class SiteService:
 
     @staticmethod
     async def init_site_details_cache(site):
+        network_driver = get_network_driver()
         try:
             if site.method == "f2f":
                 headers = {
@@ -120,7 +128,7 @@ class SiteService:
                 return None, headers
 
             search_url = site.url.rstrip("/")
-            initial_response = await network.fetch_url(search_url)
+            initial_response = await network_driver.fetch_url(search_url)
             if not initial_response or not initial_response.get("content"):
                 logger.error(f"Initial request failed for {site.name}")
                 return None
@@ -128,7 +136,7 @@ class SiteService:
             soup = BeautifulSoup(initial_response["content"], "html.parser")
             auth_token = None
             if site.method.lower() != "shopify":
-                auth_token = await network.get_auth_token(soup, site)
+                auth_token = await network_driver.get_auth_token(soup, site)
                 if not auth_token:
                     logger.info(f"Failed to get auth token for {site.name}")
 
@@ -169,15 +177,35 @@ class SiteService:
 
     @staticmethod
     def get_site_details_sync(site):
+        """Synchronous wrapper around async get_site_details"""
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(SiteService.get_site_details(site))
+            # Check if we're already in an event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in a loop, we need to be careful not to create another one
+                if loop.is_running():
+                    # Use Task.create_task if this is called from within an async context
+                    async def get_details():
+                        return await SiteService.get_site_details(site)
+
+                    return asyncio.create_task(get_details())
+                # If the loop exists but isn't running, we can use run_until_complete
+                return loop.run_until_complete(SiteService.get_site_details(site))
+            except RuntimeError:
+                # No running event loop, so create a new one
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(SiteService.get_site_details(site))
+                finally:
+                    loop.close()
+        except Exception as e:
+            logger.error(f"Error in get_site_details_sync: {str(e)}", exc_info=True)
+            # Return some sensible default if we failed to get site details
+            return None, {}
 
     @staticmethod
     async def get_site_details(site):
+        """Get site details, using cache if available"""
         if site.name in SiteService.site_details_cache:
             return SiteService.site_details_cache[site.name]
         logger.warning(f"Site details cache miss for {site.name}, initializing now.")

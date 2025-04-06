@@ -1,24 +1,59 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Row, Col, List, Button, Typography, Statistic, Space, Badge, Tag } from 'antd';
+import { Card, Row, Col, List, Button, Typography, Statistic, Space, Badge, Tag, Spin } from 'antd';
 import { ScanOutlined, ShoppingOutlined, FieldTimeOutlined, DollarOutlined, ShopOutlined } from '@ant-design/icons';
+import { useQuery } from 'react-query';
 import api from '../utils/api';
 import { useTheme } from '../utils/ThemeContext';
 import CardDetail from '../components/CardDetail';
 
-const { Title } = Typography;
+const { Title } = Typography; 
+
 
 const Dashboard = ({ userId }) => {
-  const [totalSites, setTotalSites] = useState(0);
-  const [totalBuylists, setTotalBuylists] = useState(0);
-  const [latestScans, setLatestScans] = useState([]);
-  const [latestOptimizations, setLatestOptimizations] = useState([]);
-  const [topBuylists, setTopBuylists] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [cardDetailVisible, setCardDetailVisible] = useState(false);
   const [selectedCard, setSelectedCard] = useState(null);
   const navigate = useNavigate();
   const { theme } = useTheme();
+
+  // Use React Query for caching and automatic refetching
+  const { data: sitesData } = useQuery(['sites', userId], 
+    () => api.get('/sites', { params: { user_id: userId } })
+      .then(res => res.data),
+    { staleTime: 300000 } // 5 minutes
+  );
+  
+  const { data: buylistsData } = useQuery(['buylists', userId], 
+    () => api.get('/buylists', { params: { user_id: userId } })
+      .then(res => res.data),
+    { staleTime: 300000 }
+  );
+  
+  const { data: scansData, isLoading: scansLoading } = useQuery(['scans', userId], 
+    () => api.get('/scans', { params: { user_id: userId, limit: 3 } })
+      .then(res => res.data),
+    { staleTime: 300000 }
+  );
+  
+  const { data: optimizationsData, isLoading: optimizationsLoading } = useQuery(['optimizations', userId], 
+    () => api.get('/results', { params: { user_id: userId, limit: 3 } })
+      .then(res => {
+        // Process data on server response instead of in render
+        const validOptimizations = res.data.filter(opt => opt.solutions?.length > 0);
+        return validOptimizations;
+      }),
+    { staleTime: 300000 }
+  );
+  
+  const { data: topBuylistsData } = useQuery(['topBuylists', userId], 
+    () => api.get('/buylists/top', { params: { user_id: userId } })
+      .then(res => res.data),
+    { staleTime: 300000 }
+  );
+
+  const loading = scansLoading || optimizationsLoading;
+  const totalSites = sitesData?.length || 0;
+  const totalBuylists = buylistsData?.length || 0;
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);
@@ -31,49 +66,14 @@ const Dashboard = ({ userId }) => {
     });
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [sitesRes, BuylistRes, scansRes, optimizationsRes, buylistsRes] = await Promise.all([
-          api.get('/sites', { params: { user_id: userId } }), // Add user ID
-          api.get('/buylists', { params: { user_id: userId } }), // Add user ID
-          api.get('/scans', { params: { user_id: userId } }), // Add user ID
-          api.get('/results', { params: { user_id: userId } }), // Add user ID
-          api.get('/buylists/top', { params: { user_id: userId} }) // Fetch top 3 buylists
-        ]);
-
-        setTotalSites(sitesRes.data.length);
-        setTotalBuylists(BuylistRes.data.length);
-        setLatestScans(scansRes.data);
-        setTopBuylists(buylistsRes.data); // Set top buylists
-        
-        // Simplify the filter condition
-        const validOptimizations = optimizationsRes.data.filter(opt => 
-          opt.solutions?.length > 0
-        );
-        
-        setLatestOptimizations(validOptimizations);
-        
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [userId]);
-
   const handleNavigation = (path, state) => {
     navigate(path, { state });
   };
 
-  const renderOptimizationSummary = (result) => {
-    //console.log('Processing result:', result);
+  // Memoize this function to avoid recalculating on every render
+  const renderOptimizationSummary = React.useCallback((result) => {
     const solutions = result.solutions;
     if (!solutions || solutions.length === 0) {
-        console.log('No valid solutions found');
         return null;
     }
     
@@ -85,7 +85,7 @@ const Dashboard = ({ userId }) => {
         totalQty: solution.total_qty || solution.nbr_card_in_solution || 0,
         missedCards: solution.missing_cards?.length || 0
     };
-};
+  }, []);
 
   const renderScanItem = (scan) => (
     <List.Item>
@@ -224,25 +224,29 @@ const Dashboard = ({ userId }) => {
             onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
-            <List
-              dataSource={topBuylists}
-              renderItem={item => (
-                <List.Item>
-                  <Button 
-                    type="link" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleNavigation('/buylist-management', { 
-                        buylistName: item.name,
-                        buylistId: item.id
-                      });
-                    }}
-                  >
-                    {item.name}
-                  </Button>
-                </List.Item>
-              )}
-            />
+            {topBuylistsData ? (
+              <List
+                dataSource={topBuylistsData}
+                renderItem={item => (
+                  <List.Item>
+                    <Button 
+                      type="link" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleNavigation('/buylist-management', { 
+                          buylistName: item.name,
+                          buylistId: item.id
+                        });
+                      }}
+                    >
+                      {item.name}
+                    </Button>
+                  </List.Item>
+                )}
+              />
+            ) : (
+              <Spin size="small" />
+            )}
           </Card>
         </Col>
         <Col span={12}>
@@ -254,12 +258,19 @@ const Dashboard = ({ userId }) => {
               </Space>
             } 
             extra={<Button type="link" onClick={() => handleNavigation('/price-tracker')}>View All</Button>}
+            loading={scansLoading}
           >
-            <List
-              dataSource={latestScans}
-              renderItem={renderScanItem}
-              split={false}
-            />
+            {scansData && scansData.length > 0 ? (
+              <List
+                dataSource={scansData}
+                renderItem={renderScanItem}
+                split={false}
+              />
+            ) : !scansLoading && (
+              <Typography.Text type="secondary">
+                No scans available
+              </Typography.Text>
+            )}
           </Card>
         </Col>
         <Col span={12}>
@@ -271,15 +282,15 @@ const Dashboard = ({ userId }) => {
               </Space>
             }
             extra={<Button type="link" onClick={() => handleNavigation('/results')}>View All</Button>}
-            loading={loading}
+            loading={optimizationsLoading}
           >
-            {latestOptimizations.length > 0 ? (
+            {optimizationsData && optimizationsData.length > 0 ? (
               <List
-                dataSource={latestOptimizations}
+                dataSource={optimizationsData}
                 renderItem={renderOptimizationItem}
                 split={false}
               />
-            ) : (
+            ) : !optimizationsLoading && (
               <Typography.Text type="secondary">
                 No optimizations available
               </Typography.Text>

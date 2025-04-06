@@ -161,7 +161,7 @@ class PurchaseOptimizer:
                     # progress = 60 --> 65
                     celery_task.update_state(
                         state="PROCESSING",
-                        meta={"status": "Running MILP Optimization", "progress": celery_task.progress},
+                        meta={"status": "Running MILP Optimization", "progress": f"{celery_task.progress:.2f}"},
                     )
                 best_solution, all_milp_solutions = self.run_milp_optimization()
                 self.filtered_listings_df = self._cleanup_temporary_columns(df=self.filtered_listings_df)
@@ -204,7 +204,7 @@ class PurchaseOptimizer:
                     # progress = 65 --> 70
                     celery_task.update_state(
                         state="PROCESSING",
-                        meta={"status": "Running NSGA-II Optimization", "progress": celery_task.progress},
+                        meta={"status": "Running NSGA-II Optimization", "progress": f"{celery_task.progress:.2f}"},
                     )
                 if config["hybrid_strat"] and milp_result and milp_result.get("best_solution"):
                     milp_solution = best_solution_records

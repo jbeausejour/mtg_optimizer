@@ -1,20 +1,25 @@
 {
   "name": "mtg_optimizer",
-  "version": "1.10.0",
+  "version": "1.20.0",
   "private": true,
   "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.26.10",
+    "eslint": "^9.0",
+    "eslint-plugin-import": "^2.31.0"
   },
   "dependencies": {
-    "@ant-design/icons": "^5.5.2",
-    "antd": "^5.22.7",
-    "axios": "^1.7.9",
+    "@ant-design/icons": "^6.0.0",
+    "antd": "^5.24.6",
+    "axios": "^1.8.4",
+    "express": "^5.1.0",
     "jwt-decode": "^4.0.0",
     "lodash": "^4.17.21",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^7.1.1",
-    "react-scripts": "^5.0.1",
-    "express": "4.21.2"
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-highlight-words": "^0.21.0",
+    "@tanstack/react-query": "5.71.10",
+    "react-router-dom": "^7.5.0",
+    "react-scripts": "^5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",

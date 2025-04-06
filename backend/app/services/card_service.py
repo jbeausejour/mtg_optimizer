@@ -200,19 +200,6 @@ class CardService:
             logger.error(f"Error fetching Scryfall set codes: {str(e)}")
             return {}
 
-    # @staticmethod
-    # def is_valid_set_name(set_name):
-    #     """Check if a given set name exists in the cached Scryfall set list."""
-    #     redis_client = CardService.get_redis_client()
-    #     set_codes = redis_client.get(REDIS_SETS_KEY)
-
-    #     if not set_codes:
-    #         set_codes = CardService.fetch_scryfall_set_codes()
-    #     else:
-    #         set_codes = json.loads(set_codes)
-
-    #     return set_name.lower() in set_codes
-
     # Set Operations
     @staticmethod
     def get_sets_data(force_refresh=False):
@@ -694,13 +681,6 @@ class CardService:
     def get_all_user_buylist_cards(user_id):
         return UserBuylistCard.query.filter_by(user_id=user_id).all()
 
-    # @staticmethod
-    # def get_user_buylist_card_by_id(card_id):
-    #     """
-    #     Get a specific card from the user's buylist by ID.
-    #     """
-    #     return UserBuylistCard.query.filter_by(id=card_id).first()
-
     @staticmethod
     def add_user_buylist_card(
         card_id=None,
@@ -766,7 +746,7 @@ class CardService:
             raise
 
     @staticmethod
-    def update_user_buylist_card(card_id, data):
+    def update_user_buylist_card(card_id, user_id, data):
         """Update a specific card in the user's buylist."""
         try:
             current_app.logger.info(f"Updating card {card_id} with data: {data}")
@@ -779,7 +759,7 @@ class CardService:
             if not buylist_id:
                 raise ValueError("Buylist ID is required")
 
-            buylist = UserBuylist.query.get(buylist_id)
+            buylist = UserBuylist.query.filter_by(id=buylist_id, user_id=user_id).first()
             if not buylist:
                 raise ValueError("Buylist does not exist")
 
@@ -796,6 +776,7 @@ class CardService:
             card.foil = data.get("foil", card.foil)
 
             db.session.commit()
+            db.session.refresh(card)
             return card
         except Exception as e:
             current_app.logger.error(f"Error updating card: {str(e)}")
@@ -854,11 +835,11 @@ class CardService:
         return buylist
 
     @staticmethod
-    def add_card_to_buylist(user_id, id, cards_data):
+    def add_card_to_buylist(id, user_id, cards_data):
         """
         Adds cards to a buylist, preventing duplicates.
         """
-        buylist = UserBuylist.query.get(id)
+        buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
         if not buylist:
             raise ValueError("Buylist does not exist.")
 
@@ -866,7 +847,7 @@ class CardService:
             raise ValueError("No cards provided.")
 
         try:
-            with CardService.transaction_context():
+            with CardService.transaction_context() as session:
                 existing_cards = {c.name.lower() for c in buylist.cards}
 
                 for card in cards_data:
@@ -885,10 +866,10 @@ class CardService:
                         version=card["version"],
                         foil=card["foil"],
                     )
-                    db.session.add(new_card)
+                    session.add(new_card)
 
-                db.session.commit()
-                return buylist
+            updated_buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
+            return updated_buylist
         except Exception as e:
             logger.error(f"Error adding cards to buylist: {str(e)}")
             raise

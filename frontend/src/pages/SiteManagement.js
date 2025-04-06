@@ -1,288 +1,243 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Table, Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select, Popconfirm } from 'antd';
-import { useTheme } from '../utils/ThemeContext';
+import React, { useState, useCallback, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
+import { useTheme } from '../utils/ThemeContext';
 import api from '../utils/api';
 import { getColumnSearchProps } from '../utils/tableConfig';
+import ColumnSelector from '../components/ColumnSelector';
+import EnhancedTable from '../components/EnhancedTable';
+import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 
 const { Title } = Typography;
+const { Option } = Select;
 
 const SiteManagement = ({ userId }) => {
-  const [sites, setSites] = useState([]);
-  const [loading, setLoading] = useState(true);
   const { theme } = useTheme();
+  const queryClient = useQueryClient();
   const [editingRecord, setEditingRecord] = useState(null);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [addForm] = Form.useForm();
+  
+  // Use enhanced table handler for consistent behavior
+  const {
+    filteredInfo,
+    sortedInfo,
+    selectedIds: selectedSiteIds,
+    setSelectedIds: setSelectedSiteIds,
+    searchInput,
+    visibleColumns,
+    handleTableChange,
+    handleSearch,
+    handleReset,
+    handleResetAllFilters,
+    handleColumnVisibilityChange
+  } = useEnhancedTableHandler({
+    visibleColumns: ['name', 'url', 'method', 'country', 'type', 'active', 'action']
+  }, 'site_management_table');
+
   const [editMethodValue, setEditMethodValue] = useState('');
   const [addMethodValue, setAddMethodValue] = useState('');
-  const [filteredInfo, setFilteredInfo] = useState({});
-  const [searchText, setSearchText] = useState({});
-  const [searchedColumn, setSearchedColumn] = useState('');
-  const searchInput = useRef(null);
-
-  useEffect(() => {
-    fetchSites();
-  }, []);
-
-  const fetchSites = async () => {
-    try {
-      const response = await api.get('/sites', {
-        params: { user_id: userId }
-      });
-      setSites(response.data);
-    } catch (error) {
-      console.error('Error fetching sites:', error);
-      message.error('Failed to fetch sites');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSearch = (selectedKeys, confirm, dataIndex) => {
-    confirm();
-    setSearchText({ ...searchText, [dataIndex]: selectedKeys[0] });
-    setSearchedColumn(dataIndex);
-  };
-
-  const handleReset = (clearFilters, dataIndex) => {
-    clearFilters();
-    setSearchText(prev => ({ ...prev, [dataIndex]: '' }));
-    setFilteredInfo(prev => ({ ...prev, [dataIndex]: null }));
-  };
-
-  const handleResetAllFilters = () => {
-    setFilteredInfo({});
-    setSearchText({});
-    setSearchedColumn('');
-    if (searchInput.current) {
-      Object.values(searchInput.current).forEach(input => {
-        if (input) {
-          input.value = '';
-        }
-      });
-    }
-    fetchSites();
-  };
-
-  const getUniqueCountries = () => {
-    return [
-      { text: 'Canada', value: 'Canada' },
-      { text: 'USA', value: 'USA' },
-      { text: 'Others', value: 'Others' }
-    ];
-  };
+  // React Query to fetch sites
+  const { data: sites = [], isLoading: loading } = useQuery(
+    ['sites', userId],
+    () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
+    { staleTime: 300000 }
+  );
   
-  const getTypeColor = (type) => {
-    switch (type) {
-      case 'Primary':
-        return 'green';
-      case 'Extended':
-        return 'blue';
-      case 'Marketplace':
-        return 'purple';
-      case 'NoInventory':
-        return 'orange';
-      case 'NotWorking':
-        return 'red';
-      default:
-        return 'default';
-    }
-  };
-
-  const getCountryColor = (country) => {
-    switch (country?.toLowerCase()) {
-      case 'usa':
-      case 'united states':
-        return 'blue';
-      case 'canada':
-        return 'green';
-      case 'france':
-        return 'cyan';
-      case 'germany':
-        return 'gold';
-      case 'japan':
-        return 'volcano';
-      case 'korea':
-        return 'geekblue';
-      case 'italy':
-        return 'red';
-      default:
-        return 'default';
-    }
-  };
-
-  const handleEdit = (record) => {
-    setEditingRecord(record);
-    setEditMethodValue(record.method);
-    editForm.setFieldsValue(record);
-    setIsEditModalVisible(true);
-  };
-
-  const handleAdd = () => {
-    addForm.resetFields();
-    setAddMethodValue('');
-    setIsAddModalVisible(true);
-  };
-
-  const handleEditSubmit = async () => {
-    try {
-      const values = await editForm.validateFields();
-      const response = await api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId });
-      
-      switch (response.data.status) {
-        case 'success':
-          message.success(response.data.message);
-          setSites(sites.map(site => 
-            site.id === editingRecord.id ? { ...site, ...values } : site
-          ));
-          setIsEditModalVisible(false);
-          break;
-        case 'info':
-          message.info(response.data.message);
-          setIsEditModalVisible(false);
-          break;
-        case 'warning':
-          message.warning(response.data.message);
-          break;
-        default:
-          message.error('Failed to update site');
+  // Mutation to add a site
+  const addSiteMutation = useMutation(
+    (values) => api.post('/sites', { ...values, user_id: userId }),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['sites', userId]);
+        message.success('Site added successfully');
+        setIsAddModalVisible(false);
+        addForm.resetFields();
+      },
+      onError: (error) => {
+        console.error('Error adding site:', error);
+        message.error('Failed to add site');
       }
-    } catch (error) {
-      if (error.response?.data?.message) {
-        message.warning(error.response.data.message);
-      } else {
+    }
+  );
+  
+  // Mutation to update a site
+  const updateSiteMutation = useMutation(
+    (values) => api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }),
+    {
+      onSuccess: (response) => {
+        if (!response.data) {
+          message.error('Failed to update site: No response data');
+          return;
+        }
+        switch (response.data.status) {
+          case 'success':
+            message.success(response.data.message || 'Site updated successfully');
+            queryClient.invalidateQueries(['sites', userId]);
+            setIsEditModalVisible(false);
+            break;
+          case 'info':
+            message.info(response.data.message || 'Site updated with some considerations');
+            setIsEditModalVisible(false);
+            break;
+          case 'warning':
+            message.warning(response.data.message || 'Site updated with warnings');
+            break;
+          default:
+            message.error('Failed to update site: Unknown status');
+        }
+      },
+      onError: (error) => {
+        console.error('Error updating site:', error);
         message.error('Failed to update site');
       }
     }
-  };
+  );
+  
+  // Mutation to delete a site
+  const deleteSiteMutation = useMutation(
+    (id) => api.delete(`/sites/${id}`, { params: { user_id: userId } }),
+    {
+      // Optimistic update - remove the item immediately from UI
+      onMutate: async (siteId) => {
+        // Cancel any outgoing refetches
+        await queryClient.cancelQueries(['sites', userId]);
+        
+        // Save the previous value
+        const previousSites = queryClient.getQueryData(['sites', userId]);
+        
+        // Optimistically update to the new value
+        queryClient.setQueryData(['sites', userId], old => 
+          old.filter(site => site.id !== siteId)
+        );
+        
+        // Return the previous value in case of rollback
+        return { previousSites };
+      },
+      onError: (err, siteId, context) => {
+        // Roll back to the previous value if there's an error
+        queryClient.setQueryData(['sites', userId], context.previousSites);
+        message.error('Failed to delete site.');
+      },
+      onSuccess: () => {
+        message.success('Site deleted successfully');
+      },
+      onSettled: () => {
+        // Always refetch after error or success
+        queryClient.invalidateQueries(['sites', userId]);
+      }
+    }
+  );
+  
+  
+  const handleEdit = useCallback((record, e) => {
+    if (e) e.stopPropagation();
+    setEditingRecord(record);
+    setEditMethodValue(record.method || '');
+    editForm.setFieldsValue(record);
+    setIsEditModalVisible(true);
+  }, [editForm]);
 
-  const handleAddSubmit = async () => {
+  const handleAdd = useCallback(() => {
+    addForm.resetFields();
+    setIsAddModalVisible(true);
+  }, [addForm]);
+  
+  const handleEditSubmit = useCallback(async () => {
+    try {
+      const values = await editForm.validateFields();
+      updateSiteMutation.mutate(values);
+    } catch (error) {
+      console.error('Form validation error:', error);
+    }
+  }, [editForm, updateSiteMutation]);
+  
+  const handleAddSubmit = useCallback(async () => {
     try {
       const values = await addForm.validateFields();
-      const response = await api.post('/sites', { ...values }); 
-      if (response.data) {
-        setSites([...sites, response.data]);
-        message.success('Site added successfully');
-        setIsAddModalVisible(false);
+      addSiteMutation.mutate(values);
+    } catch (error) {
+      console.error('Form validation error:', error);
+    }
+  }, [addForm, addSiteMutation]);
+  
+  const handleDelete = useCallback((id, e) => {
+    if (e) e.stopPropagation();
+    deleteSiteMutation.mutate(id);
+  }, [deleteSiteMutation]);
+  
+  // Handle bulk deletion
+  const handleBulkDelete = useCallback(() => {
+    if (selectedSiteIds.size === 0) {
+      message.warning('No sites selected for deletion.');
+      return;
+    }
+    
+    Modal.confirm({
+      title: `Are you sure you want to delete ${selectedSiteIds.size} selected site(s)?`,
+      content: 'This action cannot be undone.',
+      okText: 'Yes, delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          // Store count before clearing for message
+          const count = selectedSiteIds.size;
+          
+          // Create an array of deletion promises
+          const deletionPromises = Array.from(selectedSiteIds).map(id => 
+            deleteSiteMutation.mutateAsync(id)
+          );
+          
+          // Wait for all deletions to complete
+          await Promise.all(deletionPromises);
+          
+          // Clear selection and show success
+          setSelectedSiteIds(new Set());
+          message.success(`Successfully deleted ${count} site(s).`);
+          
+          // Invalidate after everything is done
+          queryClient.invalidateQueries(['sites', userId]);
+        } catch (error) {
+          console.error('Bulk deletion error:', error);
+          message.error('Failed to delete some or all selected sites.');
+          // Invalidate to get back to a consistent state
+          queryClient.invalidateQueries(['sites', userId]);
+        }
       }
-    } catch (error) {
-      message.error('Failed to add site');
-    }
-  };
+    });
+  }, [selectedSiteIds, deleteSiteMutation, setSelectedSiteIds, userId]);
 
-  const handleDelete = async (id) => {
-    try {
-      await api.delete(`/sites/${id}`, {
-        params: { user_id: userId }
-      });
-      setSites(sites.filter(site => site.id !== id));
-      message.success('Site deleted successfully');
-    } catch (error) {
-      message.error('Failed to delete site');
-    }
-  };
-
-  const handleMethodChange = (value, formType) => {
+  const handleMethodChange = useCallback((value, formType) => {
     if (formType === 'edit') {
       setEditMethodValue(value);
     } else {
       setAddMethodValue(value);
     }
-
-    const currentForm = formType === 'edit' ? editForm : addForm;
-    if (value !== 'shopify' && value !== 'f2f') {
-      currentForm.setFieldsValue({
-        api_url: undefined
-      });
-    }
-    currentForm.validateFields(['method']); 
-  };
-
-  const renderFormItems = (form) => {
-    const methodValue = form === 'edit' ? editMethodValue : addMethodValue;
-
-    return (
-      <>
-        <Form.Item
-          name="name"
-          label="Name"
-          rules={[{ required: true }]}
-        >
-          <Input />
-        </Form.Item>
-        <Form.Item
-          name="url"
-          label="URL"
-          rules={[{ required: true, type: 'url' }]}
-        >
-          <Input />
-        </Form.Item>
-        <Form.Item
-          name="method"
-          label="Method"
-          rules={[{ required: true }]}
-        >
-          <Select onChange={(value) => handleMethodChange(value, form)}>
-            <Select.Option value="crystal">Crystal</Select.Option>
-            <Select.Option value="shopify">Shopify</Select.Option>
-            <Select.Option value="f2f">F2F</Select.Option>
-            <Select.Option value="scrapper">Scrapper</Select.Option>
-            <Select.Option value="other">Other</Select.Option>
-          </Select>
-        </Form.Item>
-        {(methodValue === 'shopify' || methodValue === 'f2f') && (
-          <Form.Item
-            name="api_url"
-            label="API URL"
-            rules={[{ required: true, message: 'API URL is required for Shopify sites' }]}
-          >
-            <Input />
-          </Form.Item>
-        )}
-        <Form.Item name="country" label="Country" rules={[{ required: true }]}>
-          <Select>
-            <Select.Option value="USA">USA</Select.Option>
-            <Select.Option value="Canada">Canada</Select.Option>
-            <Select.Option value="Others">Others</Select.Option>
-          </Select>
-        </Form.Item>
-        <Form.Item name="type" label="Type" rules={[{ required: true }]}>
-          <Select>
-            <Select.Option value="Primary">Primary</Select.Option>
-            <Select.Option value="Extended">Extended</Select.Option>
-            <Select.Option value="Marketplace">Marketplace</Select.Option>
-            <Select.Option value="NoInventory">No Inventory</Select.Option>
-            <Select.Option value="NotWorking">Not Working</Select.Option>
-          </Select>
-        </Form.Item>
-        <Form.Item
-          name="active"
-          label="Active"
-          valuePropName="checked"
-          initialValue={form === 'add'}
-        >
-          <Switch />
-        </Form.Item>
-      </>
-    );
-  };
-
-  const columns = [
+  }, []);
+  // Column definitions for the sites table
+  const siteColumns = useMemo(() => [
     {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
       sorter: (a, b) => a.name.localeCompare(b.name),
-      ...getColumnSearchProps('name', searchInput, filteredInfo, 'Search site name'),
+      sortOrder: sortedInfo.columnKey === 'name' && sortedInfo.order,
+      ...getColumnSearchProps('name', searchInput, filteredInfo, 'Search name', handleSearch, handleReset),
+    },
+    {
+      title: 'URL',
+      dataIndex: 'url',
+      key: 'url',
+      ...getColumnSearchProps('url', searchInput, filteredInfo, 'Search URL', handleSearch, handleReset),
     },
     {
       title: 'Method',
       dataIndex: 'method',
       key: 'method',
-      sorter: (a, b) => a.method?.localeCompare(b.method),
       filters: [
         { text: 'Crystal', value: 'crystal' },
         { text: 'Shopify', value: 'shopify' },
@@ -297,21 +252,18 @@ const SiteManagement = ({ userId }) => {
       title: 'Country',
       dataIndex: 'country',
       key: 'country',
-      sorter: (a, b) => a.country?.localeCompare(b.country),
-      filters: getUniqueCountries(),
+      filters: [
+        { text: 'USA', value: 'USA' },
+        { text: 'Canada', value: 'Canada' },
+        { text: 'Others', value: 'Others' },
+      ],
       filteredValue: filteredInfo.country || null,
       onFilter: (value, record) => record.country === value,
-      render: (country) => (
-        <Tag color={getCountryColor(country)}>
-          {country || 'Unknown'}
-        </Tag>
-      ),
     },
     {
       title: 'Type',
       dataIndex: 'type',
       key: 'type',
-      sorter: (a, b) => a.type?.localeCompare(b.type),
       filters: [
         { text: 'Primary', value: 'Primary' },
         { text: 'Extended', value: 'Extended' },
@@ -321,122 +273,190 @@ const SiteManagement = ({ userId }) => {
       ],
       filteredValue: filteredInfo.type || null,
       onFilter: (value, record) => record.type === value,
-      render: (type) => (
-        <Tag color={getTypeColor(type)}>
-          {type === 'NoInventory' ? 'No Inventory' : 
-           type === 'NotWorking' ? 'Not Working' : 
-           type}
-        </Tag>
-      ),
     },
     {
-      title: 'URL',
-      dataIndex: 'url',
-      key: 'url',
-      render: (text) => <a href={text} target="_blank" rel="noopener noreferrer">{text}</a>,
-      ...getColumnSearchProps('url', searchInput, filteredInfo, 'Search URL'),
-    },
-    {
-      title: 'Status',
+      title: 'Active',
       dataIndex: 'active',
       key: 'active',
-      render: (active) => (
-        <Tag color={active ? 'green' : 'red'}>
-          {active ? 'Active' : 'Inactive'}
-        </Tag>
-      ),
+      render: (active) => active ? <Tag color="green">Yes</Tag> : <Tag color="red">No</Tag>,
       filters: [
         { text: 'Active', value: true },
         { text: 'Inactive', value: false },
       ],
       filteredValue: filteredInfo.active || null,
       onFilter: (value, record) => record.active === value,
-      sorter: (a, b) => Number(a.active) - Number(b.active),
     },
     {
-      title: 'Actions',
-      key: 'actions',
+      title: 'Action',
+      key: 'action',
       render: (_, record) => (
         <Space>
-          <Button 
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
+          <Button type="link" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); handleEdit(record, e); }}>
             Edit
           </Button>
-          <Popconfirm
-            title="Are you sure you want to delete this site?"
-            onConfirm={() => handleDelete(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Button danger icon={<DeleteOutlined />}>
-              Delete
-            </Button>
-          </Popconfirm>
+          <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => { e.stopPropagation(); handleDelete(record.id, e); }}>
+            Delete
+          </Button>
         </Space>
-      ),
-    },
-  ];
-
-  if (loading) return <Spin size="large" />;
-
+      )
+    }
+  ], [filteredInfo, sortedInfo, handleSearch, handleReset, handleEdit, handleDelete]);
+  
   return (
-    <div className={`site-management section ${theme}`}>
+    <div className={`site-management ${theme}`}>
       <Title level={2}>Site Management</Title>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={handleAdd}
-        >
+      <Space style={{ marginBottom: 16 }}>
+        <Button icon={<PlusOutlined />} onClick={handleAdd}>
           Add Site
         </Button>
-        <Button
-          onClick={handleResetAllFilters}
-          icon={<ClearOutlined />}
-        >
+        <ColumnSelector 
+          columns={siteColumns}
+          visibleColumns={visibleColumns}
+          onColumnToggle={handleColumnVisibilityChange}
+          persistKey="site_management_columns"
+        />
+        <Button icon={<ClearOutlined />} onClick={handleResetAllFilters}>
           Reset All Filters
         </Button>
-      </div>
-      <Card>
-        <Table
-          dataSource={sites}
-          columns={columns}
-          rowKey="id"
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            pageSizeOptions: ['10', '20', '50'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`
-          }}
-          onChange={(pagination, filters) => {
-            setFilteredInfo(filters);
-          }}
-        />
-      </Card>
-
+        {selectedSiteIds.size > 0 && (
+          <Button danger onClick={handleBulkDelete} icon={<DeleteOutlined />}>
+            Delete Selected ({selectedSiteIds.size})
+          </Button>
+        )}
+      </Space>
+      
+      <EnhancedTable
+        dataSource={sites}
+        columns={siteColumns.filter(col => visibleColumns.includes(col.key))}
+        rowKey="id"
+        loading={loading}
+        persistStateKey="site_management_table"
+        rowSelectionEnabled={true}
+        selectedIds={selectedSiteIds}
+        onSelectionChange={setSelectedSiteIds}
+        onRowClick={() => {}}
+        onChange={handleTableChange}
+      />
+      
       {/* Edit Modal */}
       <Modal
         title="Edit Site"
         open={isEditModalVisible}
-        onOk={handleEditSubmit}
         onCancel={() => setIsEditModalVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setIsEditModalVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="submit" type="primary" onClick={handleEditSubmit}>
+            Save
+          </Button>
+        ]}
       >
         <Form form={editForm} layout="vertical">
-          {renderFormItems('edit')}
+          <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Please enter a site name' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="url" label="URL" rules={[{ required: true, type: 'url', message: 'Please enter a valid URL' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="method" label="Method" rules={[{ required: true, message: 'Please select a method' }]}>
+            <Select>
+              <Option value="crystal">Crystal</Option>
+              <Option value="shopify">Shopify</Option>
+              <Option value="f2f">F2F</Option>
+              <Option value="scrapper">Scrapper</Option>
+              <Option value="other">Other</Option>
+            </Select>
+          </Form.Item>
+          {(editForm.getFieldValue('method') === 'shopify' || editForm.getFieldValue('method') === 'f2f') && (
+            <Form.Item
+              name="api_url"
+              label="API URL"
+              rules={[{ required: true, message: 'API URL is required for this method' }]}
+            >
+              <Input />
+            </Form.Item>
+          )}
+          <Form.Item name="country" label="Country" rules={[{ required: true, message: 'Please select a country' }]}>
+            <Select>
+              <Option value="USA">USA</Option>
+              <Option value="Canada">Canada</Option>
+              <Option value="Others">Others</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="type" label="Type" rules={[{ required: true, message: 'Please select a type' }]}>
+            <Select>
+              <Option value="Primary">Primary</Option>
+              <Option value="Extended">Extended</Option>
+              <Option value="Marketplace">Marketplace</Option>
+              <Option value="NoInventory">No Inventory</Option>
+              <Option value="NotWorking">Not Working</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="active" label="Active" valuePropName="checked">
+            <Switch />
+          </Form.Item>
         </Form>
       </Modal>
-
+      
       {/* Add Modal */}
       <Modal
-        title="Add New Site"
+        title="Add Site"
         open={isAddModalVisible}
-        onOk={handleAddSubmit}
         onCancel={() => setIsAddModalVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setIsAddModalVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="submit" type="primary" onClick={handleAddSubmit}>
+            Add
+          </Button>
+        ]}
       >
         <Form form={addForm} layout="vertical">
-          {renderFormItems('add')}
+          <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Please enter a site name' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="url" label="URL" rules={[{ required: true, type: 'url', message: 'Please enter a valid URL' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="method" label="Method" rules={[{ required: true, message: 'Please select a method' }]}>
+            <Select>
+              <Option value="crystal">Crystal</Option>
+              <Option value="shopify">Shopify</Option>
+              <Option value="f2f">F2F</Option>
+              <Option value="scrapper">Scrapper</Option>
+              <Option value="other">Other</Option>
+            </Select>
+          </Form.Item>
+          {(addForm.getFieldValue('method') === 'shopify' || addForm.getFieldValue('method') === 'f2f') && (
+            <Form.Item
+              name="api_url"
+              label="API URL"
+              rules={[{ required: true, message: 'API URL is required for this method' }]}
+            >
+              <Input />
+            </Form.Item>
+          )}
+          <Form.Item name="country" label="Country" rules={[{ required: true, message: 'Please select a country' }]}>
+            <Select>
+              <Option value="USA">USA</Option>
+              <Option value="Canada">Canada</Option>
+              <Option value="Others">Others</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="type" label="Type" rules={[{ required: true, message: 'Please select a type' }]}>
+            <Select>
+              <Option value="Primary">Primary</Option>
+              <Option value="Extended">Extended</Option>
+              <Option value="Marketplace">Marketplace</Option>
+              <Option value="NoInventory">No Inventory</Option>
+              <Option value="NotWorking">Not Working</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="active" label="Active" valuePropName="checked">
+            <Switch />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

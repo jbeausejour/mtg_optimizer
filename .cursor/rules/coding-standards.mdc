@@ -1,0 +1,91 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+#1. Programming Paradigms & Code Style
+
+-Use functional and declarative programming patterns; avoid classes. Prefer iteration and modularization over code duplication.
+-Use the function keyword for defining pure functions. Avoid unnecessary curly braces in simple conditionals for cleaner code.
+-Encourage modularity by dividing the code into functions, modules, and classes. Each component should have a single responsibility.
+-Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError). Follow established naming conventions (PEP8 for Python, standard React naming for JavaScript) to maintain consistency.
+-Apply consistent formatting with tools like Prettier and ESLint. Configure these tools with shared team configurations to ensure uniformity.
+-Prefer immutability; use const by default and avoid mutation of objects and arrays.
+
+#2. TypeScript & Static Typing
+
+-Use TypeScript for all code; prefer interfaces over types. Avoid enums; use const objects instead. Use functional components with TypeScript interfaces for props. Enable strict mode in TypeScript for better type safety.
+-Utilize static type checking and linting tools in pre-commit hooks.
+-Leverage utility types (Partial, Omit, Pick) to avoid code duplication in type definitions.
+-Create reusable type definitions for common patterns. Store them in dedicated type files for better organization.
+-Use branded types for values that need runtime validation (e.g., EmailAddress, UserId).
+
+#3. Error Handling & Input Validation
+
+-Handle errors and edge cases at the beginning of functions. Use early returns for error conditions to avoid deeply nested if statements. Place the happy path last for readability.
+-Validate all inputs. Ensure all user inputs are sanitized and validated to prevent injection attacks or unexpected behavior.
+-Implement graceful error handling. Return clear, actionable error messages without exposing sensitive system details.
+-Use libraries like Zod, Yup, or io-ts for runtime type validation, especially for external data.
+-Implement custom error classes to distinguish between different error types (e.g., NetworkError, ValidationError).
+-Log errors with appropriate context for debugging, including request IDs for API calls.
+
+#4. Testing & CI/CD
+
+-Ensure all tests pass before merging. Conduct thorough code reviews via pull requests; include clear PR descriptions with context. Implement comprehensive automated testing (unit, integration, e2e). Utilize Hardhat's testing and debugging features.
+-Implement a robust CI/CD pipeline for smart contract deployments.
+-Use test-driven development (TDD) approach when appropriate. Write tests before implementing features.
+-Maintain high test coverage, especially for critical business logic.
+-Implement feature flags for controlled rollouts of new functionality.
+-Use staging environments that mirror production for final testing before deployment.
+
+#5. Security
+
+-Implement robust authentication and authorization (OAuth 2.0, JWT). Always use HTTPS for external requests.
+-Regularly audit and update dependencies. Include dependency scanning as part of the CI/CD pipeline.
+-Follow the principle of least privilege for all system components and user roles.
+-Implement rate limiting for API endpoints to prevent abuse.
+-Use Content Security Policy (CSP) headers to mitigate XSS attacks.
+-Store sensitive configuration in environment variables or secure vaults, never in code.
+-Conduct regular security audits and penetration testing.
+
+#6. Performance & Optimization
+
+-Optimize data fetching and processing (e.g., use pagination, caching strategies) especially when dealing with web scraping and large datasets. Leverage asynchronous tasks for I/O-bound operations (like scraping) to maintain responsiveness in the application.
+-Implement proper indexing strategies for databases to optimize query performance.
+-Use lazy loading for components and resources that aren't immediately needed.
+-Implement memoization for expensive computations using techniques like React.memo or useMemo.
+-Monitor application performance with APM tools to identify bottlenecks.
+-Optimize bundle size using code splitting, tree shaking, and dynamic imports.
+
+#7. Documentation & Comments
+
+-Provide inline comments for non-obvious logic and document public functions/methods. Use docstrings in Python and JSDoc (or similar) in JavaScript.
+-Don't apologize for errors—fix them. If code is incomplete, add TODO comments instead.
+-Maintain up-to-date README files that include setup instructions, architecture overview, and contribution guidelines.
+-Document architectural decisions using ADRs (Architecture Decision Records).
+-Create and maintain API documentation using tools like Swagger/OpenAPI.
+-Include examples and use cases in documentation to demonstrate proper usage.
+
+#8. State Management & Data Flow
+
+-Use appropriate state management solutions based on application complexity (React Context for simple apps, Redux/MobX for complex ones).
+-Implement unidirectional data flow to make application behavior predictable.
+-Separate UI state from application state for better maintainability.
+-Normalize complex data structures to avoid redundancy and inconsistency.
+-Use selectors to derive computed state and avoid redundant calculations.
+
+#9. Code Review & Collaboration
+
+-Follow a consistent branch strategy (e.g., GitFlow, trunk-based development).
+-Keep pull requests focused and reasonably sized to facilitate thorough reviews.
+-Use conventional commit messages to automate versioning and release notes.
+-Implement pair programming for complex features or critical security components.
+-Conduct regular knowledge sharing sessions to distribute expertise across the team.
+
+# 10. Accessibility & Internationalization
+
+-Follow WCAG guidelines for web accessibility. Use semantic HTML elements.
+-Implement keyboard navigation and screen reader support.
+-Design with internationalization in mind. Externalize strings for translation.
+-Support right-to-left languages when relevant to target markets.
+-Test with assistive technologies to ensure accessibility compliance.

@@ -1,9 +1,6 @@
 import logging
 import logging
-import re
-from urllib.parse import urlparse
-from flask import Blueprint, make_response, redirect, request, jsonify
-import requests
+from flask import Blueprint, request, jsonify
 
 from app.services.card_service import CardService
 from app.services.optimization_service import OptimizationService
@@ -274,7 +271,7 @@ def update_user_buylist_card(card_id):
 
         logger.info(f"Received update request for card {card_id}: {data}")
 
-        updated_card = CardService.update_user_buylist_card(card_id, data)
+        updated_card = CardService.update_user_buylist_card(card_id, user_id, data)
         if not updated_card:
             return jsonify({"error": "Card not found in user's buylist"}), 404
 
@@ -373,7 +370,7 @@ def task_status(task_id):
         elif task.state == "FAILURE":
             response = {"state": task.state, "status": "Task failed", "error": str(task.info)}  # Get error info
         elif task.state == "SUCCESS":
-            response = {"state": task.state, "result": task.get()}  # Safely get the result
+            response = {"state": task.state, "result": task.get()}
         else:
             # Handle PROGRESS or other states
             response = {
@@ -382,7 +379,9 @@ def task_status(task_id):
                 "progress": task.info.get("progress", 0),
             }
 
-        # logger.info(f"Task {task_id} response: {response}")
+        logger.info(
+            f"Task {task_id} state: {task.state}, status: {task.info.get('status', '')}, progress: {task.info.get('progress', 0)}"
+        )
         return jsonify(response), 200
 
     except Exception as e:
@@ -580,6 +579,19 @@ def update_site(site_id):
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return jsonify({"status": "error", "message": "An unexpected error occurred while updating the site"}), 500
+
+
+@card_routes.route("/sites/<int:site_id>", methods=["DELETE"])
+def delete_site(site_id):
+    try:
+        deleted = SiteService.delete_site(site_id)
+        if deleted:
+            return jsonify({"status": "success", "message": "Site deleted successfully"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Site not found"}), 404
+    except Exception as e:
+        logger.error(f"Error deleting site: {str(e)}")
+        return jsonify({"status": "error", "message": "Failed to delete site"}), 500
 
 
 ############################################################################################################

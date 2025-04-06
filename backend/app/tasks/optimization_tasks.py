@@ -77,7 +77,7 @@ class OptimizationTaskManager:
                 celery_task.progress += 5
                 # progress = 15
                 celery_task.update_state(
-                    state="PROCESSING", meta={"status": "Creating new scan", "progress": celery_task.progress}
+                    state="PROCESSING", meta={"status": "Creating new scan", "progress": f"{celery_task.progress:.2f}"}
                 )
             if not self.current_scan_id:
                 self.create_new_scan(buylist_id)
@@ -139,7 +139,7 @@ class OptimizationTaskManager:
                     # progress = 20
                     celery_task.update_state(
                         state="PROCESSING",
-                        meta={"status": f"Scraping outdated cards", "progress": celery_task.progress},
+                        meta={"status": "Scraping outdated cards", "progress": f"{celery_task.progress:.2f}"},
                     )
                 scraper = ExternalDataSynchronizer()
 
@@ -460,7 +460,12 @@ def start_scraping_task(
 
         async def async_scraping_task(task_manager, celery_task):
             """Runs the scraping process asynchronously using the existing task_manager"""
-            return await task_manager.handle_scraping(min_age_seconds, buylist_id, celery_task)
+            # Create a new event loop for this task to ensure isolation
+            try:
+                return await task_manager.handle_scraping(min_age_seconds, buylist_id, celery_task)
+            except Exception as e:
+                logger.exception(f"Error in async_scraping_task: {str(e)}")
+                raise
 
         try:
             # Start total time tracking
@@ -486,7 +491,22 @@ def start_scraping_task(
             # ✅ Run the async scraping function with the existing task_manager
 
             # progress = 10 --> 45
-            scraping_results = asyncio.run(async_scraping_task(task_manager, self))
+            try:
+                # Create a new event loop for this task
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                # Run the scraping task in the new loop
+                scraping_results = loop.run_until_complete(async_scraping_task(task_manager, self))
+
+                # Clean up the loop
+                loop.close()
+            except Exception as e:
+                logger.exception(f"Failed to run scraping task: {str(e)}")
+                return handle_failure("Scraping task failed", task_manager)
+            finally:
+                # Reset event loop policy to default
+                asyncio.set_event_loop(None)
 
             scrape_elapsed_time = round(time.time() - scrape_start_time, 2)
             if not scraping_results:

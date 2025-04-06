@@ -1,95 +1,159 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Table, Card, Typography, Popconfirm, Button, Spin, Modal, message, Select } from 'antd';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { Card, Typography, Button, Spin, Modal, message, Space, Input, Checkbox } from 'antd';
+import { DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import { 
+  getStandardTableColumns, 
+  getColumnSearchProps, 
+  getNumericFilterProps,
+  getNumericRangeFilterProps
+} from '../utils/tableConfig';
 import api from '../utils/api';
-import CardDetail from '../components/CardDetail';
-import { getStandardTableColumns } from '../utils/tableConfig';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
-import { DeleteOutlined } from '@ant-design/icons'; // Add this line
+import EnhancedTable from '../components/EnhancedTable';
+import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
+import ColumnSelector from '../components/ColumnSelector';
+import { ExportOptions } from '../utils/exportUtils';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const PriceTracker = ({ userId }) => {
-  const [scans, setScans] = useState([]);
-  const [loading, setLoading] = useState(true);
   const { theme } = useTheme();
-
   const [selectedScan, setSelectedScan] = useState(null);
-  const [selectedScanDetails, setSelectedScanDetails] = useState(null);
-  const [isFetchingScanDetails, setIsFetchingScanDetails] = useState(false);
-
-
-  const [cardDetailVisible, setCardDetailVisible] = useState(false);
-  const [selectedCard, setSelectedCard] = useState(null);
   const [cardData, setCardData] = useState(null);
-
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [isCardLoading, setIsCardLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-
-  useEffect(() => {
-    fetchScans();
-  }, []);
-
-  useEffect(() => {
-    if (selectedScan?.id && !isFetchingScanDetails) {
-      setIsFetchingScanDetails(true);
-      fetchScanDetails(selectedScan.id);
-    }
-  }, [selectedScan?.id]); // Only depend on the ID
-
-  const fetchScans = async () => {
-    try {
-      const response = await api.get('/scans', {
-        params: { user_id: userId } // Add user ID
-      });
-      setScans(response.data);
-    } catch (error) {
-      console.error('Error fetching scans:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchScanDetails = async (scanId) => {
-    try {
-      const response = await api.get(`/scans/${scanId}`, {
-        params: { user_id: userId }
-      });
-      setSelectedScanDetails(response.data);
-    } catch (error) {
-      console.error('Error fetching scan details:', error);
-      // Important: Reset view on error
-      setSelectedScan(null);
-      setSelectedScanDetails(null);
-    } finally {
-      setIsFetchingScanDetails(false);
-    }
-  };
+  const queryClient = useQueryClient();
   
-
-  const handleDelete = async (scanId, e) => {
-    try {
-      // First, reset the view state
-      setSelectedScan(null);
-      setSelectedScanDetails(null);
-      setIsFetchingScanDetails(false);
-      
-      // Then perform deletion
-      await api.delete(`/scans/${scanId}`);
-      
-      // Finally refresh the list
-      await fetchScans();
-      
-      message.success('Scan deleted successfully.');
-    } catch (error) {
-      console.error('Error deleting scan:', error);
-      message.error('Failed to delete scan.');
-      // Refresh scans list even on error to ensure consistent state
-      await fetchScans();
+  // Use our enhanced table handler for the main scans table
+  const {
+    filteredInfo,
+    sortedInfo,
+    pagination,
+    selectedIds: selectedScanIds,
+    setSelectedIds: setSelectedScanIds,
+    searchInput,
+    visibleColumns,
+    handleTableChange,
+    handleSearch,
+    handleReset,
+    handleResetAllFilters,
+    resetSelection,
+    handleColumnVisibilityChange
+  } = useEnhancedTableHandler({
+    visibleColumns: [
+      'id', 'created_at', 'cards_scraped', 'sites_scraped', 'actions'
+    ]
+  }, 'price_tracker_table');
+  
+  // Table state for scan details
+  const {
+    filteredInfo: detailFilteredInfo,
+    sortedInfo: detailSortedInfo,
+    pagination: detailPagination,
+    searchInput: detailSearchInput,
+    handleTableChange: handleDetailTableChange,
+    handleSearch: handleDetailSearch,
+    handleReset: handleDetailReset,
+    handleResetAllFilters: handleDetailResetAllFilters,
+  } = useEnhancedTableHandler({}, 'price_tracker_detail_table');
+  
+  // React Query to fetch scans
+  const { data: scans = [], isLoading: scansLoading } = useQuery(
+    ['scans', userId],
+    () => api.get('/scans', { params: { user_id: userId } }).then(res => res.data),
+    { staleTime: 300000 }
+  );
+  
+  // React Query to fetch scan details (when a scan is selected)
+  const { data: selectedScanDetails, isLoading: detailsLoading } = useQuery(
+    ['scanDetails', userId, selectedScan?.id],
+    () => api.get(`/scans/${selectedScan.id}`, { params: { user_id: userId } }).then(res => res.data),
+    { enabled: !!selectedScan?.id, staleTime: 300000 }
+  );
+  
+  // Mutation to delete a scan
+  const deleteScanMutation = useMutation(
+    (scanId) => api.delete(`/scans/${scanId}`, { params: { user_id: userId } }),
+    {
+      // Optimistic update - remove the item immediately from UI
+      onMutate: async (scanId) => {
+        // Cancel any outgoing refetches so they don't overwrite our optimistic update
+        await queryClient.cancelQueries(['scans', userId]);
+        
+        // Save the previous value
+        const previousScans = queryClient.getQueryData(['scans', userId]);
+        
+        // Optimistically update to the new value
+        queryClient.setQueryData(['scans', userId], old => 
+          old.filter(scan => scan.id !== scanId)
+        );
+        
+        // Return the previous value in case of rollback
+        return { previousScans };
+      },
+      onError: (err, scanId, context) => {
+        // Roll back to the previous value if there's an error
+        queryClient.setQueryData(['scans', userId], context.previousScans);
+        message.error('Failed to delete scan.');
+      },
+      onSettled: () => {
+        // Always refetch after error or success to make sure the server state
+        // and client state are in sync
+        queryClient.invalidateQueries(['scans', userId]);
+      }
     }
-  };
-
-  const formatDate = (dateString) => {
+  );
+  
+  const handleDelete = useCallback((scanId) => {
+    setSelectedScan(null);
+    deleteScanMutation.mutate(scanId);
+  }, [deleteScanMutation]);
+  
+  // Mutation to fetch card data
+  const fetchCardMutation = useMutation(
+    (params) => api.get('/fetch_card', { params }),
+    {
+      onSuccess: (response) => {
+        if (!response.data?.scryfall) throw new Error('Invalid card data');
+        setCardData(response.data.scryfall);
+        setIsModalVisible(true);
+      },
+      onError: (error) => {
+        console.error('Error fetching card:', error);
+        message.error(`Failed to fetch card details: ${error.message}`);
+      },
+      onSettled: () => {
+        setIsCardLoading(false);
+      }
+    }
+  );
+  
+  const handleCardClick = useCallback(async (record) => {
+    setSelectedCard(record);
+    setIsCardLoading(true);
+    try {
+      const deriveSetCode = (setName) => setName?.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const setCode = record.set_code || record.set || deriveSetCode(record.set_name);
+      const params = {
+        name: record.name,
+        set: setCode,
+        language: record.language || 'en',
+        version: record.version || 'Normal',
+        user_id: userId
+      };
+      fetchCardMutation.mutate(params);
+    } catch (error) {
+      console.error('Error preparing card fetch:', error);
+      message.error(`Failed to prepare card details request: ${error.message}`);
+      setIsCardLoading(false);
+    }
+  }, [fetchCardMutation, userId]);
+  
+  // Formatter for dates
+  const formatDate = useCallback((dateString) => {
     if (!dateString) return 'N/A';
     try {
       const date = new Date(dateString);
@@ -104,273 +168,365 @@ const PriceTracker = ({ userId }) => {
     } catch {
       return 'N/A';
     }
-  };
-
-  // Helper function to get unique values for filters
-  const getUniqueValues = (data, field) => {
-    const uniqueValues = [...new Set(data.map(item => item[field]))];
-    return uniqueValues
-      .filter(value => value != null)
-      .map(value => ({ text: value.toString(), value: value }));
-  };
-
-  const columns = [
-    ...getStandardTableColumns((record) => {
-      handleCardClick(record);
-    }),
-    {
-      title: 'Site',
-      dataIndex: 'site_name',
-      key: 'site_name',
-      sorter: (a, b) => a.site_name?.localeCompare(b.site_name),
-      filters: getUniqueValues(scans, 'site_name'),
-      onFilter: (value, record) => record.site_name === value,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <Select
-            mode="multiple"
-            value={selectedKeys}
-            onChange={keys => setSelectedKeys(keys)}
-            style={{ width: '100%', marginBottom: 8 }}
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                confirm();
-              }
-            }}
-          >
-            {getUniqueValues(scans, 'site_name').map(option => (
-              <Select.Option key={option.value} value={option.value}>
-                {option.text}
-              </Select.Option>
-            ))}
-          </Select>
-          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
-        </div>
-      ),
-      onFilter: (value, record) => record.site_name === value,
-    },
-    {
-      title: 'Last Updated',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      render: (text) => formatDate(text),
-      sorter: (a, b) => new Date(a.updated_at) - new Date(b.updated_at),
+  }, []);
+  
+  // Handle bulk deletion
+  const handleBulkDelete = useCallback(() => {
+    if (selectedScanIds.size === 0) {
+      message.warning('No scans selected for deletion.');
+      return;
     }
-  ];
-
-  // Generate dynamic filters for the scan results table
-  const getColumnFilters = useMemo(() => {
-    if (!selectedScan?.scan_results) return columns;
     
-    return columns.map(col => {
-      if (col.dataIndex === 'site_name') {
-        return {
-          ...col,
-          filters: getUniqueValues(selectedScan.scan_results, 'site_name'),
-        };
+    Modal.confirm({
+      title: `Are you sure you want to delete ${selectedScanIds.size} selected scan(s)?`,
+      content: 'This action cannot be undone.',
+      okText: 'Yes, delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          // Create a Promise.all array to wait for all deletions
+          const deletionPromises = Array.from(selectedScanIds).map(scanId => 
+            deleteScanMutation.mutateAsync(scanId)
+          );
+          
+          // Wait for all deletions to complete
+          await Promise.all(deletionPromises);
+          
+          // Clear selection and show success
+          setSelectedScanIds(new Set());
+          message.success(`Successfully deleted ${selectedScanIds.size} scan(s).`);
+          
+          // Invalidate after everything is done
+          queryClient.invalidateQueries(['scans', userId]);
+        } catch (error) {
+          console.error('Bulk deletion error:', error);
+          message.error('Failed to delete some or all of the selected scans.');
+          // Invalidate to get back to a consistent state
+          queryClient.invalidateQueries(['scans', userId]);
+        }
       }
-      if (col.dataIndex === 'quality') {
-        return {
-          ...col,
-          filters: getUniqueValues(selectedScan.scan_results, 'quality'),
-        };
-      }
-      return col;
     });
-  }, [selectedScan]);
-
-  // Generate dynamic filters for the scans table
-  const scanColumns = useMemo(() => [
-    {
-      title: 'Scan ID',
-      dataIndex: 'id',
-      key: 'id',
-      sorter: (a, b) => a.id - b.id,
-      filterSearch: true,
-      filters: getUniqueValues(scans, 'id'),
-      onFilter: (value, record) => record.id === value,
-    },
-    {
-      title: 'Date',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      render: (text) => new Date(text).toLocaleString(),
-      sorter: (a, b) => new Date(a.created_at) - new Date(b.created_at),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-        <div style={{ padding: 8 }}>
-          <input
-            type="date"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-            autoFocus
-          />
-          <Button onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>Filter</Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>Reset</Button>
-        </div>
-      ),
-      onFilter: (value, record) => {
-        const recordDate = new Date(record.created_at).toISOString().split('T')[0];
-        return recordDate === value;
+  }, [selectedScanIds, deleteScanMutation, setSelectedScanIds]);
+  
+  // Define columns for the scans table using the new utility functions
+  const scanColumns = useMemo(() => {
+    const baseColumns = [
+      {
+        title: 'Scan ID',
+        dataIndex: 'id',
+        key: 'id',
+        sorter: (a, b) => a.id - b.id,
+        sortOrder: sortedInfo.columnKey === 'id' && sortedInfo.order,
+        ...getNumericFilterProps('id', searchInput, filteredInfo, 'Search scan ID', handleSearch, handleReset),
       },
-    },
-    {
-      title: 'Cards Scanned',
-      dataIndex: 'cards_scraped',
-      key: 'cards_scraped',
-      sorter: (a, b) => a.cards_scraped - b.cards_scraped,
-    },
-    {
-      title: 'Sites Scanned',
-      dataIndex: 'sites_scraped',
-      key: 'sites_scraped',
-      sorter: (a, b) => a.sites_scraped - b.sites_scraped,
-    },
-    {
-      title: 'Action',
-      key: 'action',
-      render: (text, record) => (
-        <Popconfirm
-          title="Are you sure you want to delete this scan?"
-          onConfirm={(e) => {
-            e.stopPropagation(); // Ensure stopPropagation is called here
-            handleDelete(record.id);
-          }}
-          okText="Yes"
-          cancelText="No"
-          onCancel={(e) => e.stopPropagation()} // Ensure stopPropagation is called here
-        >
+      {
+        title: 'Date',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        render: (text) => formatDate(text),
+        sorter: (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0),
+        sortOrder: sortedInfo.columnKey === 'created_at' && sortedInfo.order,
+        filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+          <div style={{ padding: 8 }}>
+            <Input
+              type="date"
+              placeholder="Search date"
+              value={selectedKeys[0]}
+              onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+              onPressEnter={() => handleSearch(selectedKeys, confirm, 'created_at')}
+              style={{ width: 188, marginBottom: 8, display: 'block' }}
+              ref={el => (searchInput.current['created_at'] = el)}
+            />
+            <Space>
+              <Button
+                type="primary"
+                onClick={() => handleSearch(selectedKeys, confirm, 'created_at')}
+                icon={<SearchOutlined />}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Search
+              </Button>
+              <Button
+                onClick={() => handleReset(clearFilters, 'created_at')}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Reset
+              </Button>
+            </Space>
+          </div>
+        ),
+        onFilter: (value, record) => {
+          if (!record.created_at) return false;
+          const recordDate = new Date(record.created_at).toISOString().split('T')[0];
+          return recordDate === value;
+        },
+        filteredValue: filteredInfo.created_at || null,
+      },
+      {
+        title: 'Cards Scanned',
+        dataIndex: 'cards_scraped',
+        key: 'cards_scraped',
+        sorter: (a, b) => parseInt(a.cards_scraped || 0, 10) - parseInt(b.cards_scraped || 0, 10),
+        sortOrder: sortedInfo.columnKey === 'cards_scraped' && sortedInfo.order,
+        filters: [
+          { text: 'Small (<10)', value: 'small' },
+          { text: 'Medium (10-50)', value: 'medium' },
+          { text: 'Large (>50)', value: 'large' }
+        ],
+        onFilter: (value, record) => {
+          // First handle the predefined filters
+          const count = parseInt(record.cards_scraped || 0, 10);
+          if (value === 'small') return count < 10;
+          if (value === 'medium') return count >= 10 && count <= 50;
+          if (value === 'large') return count > 50;
+          
+          // If it's a direct numeric input (not one of the predefined filters)
+          if (!isNaN(parseInt(value, 10))) {
+            return count === parseInt(value, 10);
+          }
+          
+          return false;
+        },
+        filteredValue: filteredInfo.cards_scraped || null,
+        filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+          <div style={{ padding: 8 }}>
+            <Input
+              type="number"
+              ref={node => {
+                if (node) {
+                  searchInput.current['cards_scraped'] = node;
+                  setTimeout(() => node.focus(), 10);
+                }
+              }}
+              placeholder="Search by count"
+              value={selectedKeys[0]}
+              onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+              onPressEnter={() => handleSearch(selectedKeys, confirm, 'cards_scraped')}
+              style={{ width: 188, marginBottom: 8, display: 'block' }}
+            />
+            <Space>
+              <Button
+                type="primary"
+                onClick={() => handleSearch(selectedKeys, confirm, 'cards_scraped')}
+                icon={<SearchOutlined />}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Search
+              </Button>
+              <Button 
+                onClick={() => handleReset(clearFilters, 'cards_scraped')}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Reset
+              </Button>
+            </Space>
+          </div>
+        ),
+        onFilterDropdownVisibleChange: visible => {
+          if (visible && searchInput.current['cards_scraped']) {
+            setTimeout(() => searchInput.current['cards_scraped'].focus(), 10);
+          }
+        },
+      },
+      {
+        title: 'Sites Scanned',
+        dataIndex: 'sites_scraped',
+        key: 'sites_scraped',
+        sorter: (a, b) => parseInt(a.sites_scraped || 0, 10) - parseInt(b.sites_scraped || 0, 10),
+        sortOrder: sortedInfo.columnKey === 'sites_scraped' && sortedInfo.order,
+        filters: [
+          { text: 'Few (<5)', value: 'few' },
+          { text: 'Several (5-15)', value: 'several' },
+          { text: 'Many (>15)', value: 'many' }
+        ],
+        onFilter: (value, record) => {
+          // First handle the predefined filters
+          const count = parseInt(record.sites_scraped || 0, 10);
+          if (value === 'few') return count < 5;
+          if (value === 'several') return count >= 5 && count <= 15;
+          if (value === 'many') return count > 15;
+          
+          // If it's a direct numeric input (not one of the predefined filters)
+          if (!isNaN(parseInt(value, 10))) {
+            return count === parseInt(value, 10);
+          }
+          
+          return false;
+        },
+        filteredValue: filteredInfo.sites_scraped || null,
+        filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+          <div style={{ padding: 8 }}>
+            <Input
+              type="number"
+              ref={node => {
+                if (node) {
+                  searchInput.current['sites_scraped'] = node;
+                  setTimeout(() => node.focus(), 10);
+                }
+              }}
+              placeholder="Search by sites count"
+              value={selectedKeys[0]}
+              onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+              onPressEnter={() => handleSearch(selectedKeys, confirm, 'sites_scraped')}
+              style={{ width: 188, marginBottom: 8, display: 'block' }}
+            />
+            <Space>
+              <Button
+                type="primary"
+                onClick={() => handleSearch(selectedKeys, confirm, 'sites_scraped')}
+                icon={<SearchOutlined />}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Search
+              </Button>
+              <Button 
+                onClick={() => handleReset(clearFilters, 'sites_scraped')}
+                size="small"
+                style={{ width: 90 }}
+              >
+                Reset
+              </Button>
+            </Space>
+          </div>
+        ),
+        onFilterDropdownVisibleChange: visible => {
+          if (visible && searchInput.current['sites_scraped']) {
+            setTimeout(() => searchInput.current['sites_scraped'].focus(), 10);
+          }
+        },
+      },
+      {
+        title: 'Action',
+        key: 'actions',
+        render: (_, record) => (
           <Button
             type="link"
             icon={<DeleteOutlined />}
-            onClick={(e) => {
-              e.stopPropagation(); // Ensure stopPropagation is called here
-            }}
-          />
-        </Popconfirm>
-      ),
-    }
-  ], [scans]);
-
-  const handleCardClick = async (record) => {
-    console.group('Card Click Flow');
-    console.log('1. Initial record data:', record);
-    setSelectedCard(record);
-    setIsLoading(true);
-    try {
-      // Add set_code if it exists in the record, fallback to deriving it from set_name
-      const deriveSetCode = (setName) => {
-        // This is a placeholder - you might want to implement proper set name to code mapping
-        // or fetch it from your backend/API
-        return setName?.toLowerCase().replace(/[^a-z0-9]/g, '');
-      };
-
-      const setCode = record.set_code || record.set || deriveSetCode(record.set_name);
-      console.log('2. Derived set code:', setCode);
-
-      const params = {
-        name: record.name,
-        set: setCode,
-        language: record.language || 'en',
-        version: record.version || 'Normal',
-        user_id: userId // Add user ID
-      };
-      
-      console.log('3. Request params:', params);
-      const response = await api.get('/fetch_card', { params });
-
-      console.log('4. API response:', response.data);
-      if (!response.data?.scryfall) {
-        throw new Error('Invalid data structure received from backend');
+            danger
+            onClick={(e) => { e.stopPropagation(); handleDelete(record.id); }}
+          >
+            Delete
+          </Button>
+        )
       }
-
-      setCardData(response.data.scryfall);
-      setIsModalVisible(true);
-    } catch (error) {
-      console.error('Error fetching card:', error);
-      message.error(`Failed to fetch card details: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-      console.groupEnd();
-    }
-  };
-
-  const handleModalClose = () => {
-    setIsModalVisible(false);
-    setSelectedCard(null);
-    setCardData(null);
-  };
-
-  if (loading) return <Spin size="large" />;
-
+    ];
+    return baseColumns.filter(col => visibleColumns.includes(col.key));
+  }, [sortedInfo, filteredInfo, searchInput, handleSearch, handleReset, formatDate, visibleColumns, handleDelete]);
+  
   return (
-    <div className={`price-tracker section ${theme}`}>
+    <div className={`price-tracker ${theme}`}>
       <Title level={2}>Price History</Title>
       {selectedScan ? (
         <>
-          <Button 
-            onClick={() => {
-              setSelectedScan(null);
-              setSelectedScanDetails(null);
-            }} 
-            type="link" 
-            className="mb-4"
-          >
+          <Button onClick={() => { setSelectedScan(null); resetSelection(); }} type="link" className="mb-4">
             ← Back to Scans
           </Button>
           <Card>
-          {isFetchingScanDetails ? (
+            {detailsLoading ? (
               <Spin size="large" />
             ) : (
-            <Table
-              dataSource={selectedScanDetails?.scan_results || []}
-              columns={getColumnFilters}
-              rowKey="id"
-            />
-          )}
-        </Card>
-      </>
+              <>
+                <div style={{ marginBottom: 16, textAlign: 'right' }}>
+                  <Button onClick={handleDetailResetAllFilters} icon={<ClearOutlined />}>
+                    Reset All Filters
+                  </Button>
+                </div>
+                <EnhancedTable
+                  dataSource={selectedScanDetails?.scan_results || []}
+                  columns={getStandardTableColumns(handleCardClick, detailSearchInput, detailFilteredInfo, handleDetailSearch, handleDetailReset).concat([
+                    {
+                      title: 'Site',
+                      dataIndex: 'site_name',
+                      key: 'site_name',
+                      sorter: (a, b) => (a.site_name || '').localeCompare(b.site_name || ''),
+                      filteredValue: detailFilteredInfo?.site_name || null,
+                      onFilter: (value, record) => record.site_name === value,
+                      ...getColumnSearchProps('site_name', detailSearchInput, detailFilteredInfo, 'Search site name', handleDetailSearch, handleDetailReset),
+                    },
+                    {
+                      title: 'Last Updated',
+                      dataIndex: 'updated_at',
+                      key: 'updated_at',
+                      render: (text) => formatDate(text),
+                      sorter: (a, b) => new Date(a.updated_at || 0) - new Date(b.updated_at || 0),
+                      ...getColumnSearchProps('updated_at', detailSearchInput, detailFilteredInfo, 'Search date', handleDetailSearch, handleDetailReset),
+                    }
+                  ])}
+                  rowKey="id"
+                  loading={detailsLoading}
+                  persistStateKey="price_tracker_detail_table"
+                  onRowClick={handleCardClick}
+                  onChange={handleDetailTableChange}
+                />
+              </>
+            )}
+          </Card>
+        </>
       ) : (
         <Card>
-          <Table
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+            <Space>
+              <ColumnSelector 
+                columns={scanColumns}
+                visibleColumns={visibleColumns}
+                onColumnToggle={handleColumnVisibilityChange}
+                persistKey="price_tracker_columns"
+              />
+              <ExportOptions 
+                dataSource={scans}
+                columns={scanColumns}
+                filename="price_scans_export"
+              />
+              <Button onClick={handleResetAllFilters} icon={<ClearOutlined />}>
+                Reset All Filters
+              </Button>
+              {selectedScanIds.size > 0 && (
+                  <Button danger onClick={handleBulkDelete} icon={<DeleteOutlined />}>
+                  Delete Selected ({selectedScanIds.size})
+                </Button>
+              )}
+            </Space>
+          </div>
+          <EnhancedTable
             dataSource={scans}
             columns={scanColumns}
             rowKey="id"
-            loading={loading}
-            onRow={(record) => ({
-              onClick: () => !loading && setSelectedScan(record),
-              style: { cursor: loading ? 'not-allowed' : 'pointer' }
-            })}
+            loading={scansLoading}
+            persistStateKey="price_tracker_table"
+            rowSelectionEnabled={true}
+            selectedIds={selectedScanIds}
+            onSelectionChange={setSelectedScanIds}
+            onRowClick={(record) => setSelectedScan(record)}
+            onChange={handleTableChange}
           />
         </Card>
       )}
-      {selectedCard && (
-        <CardDetail
-          cardName={selectedCard.name}
-          setName={selectedCard.set_name}
-          language={selectedCard.language}
-          version={selectedCard.version}
-          foil={selectedCard.foil}
-          isModalVisible={cardDetailVisible}
-          onClose={() => setCardDetailVisible(false)}
-        />
-      )}
+      
       <Modal
         title={selectedCard?.name}
         open={isModalVisible}
-        onCancel={handleModalClose}
+        onCancel={() => setIsModalVisible(false)}
         width={800}
-        destroyOnClose={true}
+        destroyOnClose
         footer={[
-          <Button key="close" onClick={handleModalClose}>
+          <Button key="close" onClick={() => setIsModalVisible(false)}>
             Close
           </Button>
         ]}
       >
-        {isLoading ? (
-          <Spin size="large" />
+        {isCardLoading ? (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Spin size="large" />
+            <Typography.Text style={{ marginTop: '10px', display: 'block' }}>
+              Loading card details...
+            </Typography.Text>
+          </div>
         ) : cardData ? (
           <ScryfallCardView 
             key={`${selectedCard?.id}-${cardData.id}`}
@@ -379,8 +535,7 @@ const PriceTracker = ({ userId }) => {
           />
         ) : (
           <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin />
-            <p>Loading card details...</p>
+            <Typography.Text>No card data available</Typography.Text>
           </div>
         )}
       </Modal>

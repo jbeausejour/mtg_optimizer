@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from 'react-query';
 import { AuthProvider } from './utils/AuthContext';
 import Navigation from './components/Navigation';
 import Login from './components/Login';
@@ -12,6 +13,9 @@ import Results from './pages/Results';
 import PriceTracker from './pages/PriceTracker';
 import Settings from './pages/Settings';
 import ProtectedRoute from './components/ProtectedRoute';
+
+// Initialize a new QueryClient
+const queryClient = new QueryClient();
 
 // Custom Hook to conditionally render navigation based on route
 const Layout = ({ children }) => {
@@ -49,26 +53,28 @@ function App() {
   };
 
   return (
-    <AuthProvider>
-      <Router>
-        <Layout>
-          <Routes>
-            <Route path="/login" element={<Login onLogin={handleLogin} />} />
-            <Route path="/register" element={<Register />} />
-            <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<Dashboard  userId={userId} />} />
-              <Route path="/buylist-management" element={<BuylistManagement userId={userId} />} />
-              <Route path="/site-management" element={<SiteManagement  userId={userId} />} />
-              <Route path="/optimize" element={<Optimize  userId={userId} />} />
-              <Route path="/results" element={<Results  userId={userId} />} />
-              <Route path="/results/:scanId" element={<Results  userId={userId} />} /> {/* Update this line */}
-              <Route path="/price-tracker" element={<PriceTracker  userId={userId} />} />
-              <Route path="/settings" element={<Settings  userId={userId} />} />
-            </Route>
-          </Routes>
-        </Layout>
-      </Router>
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Router>
+          <Layout>
+            <Routes>
+              <Route path="/login" element={<Login onLogin={handleLogin} />} />
+              <Route path="/register" element={<Register />} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/" element={<Dashboard  userId={userId} />} />
+                <Route path="/buylist-management" element={<BuylistManagement userId={userId} />} />
+                <Route path="/site-management" element={<SiteManagement  userId={userId} />} />
+                <Route path="/optimize" element={<Optimize  userId={userId} />} />
+                <Route path="/results" element={<Results  userId={userId} />} />
+                <Route path="/results/:scanId" element={<Results  userId={userId} />} /> {/* Update this line */}
+                <Route path="/price-tracker" element={<PriceTracker  userId={userId} />} />
+                <Route path="/settings" element={<Settings  userId={userId} />} />
+              </Route>
+            </Routes>
+          </Layout>
+        </Router>
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }
 
