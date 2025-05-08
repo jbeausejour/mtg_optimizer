@@ -1,119 +1,154 @@
-import asyncio
 import logging
-from contextlib import contextmanager
+import asyncio
+from typing import Dict, List, Optional, Tuple, Any, Union
 
-from app.extensions import db
-from app.models.site import Site
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
 from bs4 import BeautifulSoup
+from app.models.site import Site
+from app.services.async_base_service import AsyncBaseService
 from app.utils.selenium_driver import get_network_driver
 
 logger = logging.getLogger(__name__)
 
 
-class SiteService:
+class SiteService(AsyncBaseService[Site]):
+    """Async service for site operations"""
 
+    model_class = Site
+
+    # Cache for site details
     site_details_cache = {}
 
-    @property
-    def network(self):
-        """Lazy initialize the network driver when needed"""
-        if self._network is None:
-            self._network = get_network_driver()
-        return self._network
-
-    @staticmethod
-    @contextmanager
-    def transaction_context():
-        """Context manager for database transactions"""
-        try:
-            yield
-            db.session.commit()
-        except SQLAlchemyError as e:
-            db.session.rollback()
-            logger.error(f"Database error: {str(e)}")
-            raise
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error in transaction: {str(e)}")
-            raise
-        finally:
-            db.session.close()
-
-    @staticmethod
-    def get_sites_by_ids(site_ids):
-        """Get sites by their IDs"""
-        try:
-            sites = Site.query.filter(Site.id.in_(site_ids)).all()
-            return sites
-        except Exception as e:
-            logger.error(f"Error getting sites by IDs: {str(e)}")
-            return []
-
-    @staticmethod
-    def get_sites_by_names(site_names):
-        """Get sites by their IDs"""
-        try:
-            sites = Site.query.filter(Site.name.in_(site_names)).all()
-            return sites
-        except Exception as e:
-            logger.error(f"Error getting sites by IDs: {str(e)}")
-            return []
-
-    @staticmethod
-    def get_active_sites():
+    @classmethod
+    async def get_active_sites(cls, session: AsyncSession) -> List[Site]:
         """Get all active sites"""
-        return Site.query.filter_by(active=True).all()
+        try:
+            result = await session.execute(select(Site).filter(Site.active == True))
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting active sites: {str(e)}")
+            return []
 
-    @staticmethod
-    def get_all_sites():
-        return Site.query.all()
+    @classmethod
+    async def get_all_sites(cls, session: AsyncSession) -> List[Site]:
+        """Get all sites"""
+        try:
+            return await cls.get_all(session)
+        except Exception as e:
+            logger.error(f"Error getting all sites: {str(e)}")
+            return []
 
-    @staticmethod
-    def add_site(data):
-        new_site = Site(**data)
-        db.session.add(new_site)
-        db.session.commit()
-        return new_site
+    @classmethod
+    async def get_sites_by_ids(cls, session: AsyncSession, site_ids: List[int]) -> List[Site]:
+        """Get sites by IDs"""
+        try:
+            result = await session.execute(select(Site).filter(Site.id.in_(site_ids)))
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting sites by IDs: {str(e)}")
+            return []
 
-    @staticmethod
-    def update_site(site_id, data):
-        site = Site.query.get(site_id)
-        if not site:
-            raise ValueError("Site not found")
+    @classmethod
+    async def get_sites_by_names(cls, session: AsyncSession, site_names: List[str]) -> List[Site]:
+        """Get sites by names"""
+        try:
+            result = await session.execute(select(Site).filter(Site.name.in_(site_names)))
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting sites by names: {str(e)}")
+            return []
 
-        changes_made = False
-        for key, value in data.items():
-            if hasattr(site, key) and getattr(site, key) != value:
-                setattr(site, key, value)
-                changes_made = True
+    @classmethod
+    async def add_site(cls, session: AsyncSession, data: Dict[str, Any]) -> Optional[Site]:
+        """Add a new site"""
+        try:
+            site = await cls.create(session, **data)
+            return site
+        except Exception as e:
+            logger.error(f"Error adding site: {str(e)}")
+            return None
 
-        if changes_made:
-            try:
-                db.session.commit()
-            except IntegrityError:
-                db.session.rollback()
-                raise ValueError("Update failed due to integrity constraint")
-        else:
-            raise ValueError("No changes detected")
+    @classmethod
+    async def update_site(cls, session: AsyncSession, site_id: int, data: Dict[str, Any]) -> Optional[Site]:
+        """Update an existing site"""
+        try:
+            site = await session.get(Site, site_id)
 
-        return site
+            if not site:
+                raise ValueError("Site not found")
 
-    @staticmethod
-    def delete_site(site_id):
-        site = Site.query.get(site_id)
-        if not site:
-            raise ValueError("Site not found")
+            changes_made = False
+            for key, value in data.items():
+                if hasattr(site, key) and getattr(site, key) != value:
+                    setattr(site, key, value)
+                    changes_made = True
 
-        db.session.delete(site)
-        db.session.commit()
-        return site
+            if not changes_made:
+                raise ValueError("No changes detected")
 
-    @staticmethod
-    async def init_site_details_cache(site):
+            return site
+        except IntegrityError:
+            logger.error(f"Update failed due to integrity constraint for site {site_id}")
+            raise ValueError("Update failed due to integrity constraint")
+        except Exception as e:
+            logger.error(f"Error updating site {site_id}: {str(e)}")
+            raise
+
+    @classmethod
+    async def delete_site(cls, session: AsyncSession, site_id: int) -> bool:
+        """Delete a site"""
+        try:
+            result = await cls.delete(session, site_id)
+
+            return result
+        except Exception as e:
+            logger.error(f"Error deleting site {site_id}: {str(e)}")
+            return False
+
+    @classmethod
+    async def init_site_details_cache_async(
+        cls, session: AsyncSession, site_ids: List[int]
+    ) -> Dict[int, Tuple[str, Dict[str, str]]]:
+        """Initialize the site details cache for multiple sites"""
+        try:
+            sites = await cls.get_sites_by_ids(session, site_ids)
+            results = {}
+
+            for site in sites:
+                site_data = {
+                    "id": site.id,
+                    "name": site.name,
+                    "method": site.method,
+                    "url": site.url,
+                    "api_url": site.api_url,
+                }
+
+                auth_token, headers = await cls.init_site_details_cache(site_data)
+                cls.site_details_cache[site.id] = (auth_token, headers)
+                results[site.id] = (auth_token, headers)
+
+            return results
+        except Exception as e:
+            logger.error(f"Error initializing site details cache: {str(e)}")
+            return {}
+
+    @classmethod
+    async def init_site_details_cache(cls, site_data: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, str]]:
+        """Initialize site details cache for a single site using site_data dict"""
+        site_id = site_data["id"]
+        site_name = site_data["name"]
+        site_method = site_data["method"]
+        site_url = site_data["url"]
+        site_api_url = site_data.get("api_url")
+
         network_driver = get_network_driver()
         try:
-            if site.method == "f2f":
+            # Handle f2f differently
+            if site_method == "f2f":
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "*/*",
@@ -124,21 +159,32 @@ class SiteService:
                     "Connection": "keep-alive",
                 }
 
-                SiteService.site_details_cache[site.name] = (None, headers)
+                cls.site_details_cache[site_id] = (None, headers)
                 return None, headers
 
-            search_url = site.url.rstrip("/")
+            # For other site types
+            search_url = site_url.rstrip("/")
             initial_response = await network_driver.fetch_url(search_url)
             if not initial_response or not initial_response.get("content"):
-                logger.error(f"Initial request failed for {site.name}")
-                return None
+                logger.error(f"Initial request failed for {site_name}")
+
+                # Return default headers as fallback
+                default_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+
+                return None, default_headers
 
             soup = BeautifulSoup(initial_response["content"], "html.parser")
             auth_token = None
-            if site.method.lower() != "shopify":
-                auth_token = await network_driver.get_auth_token(soup, site)
+
+            if site_method.lower() != "shopify":
+                auth_token = await network_driver.get_auth_token(soup, site_data)
                 if not auth_token:
-                    logger.info(f"Failed to get auth token for {site.name}")
+                    logger.info(f"Failed to get auth token for {site_name}")
 
             site_details = initial_response.get("site_details", {})
             headers = site_details.get("headers", {})
@@ -150,7 +196,8 @@ class SiteService:
 
             cookies = site_details.get("cookies", {})
             cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()]) if cookies else ""
-            if site.method == "shopify":
+
+            if site_method == "shopify":
                 relevant_headers.update(
                     {
                         "Content-Type": "application/json",
@@ -168,45 +215,37 @@ class SiteService:
                     }
                 )
 
-            SiteService.site_details_cache[site.name] = (auth_token, relevant_headers)
+            cls.site_details_cache[site_id] = (auth_token, relevant_headers)
             return auth_token, relevant_headers
 
         except Exception as e:
-            logger.error(f"Error initializing site details cache for {site.name}: {str(e)}", exc_info=True)
-            return None
+            logger.error(f"Error initializing site details cache for {site_name}: {str(e)}", exc_info=True)
 
-    @staticmethod
-    def get_site_details_sync(site):
-        """Synchronous wrapper around async get_site_details"""
-        try:
-            # Check if we're already in an event loop
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're already in a loop, we need to be careful not to create another one
-                if loop.is_running():
-                    # Use Task.create_task if this is called from within an async context
-                    async def get_details():
-                        return await SiteService.get_site_details(site)
+            # Return default headers as fallback
+            default_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
 
-                    return asyncio.create_task(get_details())
-                # If the loop exists but isn't running, we can use run_until_complete
-                return loop.run_until_complete(SiteService.get_site_details(site))
-            except RuntimeError:
-                # No running event loop, so create a new one
-                loop = asyncio.new_event_loop()
-                try:
-                    return loop.run_until_complete(SiteService.get_site_details(site))
-                finally:
-                    loop.close()
-        except Exception as e:
-            logger.error(f"Error in get_site_details_sync: {str(e)}", exc_info=True)
-            # Return some sensible default if we failed to get site details
-            return None, {}
+            return None, default_headers
+        finally:
+            # Ensure the network driver is closed properly
+            if network_driver and hasattr(network_driver, "close"):
+                await network_driver.close()
 
-    @staticmethod
-    async def get_site_details(site):
-        """Get site details, using cache if available"""
-        if site.name in SiteService.site_details_cache:
-            return SiteService.site_details_cache[site.name]
-        logger.warning(f"Site details cache miss for {site.name}, initializing now.")
-        return await SiteService.init_site_details_cache(site)
+    @classmethod
+    async def get_site_details_async(cls, site_data: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, str]]:
+        """Get site details from cache or initialize if not present"""
+        site_id = site_data["id"]
+        site_name = site_data["name"]
+
+        # Check cache first
+        if site_id in cls.site_details_cache:
+            logger.info(f"Using cached details for site {site_name}")
+            return cls.site_details_cache[site_id]
+
+        logger.warning(f"[CACHE MISS] Site details cache miss for {site_name} (ID: {site_id}), initializing now.")
+        logger.info(f"[CACHE DEBUG] Current keys in site_details_cache: {list(cls.site_details_cache.keys())}")
+        return await cls.init_site_details_cache(site_data)

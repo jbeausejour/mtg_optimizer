@@ -1,28 +1,52 @@
-"""Backend init Module."""
-
+import os
 import logging
+from dotenv import load_dotenv
 
-from config import get_config
-from flask import Flask, jsonify
-from flask_jwt_extended import JWTManager
 
-from .extensions import init_extensions
+load_dotenv()
+
+from .config import get_config
+from quart import Quart, jsonify
+from quart_cors import cors
+from quart_jwt_extended import JWTManager
 from .logging_config import setup_logging
+
+from sqlalchemy.orm import declarative_base
+
+# Use environment variable or default for Redis
+redis_url = os.environ.get("REDIS_URL", "redis://192.168.68.15:6379/0")
+redis_host = os.environ.get("REDIS_HOST", "192.168.68.15")
+
+# Base class for SQLAlchemy models
+Base = declarative_base()
+
+# JWT setup
+jwt = JWTManager()
+
+# Determine CORS origins
+cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+cors_origins = cors_origins.split(",") if "," in cors_origins else [cors_origins]
 
 
 def create_app(config_class=get_config()):
     """App creation func"""
-    app = Flask(
+    app = Quart(
         __name__,
         static_folder="static",
         template_folder="templates",
         instance_relative_config=True,
     )
+
+    app = cors(
+        app,
+        allow_origin=cors_origins,
+        allow_credentials=True,
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    )
     app.config.from_object(config_class)
 
-    init_extensions(app)
-
-    jwt = JWTManager(app)
+    jwt.init_app(app)
 
     @jwt.expired_token_loader
     def expired_token_callback(jwt_header, expired_token):
@@ -35,7 +59,8 @@ def create_app(config_class=get_config()):
 
     celery_app.conf.update(app.config)
 
-    with app.app_context():
+    @app.before_serving
+    async def load_blueprints():
         from app.api.admin_routes import admin_routes
         from app.api.card_routes import card_routes
 

@@ -1,14 +1,19 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from app.extensions import db
+from sqlalchemy import Column, String, Integer, DateTime
+from app import Base
 
 
-class Settings(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(255), unique=True, nullable=False)
-    value = db.Column(db.String(255), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+class Settings(Base):
+    __tablename__ = "settings"
+
+    id = Column(Integer, primary_key=True)
+    key = Column(String(255), unique=True, nullable=False)
+    value = Column(String(255), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
 
     def __repr__(self):
         return f"<Setting {self.key}>"

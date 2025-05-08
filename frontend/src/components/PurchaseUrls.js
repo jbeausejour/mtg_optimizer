@@ -45,7 +45,7 @@ const generateBookmarkletCode = (cards) => {
           'form.add-to-cart-form[data-vid="' + card.variant_id + '"] input[type="submit"], ' +
           'form.add-to-cart-form[data-vid="' + card.variant_id + '"] button[type="submit"]'
         );
-        console.log("Clicking add-to-cart for", card.name, "with variant", card.variant_id);
+        // console.log("Clicking add-to-cart for", card.name, "with variant", card.variant_id);
         btn.click();
         await new Promise(resolve => setTimeout(resolve, 2000));
       } catch(err) {
@@ -61,7 +61,7 @@ const generateBookmarkletCode = (cards) => {
     addAllCards()
       .then(() => waitForElement("a.checkout-link", 10000))
       .then(link => {
-        console.log("Clicking checkout link...");
+        // console.log("Clicking checkout link...");
         link.click();
       })
       .catch(err => console.error("Error in bookmarklet:", err));
@@ -202,12 +202,12 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
   const handleShopifyCart = async (store) => {
     try {
       setStoreStatus(prev => ({...prev, [store.site_name]: 'processing'}));
-      console.log(`🛒 Processing Shopify cart for: ${store.site_name}`);
+      // console.log(`🛒 Processing Shopify cart for: ${store.site_name}`);
       
       // Extract base URL
       const parsedUrl = new URL(store.purchase_url);
       const baseUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
-      console.log(`🔗 Base URL: ${baseUrl}`);
+      // console.log(`🔗 Base URL: ${baseUrl}`);
       
       // Create the cart URL with all items
       let cartUrl = `${baseUrl}/cart/`;
@@ -219,7 +219,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         cartUrl += `${index === 0 ? '' : ','}${card.variant_id}:${quantity}`;
       });
       
-      console.log(`🔗 Generated cart URL: ${cartUrl}`);
+      // console.log(`🔗 Generated cart URL: ${cartUrl}`);
       
       // Show a notification
       const notification = document.createElement('div');
@@ -251,12 +251,12 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
   const handleF2FCart = async (store) => {
     try {
       setStoreStatus(prev => ({...prev, [store.site_name]: 'processing'}));
-      console.log(`🛒 Processing F2F cart for: ${store.site_name}`);
+      // console.log(`🛒 Processing F2F cart for: ${store.site_name}`);
       
       // Extract base URL
       const parsedUrl = new URL(store.purchase_url);
       const baseUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
-      console.log(`🔗 Base URL: ${baseUrl}`);
+      // console.log(`🔗 Base URL: ${baseUrl}`);
       
       // Create the cart URL with all items
       let cartUrl = `${baseUrl}/cart/`;
@@ -268,7 +268,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         cartUrl += `${index === 0 ? '' : ','}${card.variant_id}:${quantity}`;
       });
       
-      console.log(`🔗 Generated cart URL: ${cartUrl}`);
+      // console.log(`🔗 Generated cart URL: ${cartUrl}`);
       
       // Show a notification
       const notification = document.createElement('div');

@@ -20,7 +20,6 @@ from app.tasks.optimization_tasks import test_task
 
 def setup_app():
     app = create_app()
-    app.app_context().push()
     return app
 
 

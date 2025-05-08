@@ -1,31 +1,36 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { Table, Spin, Card, Tag, Typography, Space, Button, Modal, message, Popconfirm, Input } from 'antd';
+import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
+import { Spin, Card, Tag, Typography, Space, Button, Modal, message, Popconfirm, Input } from 'antd';
 import { CheckCircleOutlined, WarningOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
-import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import api from '../utils/api';
 import ColumnSelector from '../components/ColumnSelector';
 import { ExportOptions } from '../utils/exportUtils';
-import { 
-  getColumnSearchProps, 
-  getStandardPagination
-} from '../utils/tableConfig';
+import { getColumnSearchProps, getStandardPagination } from '../utils/tableConfig';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
+import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
+import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title, Text } = Typography;
 
 const Results = ({ userId }) => {
+  const { theme } = useTheme();
   const [selectedResult, setSelectedResult] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
-  const [cardData, setCardData] = useState(null);
+  const [modalMode, setModalMode] = useState('view');
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const { theme } = useTheme();
-  const [isLoading, setIsLoading] = useState(false);
   const queryClient = useQueryClient();
-  
+  const [cardData, setFetchedCard] = useState(null);
+  const {
+    mutateAsync: fetchCard,
+    isLoading: isCardLoading,
+  } = useFetchScryfallCard({
+    onSuccess: (resData) => {
+      setFetchedCard(resData); // or whatever your variable is
+    }
+  });
   // Use enhanced table handler for consistent behavior
   const {
     filteredInfo,
@@ -50,153 +55,123 @@ const Results = ({ userId }) => {
   const { 
     data: optimizationResults = [], 
     isLoading: loading 
-  } = useQuery(
-    ['optimizations', userId], 
-    () => api.get('/results', { params: { user_id: userId } })
-      .then(res => res.data),
-    { staleTime: 300000 } // 5 minutes
-  );
-
-  // Delete mutation for optimization results
-  const deleteOptimizationMutation = useMutation(
-    (resultId) => api.delete(`/results/${resultId}`, { params: { user_id: userId } }),
-    {
-      // Optimistic update - remove the item immediately from UI
-      onMutate: async (resultId) => {
-        // Cancel any outgoing refetches
-        await queryClient.cancelQueries(['optimizations', userId]);
-        
-        // Save the previous value
-        const previousResults = queryClient.getQueryData(['optimizations', userId]);
-        
-        // Optimistically update to the new value
-        queryClient.setQueryData(['optimizations', userId], old => 
-          old.filter(result => result.id !== resultId)
-        );
-        
-        // Return the previous value in case of rollback
-        return { previousResults };
-      },
-      onError: (err, resultId, context) => {
-        // Roll back to the previous value if there's an error
-        queryClient.setQueryData(['optimizations', userId], context.previousResults);
-        message.error('Failed to delete optimization.');
-      },
-      onSuccess: (_, resultId) => {
-        message.success('Optimization deleted successfully');
-        // If the deleted result is currently selected, deselect it
-        if (selectedResult && selectedResult.id === resultId) {
-          setSelectedResult(null);
-        }
-      },
-      onSettled: () => {
-        // Always refetch after error or success
-        queryClient.invalidateQueries(['optimizations', userId]);
-      }
-    }
-  );
-
-  // Use React Query for fetching card details
-  const fetchCardMutation = useMutation(
-    (params) => api.get('/fetch_card', { params }),
-    {
-      onSuccess: (response) => {
-        if (!response.data?.scryfall) {
-          throw new Error('Invalid card data received');
-        }
-        setCardData(response.data.scryfall);
-        setIsModalVisible(true);
-      },
-      onError: (error) => {
-        console.error('Error fetching card:', error);
-        message.error(`Failed to fetch card details: ${error.message}`);
-      },
-      onSettled: () => {
-        setIsLoading(false);
-      }
-    }
-  );
+  } = useQuery({
+    queryKey: ['optimizations', userId],
+    queryFn: () => api.get('/results', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  })
+  
+  const handleModalClose = () => {
+    setIsModalVisible(false);
+    setFetchedCard(null);  // 🧹 Clear the card data
+  };
 
   // Define handleCardClick
-  const handleCardClick = useCallback(async (card) => {
+  const handleCardClick = async (card) => {
     setSelectedCard(card);
-    setIsLoading(true);
-    
-    const params = {
-      name: card.name,
-      set: card.set_code || card.set_name,
-      language: card.language || 'English',
-      version: card.version || 'Normal',
-      user_id: userId
-    };
-    
-    fetchCardMutation.mutate(params);
-  }, [fetchCardMutation, userId]);
+    setModalMode('view');
+    setIsModalVisible(true);
+  
+    try {
+      const cardName = card.name;
+      const setCode = card.set_code || card.set || null; // fallback for Results
+      // console.log("Fetching card:", cardName, "Set:", setCode);
+  
+      await fetchCard({ name: cardName, set_code: setCode });
+    } catch (err) {
+      message.error('Failed to fetch card data');
+    }
+  };
 
+  const handleSaveEdit = (updatedData) => {
+    // console.log('[PriceTracker] Saved card data:', updatedData);
+    setIsModalVisible(false);
+  };
+
+  const formatDate = (input) => {
+    if (!input) return '—';
+  
+    try {
+      const date = new Date(input);
+      if (isNaN(date)) return input; // fallback for unparsable input
+  
+      const new_date = new Intl.DateTimeFormat('en-CA', {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(date);
+      return new_date;
+    } catch (err) {
+      console.error('Error formatting date:', err);
+      return input;
+    }
+  };
+  
+  // Delete mutation for optimization results
+  const deleteOptimizationMutation = useMutation({
+    mutationFn: (resultId) => api.delete(`/results/${resultId}`, { params: { user_id: userId } }),
+    // Optimistic update - remove the item immediately from UI
+    onMutate: async (resultId) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries(['optimizations', userId]);
+      
+      // Save the previous value
+      const previousResults = queryClient.getQueryData(['optimizations', userId]);
+      
+      // Optimistically update to the new value
+      queryClient.setQueryData(['optimizations', userId], old => 
+        old.filter(result => result.id !== resultId)
+      );
+      
+      // Return the previous value in case of rollback
+      return { previousResults };
+    },
+    onError: (err, resultId, context) => {
+      // Roll back to the previous value if there's an error
+      queryClient.setQueryData(['optimizations', userId], context.previousResults);
+      message.error('Failed to delete optimization.');
+    },
+    onSuccess: (_, resultId) => {
+      message.success('Optimization deleted successfully');
+      // If the deleted result is currently selected, deselect it
+      if (selectedResult && selectedResult.id === resultId) {
+        setSelectedResult(null);
+      }
+    },
+    onSettled: () => {
+      // Always refetch after error or success
+      queryClient.invalidateQueries(['optimizations', userId]);
+    }
+  });
+  
   // Define handleDelete
   const handleDelete = useCallback((resultId) => {
     deleteOptimizationMutation.mutate(resultId);
   }, [deleteOptimizationMutation]);
 
-  const formatDate = useCallback((dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) return 'N/A';
-      return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return 'N/A';
-    }
-  }, []);
-
   // Handle bulk deletion
-  const handleBulkDelete = useCallback(() => {
-    if (selectedResultIds.size === 0) {
-      message.warning('No optimizations selected for deletion.');
-      return;
+  const handleBulkDelete = useCallback(async () => {
+    try {
+      const count = selectedResultIds.size;
+      const deletionPromises = Array.from(selectedResultIds).map(resultId =>
+        deleteOptimizationMutation.mutateAsync(resultId)
+      );
+      await Promise.all(deletionPromises);
+      setSelectedResultIds(new Set());
+      message.success(`Successfully deleted ${count} result(s).`);
+      queryClient.invalidateQueries(['results', userId]);
+    } catch (error) {
+      console.error('Bulk deletion error:', error);
+      message.error('Failed to delete some or all of the selected results.');
+      queryClient.invalidateQueries(['results', userId]);
     }
+  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, queryClient, userId]);
   
-    Modal.confirm({
-      title: `Are you sure you want to delete ${selectedResultIds.size} selected optimization(s)?`,
-      content: 'This action cannot be undone.',
-      okText: 'Yes, delete',
-      okType: 'danger',
-      cancelText: 'Cancel',
-      onOk: async () => {
-        try {
-          // Store count before clearing for message
-          const count = selectedResultIds.size;
-          
-          // Create an array of deletion promises
-          const deletionPromises = Array.from(selectedResultIds).map(id => 
-            deleteOptimizationMutation.mutateAsync(id)
-          );
-          
-          // Wait for all deletions to complete
-          await Promise.all(deletionPromises);
-          
-          // Clear selection and show success
-          setSelectedResultIds(new Set());
-          message.success(`Successfully deleted ${count} optimization(s).`);
-          
-          // Invalidate after everything is done
-          queryClient.invalidateQueries(['optimizations', userId]);
-        } catch (error) {
-          console.error('Bulk deletion error:', error);
-          message.error('Failed to delete some or all selected optimizations.');
-          // Invalidate to get back to a consistent state
-          queryClient.invalidateQueries(['optimizations', userId]);
-        }
-      }
-    });
-  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, userId]);
-
   // Define columns for the results table
   const columns = useMemo(() => [
     {
@@ -396,12 +371,6 @@ const Results = ({ userId }) => {
     searchInput
   ]);
 
-  const handleModalClose = useCallback(() => {
-    setIsModalVisible(false);
-    setSelectedCard(null);
-    setCardData(null);
-  }, []);
-
   if (loading) return <Spin size="large" />;
 
   return (
@@ -447,9 +416,17 @@ const Results = ({ userId }) => {
                 Reset All Filters
               </Button>
               {selectedResultIds.size > 0 && (
-                <Button danger onClick={handleBulkDelete} icon={<DeleteOutlined />}>
+                <Popconfirm
+                title={`Are you sure you want to delete ${selectedResultIds.size} selected result(s)?`}
+                okText="Yes"
+                cancelText="No"
+                onConfirm={handleBulkDelete}
+                disabled={selectedResultIds.size === 0}
+              >
+                <Button danger icon={<DeleteOutlined />} disabled={selectedResultIds.size === 0}>
                   Delete Selected ({selectedResultIds.size})
                 </Button>
+              </Popconfirm>
               )}
             </Space>
           </div>
@@ -473,19 +450,25 @@ const Results = ({ userId }) => {
         title={selectedCard?.name}
         open={isModalVisible}
         onCancel={handleModalClose}
-        width={800}
         footer={null}
+        width={800}
+        destroyOnClose
       >
-        {isLoading ? (
-          <div className="text-center p-4">
+        {isCardLoading ? (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
             <Spin size="large" />
-            <Text className="mt-4">Loading card details...</Text>
+            <p>Loading card details...</p>
           </div>
         ) : cardData ? (
-          <ScryfallCardView cardData={cardData} mode="view" />
+          <ScryfallCardView
+            key={`${selectedCard?.id}-${cardData.id}`}
+            cardData={cardData}
+            mode={modalMode}
+            onSave={handleSaveEdit}
+          />
         ) : (
-          <div className="text-center p-4">
-            <Text>No card data available</Text>
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <p>No card data available</p>
           </div>
         )}
       </Modal>

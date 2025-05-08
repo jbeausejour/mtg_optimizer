@@ -1,200 +1,234 @@
 import logging
-from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any, Tuple
 
-from app.extensions import db
+from sqlalchemy import select, and_, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 from app.models.scan import Scan, ScanResult
 from app.models.site import Site
-from sqlalchemy import and_, func
-from sqlalchemy.exc import SQLAlchemyError
+from app.services.async_base_service import AsyncBaseService
 
 logger = logging.getLogger(__name__)
 
 
-class ScanService:
+class ScanService(AsyncBaseService[Scan]):
+    """Async service for scan operations"""
 
-    @staticmethod
-    @contextmanager
-    def transaction_context():
-        """Context manager for database transactions"""
-        try:
-            yield
-            db.session.commit()
-        except SQLAlchemyError as e:
-            db.session.rollback()
-            logger.error(f"Database error: {str(e)}")
-            raise
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error in transaction: {str(e)}")
-            raise
-        finally:
-            db.session.close()
+    model_class = Scan
 
     @staticmethod
     def _get_current_time():
         """Return current time in UTC without microseconds"""
         return datetime.now(timezone.utc).replace(microsecond=0)
 
-    @staticmethod
-    def create_scan(buylist_id):
+    @classmethod
+    async def create_scan(cls, session: AsyncSession, buylist_id: int) -> int:
         """Create and persist a new scan"""
         try:
-            scan = Scan(buylist_id=buylist_id)
-            db.session.add(scan)
-            db.session.flush()  # Get the ID without committing
-            scan_id = scan.id  # Store the ID
-            db.session.commit()  # Now commit
-            return scan_id  # Return just the ID instead of the scan object
+            scan = await cls.create(session, buylist_id=buylist_id)
+            # ensures other workers can access it
+            return scan.id
         except Exception as e:
             logger.error(f"Error creating scan: {str(e)}")
-            db.session.rollback()
             raise
 
-    @staticmethod
-    def get_scan_by_id(scan_id):
-        """Get a scan by ID, ensuring it's attached to the current session"""
-        return db.session.get(Scan, scan_id)
-
-    @staticmethod
-    def get_scan_by_id_and_sites(scan_id, site_ids):
-        """Get a scan by ID, ensuring it's attached to the current session"""
-        results = (
-            db.session.query(ScanResult)
-            .filter(ScanResult.scan_id == scan_id)
-            .filter(ScanResult.site_id.in_(site_ids))
-            .all()
-        )
-        return results
-
-    @staticmethod
-    def get_latest_filtered_scan_results(card_name: str):
-        """Get latest scan result for a specific card name"""
-        try:
-            result = ScanResult.query.filter_by(name=card_name).order_by(ScanResult.updated_at.desc()).first()
-            return result
-        except Exception as e:
-            logger.error(f"Error getting latest filtered scan results for {card_name}: {str(e)}")
-            return None
-
-    def get_fresh_scan_results(fresh_cards, site_ids):
+    @classmethod
+    async def delete_scans(cls, session: AsyncSession, scan_ids: List[int]) -> Tuple[List[int], List[Dict]]:
         """
-        Get latest scan results for multiple cards.
-        Uses window functions to efficiently get the most recent entry per card.
+        Deletes scans by their IDs.
+
+        Returns:
+        - deleted: List of successfully deleted scan IDs
+        - errors: List of {scan_id, error} dicts
         """
+        deleted = []
+        errors = []
+
+        for scan_id in scan_ids:
+            try:
+                scan = await session.get(Scan, scan_id)
+                if not scan:
+                    logger.warning(f"[delete_scans] Scan ID {scan_id} not found.")
+                    errors.append({"scan_id": scan_id, "error": "Not found"})
+                    continue
+
+                await cls.delete_object(session, scan)
+                logger.info(f"[delete_scans] Deleted Scan ID {scan_id}.")
+                deleted.append(scan_id)
+
+            except Exception as e:
+                logger.error(f"[delete_scans] Error deleting scan ID {scan_id}: {str(e)}")
+                errors.append({"scan_id": scan_id, "error": str(e)})
+
+        return deleted, errors
+
+    @classmethod
+    async def get_all_scans(cls, session: AsyncSession) -> List[Scan]:
+        """Get all scans ordered by creation date with preloaded scan_results"""
         try:
-            # Subquery to get latest scan for each card
-            latest_scans = (
-                db.session.query(
-                    ScanResult.name, ScanResult.site_id, func.max(ScanResult.updated_at).label("max_updated_at")
-                )
-                .filter(and_(ScanResult.name.in_(fresh_cards), ScanResult.site_id.in_(site_ids)))
-                .group_by(ScanResult.name, ScanResult.site_id)
-                .subquery()
+            result = await session.execute(
+                select(Scan).options(selectinload(Scan.scan_results)).order_by(Scan.created_at.desc())
             )
-
-            # Main query to get the full scan results
-            fresh_query_results = (
-                db.session.query(ScanResult)
-                .join(
-                    latest_scans,
-                    and_(
-                        ScanResult.name == latest_scans.c.name,
-                        ScanResult.site_id == latest_scans.c.site_id,
-                        ScanResult.updated_at == latest_scans.c.max_updated_at,
-                    ),
-                )
-                .all()
-            )
-
-            return fresh_query_results
-
+            return result.scalars().all()
         except Exception as e:
-            logger.error(f"Error getting latest scan results: {str(e)}")
+            logger.error(f"Error getting all scans: {str(e)}")
             return []
 
-    @staticmethod
-    def save_scan_result(scan_id, result):
+    @classmethod
+    async def create_scan_result(cls, session: AsyncSession, scan_id: int, card_result: Dict[str, Any]) -> ScanResult:
         """Save a single scan result"""
-        with ScanService.transaction_context():
-            # Verify scan exists and is attached to session
-            scan = db.session.get(Scan, scan_id)
+        try:
+            # Verify scan exists
+            scan = await session.get(Scan, scan_id)
             if not scan:
                 raise ValueError(f"No scan found with id {scan_id}")
 
             scan_result = ScanResult(
                 scan_id=scan_id,
-                name=result["name"],
-                site_id=result["site_id"],
-                price=result["price"],
-                set_name=result["set_name"],
-                set_code=result["set_code"],
-                version=result.get("version", "Standard"),
-                foil=result.get("foil", False),
-                quality=result.get("quality"),
-                language=result.get("language", "English"),
-                quantity=result.get("quantity", 0),
-                variant_id=result.get("variant_id"),
-                updated_at=ScanService._get_current_time(),
+                name=card_result["name"],
+                price=card_result["price"],
+                site_id=card_result["site_id"],
+                set_name=card_result["set_name"],
+                set_code=card_result["set_code"],
+                version=card_result.get("version"),
+                foil=card_result.get("foil", False),
+                quality=card_result.get("quality"),
+                language=card_result.get("language", "English"),
+                quantity=card_result.get("quantity", 0),
+                variant_id=card_result.get("variant_id"),
+                updated_at=datetime.now(timezone.utc),
             )
-            db.session.add(scan_result)
+            session.add(scan_result)
             return scan_result
+        except Exception as e:
 
-    @staticmethod
-    def get_latest_scan_results():
-        latest_scan = Scan.query.order_by(Scan.id.desc()).first()
-        if not latest_scan:
+            await session.rollback()
+            logger.error(f"Error creating scan result: {str(e)}")
+            raise
+
+    @classmethod
+    async def get_scan_results_by_id_and_sites(
+        cls, session: AsyncSession, scan_id: int, site_ids: List[int]
+    ) -> List[ScanResult]:
+        """Get scan results by scan ID and site IDs"""
+        try:
+            result = await session.execute(
+                select(ScanResult).filter(ScanResult.scan_id == scan_id).filter(ScanResult.site_id.in_(site_ids))
+            )
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting scan results by ID and sites: {str(e)}")
+            return []
+
+    @classmethod
+    async def get_latest_scan_results(cls, session: AsyncSession):
+        """Get latest scan results with site names"""
+        try:
+            # Get the latest scan
+            result = await session.execute(select(Scan).order_by(Scan.id.desc()).limit(1))
+            latest_scan = result.scalars().first()
+
+            if not latest_scan:
+                return None, None
+
+            # Get scan results
+            results_query = await session.execute(
+                select(
+                    ScanResult.name,
+                    ScanResult.price,
+                    ScanResult.site_id,
+                    ScanResult.set_name,
+                    ScanResult.quality,
+                    ScanResult.foil,
+                    ScanResult.language,
+                    ScanResult.quantity,
+                    ScanResult.updated_at,
+                ).filter(ScanResult.scan_id == latest_scan.id)
+            )
+            results = results_query.all()
+
+            # Get site names
+            if results:
+                site_ids = [r.site_id for r in results]
+                sites_query = await session.execute(select(Site).filter(Site.id.in_(site_ids)))
+                sites = sites_query.scalars().all()
+                site_map = {site.id: site.name for site in sites}
+
+                # Format results with site names
+                results_with_sites = [(*r[:-1], site_map.get(r.site_id, "Unknown Site")) for r in results]
+                return latest_scan, results_with_sites
+
+            return latest_scan, []
+        except Exception as e:
+            logger.error(f"Error getting latest scan results: {str(e)}")
             return None, None
 
-        # Use SiteService to get site names
-        results = (
-            db.session.query(
-                ScanResult.name,
-                ScanResult.price,
-                ScanResult.site_id,
-                ScanResult.set_name,
-                ScanResult.quality,
-                ScanResult.foil,
-                ScanResult.language,
-                ScanResult.quantity,
-            )
-            .filter(ScanResult.scan_id == latest_scan.id)
-            .all()
-        )
-
-        # Convert results to include site names
-        if results:
-            site_ids = [r.site_id for r in results]
-            sites = Site.query.filter(Site.id.in_(site_ids)).all()
-            site_map = {site.id: site.name for site in sites}
-            results_with_sites = [(*r[:-1], site_map.get(r.site_id, "Unknown Site")) for r in results]
-            return latest_scan, results_with_sites
-
-        return latest_scan, []
-
-    # Scan Operations
-    @staticmethod
-    def get_scan_results(scan_id):
-        scan = db.session.get(Scan, scan_id)
-        if not scan:
-            return None
-        return scan
-
-    @staticmethod
-    def get_all_scan_results():
-        return Scan.query.order_by(Scan.created_at.desc()).all()
-
-    @staticmethod
-    def delete_scan(scan_id):
-        """Delete a scan by its ID."""
+    @classmethod
+    async def get_latest_scan_results_by_site_and_cards(
+        cls, session: AsyncSession, fresh_cards: List[str], site_ids: List[int]
+    ) -> List[ScanResult]:
+        """
+        Get latest scan results for multiple cards.
+        Uses window functions to efficiently get the most recent entry per card.
+        """
         try:
-            scan = db.session.get(Scan, scan_id)
-            if not scan:
-                return False
-            db.session.delete(scan)
-            db.session.commit()
-            return True
+            # This approach uses a CTE (Common Table Expression) for better performance with async SQLAlchemy
+            latest_scans_cte = (
+                select(ScanResult.name, ScanResult.site_id, func.max(ScanResult.updated_at).label("max_updated_at"))
+                .filter(and_(ScanResult.name.in_(fresh_cards), ScanResult.site_id.in_(site_ids)))
+                .group_by(ScanResult.name, ScanResult.site_id)
+                .cte("latest_scans")
+            )
+
+            result = await session.execute(
+                select(ScanResult)
+                .join(
+                    latest_scans_cte,
+                    and_(
+                        ScanResult.name == latest_scans_cte.c.name,
+                        ScanResult.site_id == latest_scans_cte.c.site_id,
+                        ScanResult.updated_at == latest_scans_cte.c.max_updated_at,
+                    ),
+                )
+                .options(selectinload(ScanResult.site))  # <== this line ensures site is fetched eagerly
+            )
+
+            return result.scalars().all()
         except Exception as e:
-            logger.error(f"Error deleting scan: {str(e)}")
-            db.session.rollback()
-            return False
+            logger.error(f"Error getting latest scan results by site and cards: {str(e)}")
+            return []
+
+    @classmethod
+    async def get_latest_scan_updated_at_by_card_name(cls, session: AsyncSession, card_name: str) -> Optional[datetime]:
+        """Get only the updated_at timestamp for a specific card, safely detached from session"""
+        try:
+            result = await session.execute(
+                select(ScanResult.updated_at)
+                .filter(ScanResult.name == card_name)
+                .order_by(ScanResult.updated_at.desc())
+                .limit(1)
+            )
+            updated_at = result.scalar_one_or_none()
+            return updated_at.replace(tzinfo=timezone.utc, microsecond=0) if updated_at else None
+        except Exception as e:
+            logger.error(f"Error getting updated_at for {card_name}: {str(e)}")
+            return None
+
+    @classmethod
+    async def get_scan_results_by_scan_id(cls, session: AsyncSession, scan_id: int) -> List[ScanResult]:
+        try:
+            stmt = (
+                select(Scan)
+                .options(
+                    selectinload(Scan.scan_results),
+                    selectinload(Scan.optimization_result),
+                )
+                .filter(Scan.id == scan_id)
+            )
+            result = await session.execute(stmt)
+            return result.scalars().first()
+        except Exception as e:
+            logger.error(f"Error fetching full scan by ID: {str(e)}")
+            return None

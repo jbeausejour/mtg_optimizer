@@ -65,7 +65,7 @@ QUALITY_WEIGHTS: Dict[str, float] = {
     "NM": 1.0,
     "LP": 1.3,
     "MP": 1.7,
-    "HP": 2.5,
+    "HP": 5.5,
     "DMG": 999999,
 }
 
@@ -288,6 +288,10 @@ class CardLanguage(str, Enum):
     @classmethod
     def get_language_mapping(cls):
         return LANGUAGE_MAPPING
+
+    @classmethod
+    def get_weight(cls, language: str) -> float:
+        return LANGUAGE_WEIGHTS.get(language, LANGUAGE_WEIGHTS["default"])
 
 
 class CardVersion(str, Enum):

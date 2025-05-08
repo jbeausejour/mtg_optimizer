@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import pandas as pd
+from sqlalchemy import select
 from app import create_app
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from app.utils.async_context_manager import celery_session_scope
 from app.constants.card_mappings import CardQuality
 from app.dto.optimization_dto import (
     CardInSolution,
@@ -14,43 +18,34 @@ from app.dto.optimization_dto import (
     OptimizationSolution,
     StoreInSolution,
 )
+
 from app.models.site import Site
+from app.models.site_statistics import SiteStatistics
+from app.services.site_service import SiteService
 from app.services.card_service import CardService
 from app.services.optimization_service import OptimizationService
 from app.services.scan_service import ScanService
 from app.tasks.celery_instance import celery_app
-from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer
+from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer, SiteScrapeStats
 from app.utils.optimization import PurchaseOptimizer
 from celery import states
 
 logger = logging.getLogger(__name__)
 
 
-def is_data_fresh(card_name, min_age_seconds=1800):
-    """Check if the card data is fresh (less than 30 minutes old)"""
-    scan_result = ScanService.get_latest_filtered_scan_results(card_name)
-
-    if not scan_result:
-        return False
-
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    age = now - scan_result.updated_at.replace(tzinfo=timezone.utc, microsecond=0)
-    return age.total_seconds() < min_age_seconds  # 30 minutes
-
-
 def get_fresh_scan_results(fresh_cards, site_ids):
     """Get the latest scan results"""
-    return ScanService.get_fresh_scan_results(fresh_cards, site_ids)
+    return ScanService.get_latest_scan_results_by_site_and_cards(fresh_cards, site_ids)
 
 
 class OptimizationTaskManager:
-    def __init__(self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store):
+    def __init__(self, site_ids, sites, card_list_from_frontend, strategy, min_store, find_min_store):
         self.site_ids = site_ids
         self.card_list_from_frontend = card_list_from_frontend
         self.strategy = strategy
         self.min_store = min_store
         self.find_min_store = find_min_store
-        self.sites = Site.query.filter(Site.id.in_(site_ids)).all()
+        self.sites = sites
         self.site_data = {site.id: {"name": site.name, "url": site.url} for site in self.sites}
         self.card_names = [card["name"] for card in card_list_from_frontend if "name" in card]
         self.logger = logger
@@ -61,137 +56,19 @@ class OptimizationTaskManager:
             "unknown_qualities": set(),
         }
 
-    def create_new_scan(self, buylist_id):
-        """Create a new scan and store its ID in the instance"""
-        try:
-            self.current_scan_id = ScanService.create_scan(buylist_id)
-            logger.info(f"Created new scan with ID: {self.current_scan_id}")
-            return self.current_scan_id
-        except Exception as e:
-            logger.error(f"Error in create_new_scan: {str(e)}")
-            raise
+    async def initialize(self, session: AsyncSession):
+        """
+        Async initialization method to load sites safely in an async context.
+        """
+        stmt = select(Site).filter(Site.id.in_(self.site_ids))
+        result = await session.execute(stmt)
+        self.sites = result.scalars().all()
+        self.site_data = {
+            site.id: {"name": site.name, "url": site.url, "api_url": getattr(site, "api_url", None)}
+            for site in self.sites
+        }
 
-    async def handle_scraping(self, min_age_seconds, buylist_id, celery_task=None):
-        try:
-            if celery_task:
-                celery_task.progress += 5
-                # progress = 15
-                celery_task.update_state(
-                    state="PROCESSING", meta={"status": "Creating new scan", "progress": f"{celery_task.progress:.2f}"}
-                )
-            if not self.current_scan_id:
-                self.create_new_scan(buylist_id)
-
-            processed_combinations = set()
-            # Check which cards need updating
-            outdated_cards = []
-            fresh_cards = []
-            for card in self.card_list_from_frontend:
-                if is_data_fresh(card["name"], min_age_seconds):
-                    fresh_cards.append(card["name"])
-                else:
-                    outdated_cards.append(card)
-
-            logger.info("=============================")
-            logger.info(f"Found {len(fresh_cards)} cards with fresh data and {len(outdated_cards)} outdated cards")
-            logger.info("=============================")
-            # Fix: Use string join method on the list of card names
-            if fresh_cards:
-                logger.info("Fresh cards:\n - " + "\n - ".join(fresh_cards))
-                logger.info("=============================")
-
-            # Get fresh results first
-            fresh_results = []
-
-            async def fetch_fresh_data():
-                if fresh_cards:
-                    fresh_query_results = get_fresh_scan_results(fresh_cards, self.site_ids)
-
-                    return [
-                        {
-                            "site_id": r.site_id,
-                            "name": r.name,
-                            "set_name": r.set_name,
-                            "set_code": r.set_code,
-                            "language": r.language,
-                            "version": getattr(r, "version", "Standard"),
-                            "foil": bool(getattr(r, "foil", False)),
-                            "quality": r.quality,
-                            "quantity": int(r.quantity),
-                            "price": round(float(r.price), 2),
-                            "variant_id": r.variant_id,
-                        }
-                        for r in fresh_query_results
-                    ]
-                return []  # ✅ Always return an empty list instead of None
-
-            async def scrape_outdated_data(celery_task=None):
-                if not outdated_cards:
-                    logger.info("All cards have fresh data, skipping scraping :)")
-                    logger.info("=============================")
-                    return []
-
-                # Fix: Same correction for outdated cards
-                logger.info("Scraping outdated cards:\n - " + "\n - ".join([card["name"] for card in outdated_cards]))
-                logger.info("=============================")
-                if celery_task:
-                    celery_task.progress += 5
-                    # progress = 20
-                    celery_task.update_state(
-                        state="PROCESSING",
-                        meta={"status": "Scraping outdated cards", "progress": f"{celery_task.progress:.2f}"},
-                    )
-                scraper = ExternalDataSynchronizer()
-
-                deduplicated_new_results = []
-                # loop = asyncio.new_event_loop()
-                # asyncio.set_event_loop(loop)
-                # try:
-                scan_id = self.current_scan_id
-
-                # progress = 20 --> 40
-                new_results = await scraper.scrape_multiple_sites(
-                    self.sites, [card["name"] for card in outdated_cards], celery_task
-                )
-                for result in new_results:
-                    combo_key = (
-                        result["site_id"],
-                        result["name"],
-                        result["set_name"],
-                        result["set_code"],
-                        result["language"],
-                        result["version"],
-                        result["foil"],
-                        result["quality"],
-                        result["price"],
-                        result["variant_id"],
-                    )
-                    if combo_key not in processed_combinations:
-                        processed_combinations.add(combo_key)
-                        deduplicated_new_results.append(result)
-                        ScanService.save_scan_result(scan_id, result)
-
-                logger.info(f"Scraped and saved {len(deduplicated_new_results)} new results with scan_id {scan_id}")
-                return deduplicated_new_results
-
-            # Run database fetching and web scraping in parallel
-            fresh_results, new_results = await asyncio.gather(fetch_fresh_data(), scrape_outdated_data(celery_task))
-
-            if celery_task:
-                celery_task.progress = 45
-                # progress = 45
-                celery_task.update_state(
-                    state="PROCESSING", meta={"status": "Scraping complete", "progress": celery_task.progress}
-                )
-            all_results = fresh_results + new_results
-            logger.info(f"Total results collected: {len(all_results)}")
-            return all_results
-
-        except Exception as e:
-            logger.exception(f"Error in handle_scraping: {str(e)}")
-            raise  # Let the outer transaction handle rollback
-
-    def prepare_optimization_data(self, scraping_results):
+    async def prepare_optimization_data(self, scraping_results):
         """Prepare optimization data from scraping results or database"""
         try:
             card_listings = []
@@ -276,7 +153,7 @@ class OptimizationTaskManager:
 
     def _fetch_scan_results(self, scan_id):
         """Fetch scan results from database"""
-        scan_results = ScanService.get_scan_by_id_and_sites(scan_id, site_ids=self.site_ids)
+        scan_results = ScanService.get_scan_results_by_id_and_sites(scan_id, site_ids=self.site_ids)
         return scan_results
 
     def _process_listings_dataframe(self, df):
@@ -285,7 +162,7 @@ class OptimizationTaskManager:
             return None
 
         # Step 1: Define the quality weights once at the top (if not already)
-        quality_weights = {"NM": 1.0, "LP": 0.9, "MP": 0.8, "HP": 0.7, "DMG": 0.5}
+        quality_weights = {"NM": 1.0, "LP": 0.9, "MP": 0.8, "HP": 0.3, "DMG": 0.1}
         mapping = CardQuality.get_upper_mapping()
         # Step 2: Normalize quality efficiently (fully vectorized, no apply)
         df["quality"] = df["quality"].str.strip().str.upper().map(mapping).fillna("NM")
@@ -357,7 +234,7 @@ class OptimizationTaskManager:
 
         return len(sites_stats)
 
-    def run_optimization(self, filtered_listings_df, user_wishlist_df, celery_task=None):
+    async def run_optimization(self, filtered_listings_df, user_wishlist_df, celery_task=None):
         """Run optimization with the prepared data"""
 
         logger.info("=== Starting Optimization Process ===")
@@ -441,153 +318,354 @@ def serialize_results(obj):
     return obj
 
 
+def _get_site_queue(site):
+    """Determine the appropriate queue for a site based on its scraping method"""
+    method = site.method.lower()
+    site_id = site.id
+
+    if method == "crystal":
+        # Distribute crystal sites between two workers
+        if site_id % 2 == 0:  # Even IDs go to crystal_1
+            return "site_crystal_1"
+        else:  # Odd IDs go to crystal_2
+            return "site_crystal_2"
+    elif method == "shopify":
+        return "site_shopify"
+    elif method == "f2f":
+        return "site_f2f"
+    elif method == "scrapper":
+        return "site_scrapper"
+    else:
+        return "site_other"
+
+
+@celery_app.task(bind=True, soft_time_limit=1800, time_limit=1860)
+def scrape_site_task(self, site_id, card_names, scan_id):
+    """Task to scrape a single site."""
+    if not hasattr(self, "progress"):
+        self.progress = 0
+
+    result = {"site_id": site_id, "site_name": "Unknown", "count": 0, "error": None}
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_async_scrape_site(self, site_id, card_names, scan_id, result))
+    except RuntimeError as e:
+        # Handle "event loop is closed" error
+        logger.warning(f"Retrying scrape_site_task due to closed loop: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_async_scrape_site(self, site_id, card_names, scan_id, result))
+    except Exception as e:
+        logger.exception(f"Fatal error in scrape_site_task for site {site_id}: {e}")
+        result["error"] = str(e)
+        return result
+
+
+async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
+    """Async implementation of the scrape site task."""
+    try:
+        # Get the site data from the database
+        async with celery_session_scope() as session:
+            site_query = await session.execute(select(Site).filter(Site.id == site_id))
+            site = site_query.scalars().first()
+
+            if not site:
+                logger.error(f"Site with ID {site_id} not found")
+                result["error"] = "Site not found"
+                return result
+
+            # Store site data in dictionary to avoid session dependency
+            site_data = {
+                "id": site.id,
+                "name": site.name,
+                "method": site.method,
+                "url": site.url,
+                "api_url": site.api_url,
+            }
+
+            # Update result with site name
+            result["site_name"] = site.name
+
+        # Create scraper and stats objects
+        scraper = ExternalDataSynchronizer()
+        stats = SiteScrapeStats()
+
+        # Run the scraping with site_data instead of site
+        scraping_results = await scraper.process_site(site_data, card_names, stats, 0, celery_task)
+
+        # Save results to database
+        if scraping_results:
+            async with celery_session_scope() as session:
+                for card_result in scraping_results:
+                    await ScanService.create_scan_result(session, scan_id, card_result)
+
+                await stats.persist_to_db(session, scan_id)
+                await session.commit()
+            result["count"] = len(scraping_results)
+            logger.info(f"Site {site_data['name']} completed with {len(scraping_results)} results")
+        else:
+            logger.warning(f"No results found for site {site_data['name']}")
+
+        # Clean up scraper resources if needed
+        if hasattr(scraper, "__aexit__"):
+            await scraper.__aexit__(None, None, None)
+
+        # Return the result
+        return result
+
+    except Exception as e:
+        logger.exception(f"Error in _async_scrape_site for site {site_id}: {str(e)}")
+        result["error"] = str(e)
+        return result
+
+
 @celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
-def start_scraping_task(
-    self, site_ids, card_list_from_frontend, strategy, min_store, find_min_store, min_age_seconds, buylist_id
+def start_scraping_task(self, *args, **kwargs):
+    if not hasattr(self, "progress"):
+        self.progress = 0
+    logger.info("start_scraping_task started")
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_async_start_scraping_task(self, *args, **kwargs))
+    except RuntimeError as e:
+        logger.warning(f"Retrying start_scraping_task due to closed loop: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_async_start_scraping_task(self, *args, **kwargs))
+    except Exception as e:
+        logger.exception(f"Fatal error in start_scraping_task: {e}")
+        return {
+            "status": "Failed",
+            "message": f"Task execution failed: {str(e)}",
+            "sites_scraped": 0,
+            "cards_scraped": 0,
+            "solutions": [],
+            "errors": {"unreachable_stores": [], "unknown_languages": [], "unknown_qualities": []},
+        }
+
+
+async def _async_start_scraping_task(
+    celery_task,
+    site_ids,
+    card_list_from_frontend,
+    strategy,
+    min_store,
+    find_min_store,
+    min_age_seconds,
+    buylist_id,
+    user_id,
+    strict_preferences,
+    user_preferences,
 ) -> Dict:
+    """Async implementation of the start_scraping_task"""
+
+    def update_progress(status: str, progress: float, details: Optional[dict] = None):
+        celery_task.progress = progress
+        celery_task.update_state(
+            state="PROCESSING",
+            meta={"status": status, "progress": progress, **({"details": details} if details else {})},
+        )
+
+    try:
+        logger.info("_async_start_scraping_task started")
+        total_start_time = time.time()
+        config = OptimizationConfigDTO(
+            strategy=strategy,
+            min_store=min_store,
+            find_min_store=find_min_store,
+            buylist_id=buylist_id,
+            user_id=user_id,
+            strict_preferences=strict_preferences,
+            user_preferences=user_preferences,
+        )
+
+        # Initialize scan
+        scan_id = await _initialize_scan(buylist_id, celery_task)
+
+        # Evaluate freshness
+        card_names = [card["name"] for card in card_list_from_frontend]
+        fresh_cards, outdated_cards = await _evaluate_card_freshness(card_names, min_age_seconds)
+
+        logger.info(f"Found {len(fresh_cards)} fresh, {len(outdated_cards)} outdated cards")
+        celery_task.progress = 10
+        update_progress("Retrieving fresh card data", celery_task.progress)
+
+        # Retrieve fresh results
+        all_results = []
+        if fresh_cards:
+            all_results.extend(await _get_fresh_card_results(fresh_cards, site_ids))
+
+        # Scrape outdated cards
+        if outdated_cards:
+            await _launch_and_track_scraping_tasks(celery_task, outdated_cards, site_ids, scan_id)
+
+        celery_task.progress = 55
+        update_progress("Retrieving scraping results", celery_task.progress)
+
+        # Build final scan result set
+        new_results = await _build_final_results(scan_id, outdated_cards)
+        all_results.extend(new_results)
+
+        # Log scrape statistics
+        await _log_scrape_statistics(scan_id)
+
+        # Run optimization
+        result = await _optimize_and_return_result(
+            celery_task, config, card_list_from_frontend, all_results, site_ids, scan_id, total_start_time
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Error in _async_start_scraping_task: {str(e)}")
+        raise
+
+
+async def _initialize_scan(buylist_id, celery_task):
+
+    async with celery_session_scope() as session:
+        scan = await ScanService.create(session, buylist_id=buylist_id)
+        await session.commit()
+        celery_task.progress = 5
+        celery_task.update_state(state="PROCESSING", meta={"status": "Created scan"})
+    return scan.id
+
+
+async def _evaluate_card_freshness(card_names, min_age_seconds):
+    fresh, outdated = [], []
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    async with celery_session_scope() as session:
+        for name in card_names:
+            updated_at = await ScanService.get_latest_scan_updated_at_by_card_name(session, name)
+            if updated_at and (now - updated_at).total_seconds() < min_age_seconds:
+                fresh.append(name)
+            else:
+                outdated.append(name)
+
+    return fresh, outdated
+
+
+async def _get_fresh_card_results(fresh_cards, site_ids):
+    async with celery_session_scope() as session:
+        results = await ScanService.get_latest_scan_results_by_site_and_cards(session, fresh_cards, site_ids)
+        return [r.to_dict() for r in results]
+
+
+async def _launch_and_track_scraping_tasks(celery_task, outdated_cards, site_ids, scan_id):
+    async with celery_session_scope() as session:
+        sites = await SiteService.get_sites_by_ids(session, site_ids)
+
+    progress_increment = 30 / len(sites) if sites else 0
+    site_tasks = []
+
+    for idx, site in enumerate(sites):
+        queue = _get_site_queue(site)
+        task = scrape_site_task.apply_async(
+            kwargs={"site_id": site.id, "card_names": outdated_cards, "scan_id": scan_id}, queue=queue
+        )
+        site_tasks.append(task)
+        celery_task.progress = 15 + ((idx + 1) * progress_increment)
+        celery_task.update_state(state="PROCESSING", meta={"status": f"Dispatched {idx + 1}/{len(sites)}"})
+
+    completed = 0
+    while completed < len(site_tasks):
+        completed = sum(1 for t in site_tasks if t.ready())
+        await asyncio.sleep(2)
+
+
+async def _build_final_results(scan_id, outdated_cards):
     """
-    Execute optimization task for given cards and sites.
-    Returns serialized OptimizationResultDTO.
+    Fetches and prepares scan results safely within the session context.
     """
-    app = create_app()  # Create the Flask app
-    with app.app_context():
-        # Ensure the celery task object has a progress attribute
-        if not hasattr(self, "progress"):
-            self.progress = 0
 
-        def update_progress(status: str, progress: int):
-            self.update_state(state="PROCESSING", meta={"status": status, "progress": progress})
+    async with celery_session_scope() as session:
+        scan = await ScanService.get_scan_results_by_scan_id(session, scan_id)
+        if not scan:
+            logger.error(f"Scan ID {scan_id} not found in DB.")
+            raise ValueError(f"Could not fetch scan with ID {scan_id}")
 
-        async def async_scraping_task(task_manager, celery_task):
-            """Runs the scraping process asynchronously using the existing task_manager"""
-            # Create a new event loop for this task to ensure isolation
+        # Ensure scan_results are loaded and processed within the session
+        filtered_results = []
+        for r in scan.scan_results:
+            if r.name not in outdated_cards:
+                continue
             try:
-                return await task_manager.handle_scraping(min_age_seconds, buylist_id, celery_task)
+                filtered_results.append(
+                    {
+                        "name": r.name,
+                        "price": float(r.price),
+                        "site_id": r.site_id,
+                        "set_name": r.set_name,
+                        "set_code": r.set_code,
+                        "version": r.version,
+                        "foil": r.foil,
+                        "quality": r.quality,
+                        "language": r.language,
+                        "quantity": r.quantity,
+                        "variant_id": r.variant_id,
+                        "updated_at": r.updated_at.isoformat(),
+                        # Optional: add "site_name" here by manually joining it in a separate call if needed
+                    }
+                )
             except Exception as e:
-                logger.exception(f"Error in async_scraping_task: {str(e)}")
-                raise
+                logger.warning(f"Skipping result due to error: {e} for card {r.name}")
 
-        try:
-            # Start total time tracking
-            total_start_time = time.time()
-
-            # ✅ Create a single instance of task_manager
-            config = OptimizationConfigDTO(strategy=strategy, min_store=min_store, find_min_store=find_min_store)
-            task_manager = OptimizationTaskManager(
-                site_ids,
-                card_list_from_frontend,
-                config.strategy,
-                config.min_store,
-                config.find_min_store,
-            )
-            self.progress = 10
-            logger = task_manager.logger
-
-            # Scraping phase (Parallelized)
-            # progress = 10
-            update_progress("Scraping started", self.progress)
-            scrape_start_time = time.time()
-
-            # ✅ Run the async scraping function with the existing task_manager
-
-            # progress = 10 --> 45
-            try:
-                # Create a new event loop for this task
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                # Run the scraping task in the new loop
-                scraping_results = loop.run_until_complete(async_scraping_task(task_manager, self))
-
-                # Clean up the loop
-                loop.close()
-            except Exception as e:
-                logger.exception(f"Failed to run scraping task: {str(e)}")
-                return handle_failure("Scraping task failed", task_manager)
-            finally:
-                # Reset event loop policy to default
-                asyncio.set_event_loop(None)
-
-            scrape_elapsed_time = round(time.time() - scrape_start_time, 2)
-            if not scraping_results:
-                logger.error(f"Scraping failed (Took {scrape_elapsed_time} seconds)")
-                return handle_failure("No scraping results found", task_manager)
-
-            logger.info(f"Scraping completed in {scrape_elapsed_time} seconds")
-
-            # Data preparation phase
-
-            self.progress += 5
-            # progress = 45 --> 50
-            update_progress("Preparing data", self.progress)
-            data_prep_start_time = time.time()
-            filtered_listings_df, user_wishlist_df = task_manager.prepare_optimization_data(scraping_results)
-            data_prep_elapsed_time = round(time.time() - data_prep_start_time, 2)
-
-            if filtered_listings_df is None or filtered_listings_df.empty:
-                logger.error(f"Data preparation failed (Took {data_prep_elapsed_time} seconds)")
-                return handle_failure("No valid card listings found", task_manager)
-
-            logger.info(f"Data preparation completed in {data_prep_elapsed_time} seconds")
-
-            # Optimization phase
-            self.progress += 10
-            # progress = 50 --> 60
-            update_progress("Running optimization", self.progress)
-            optimization_start_time = time.time()
-            optimization_result = task_manager.run_optimization(filtered_listings_df, user_wishlist_df, self)
-            optimization_elapsed_time = round(time.time() - optimization_start_time, 2)
-
-            if not optimization_result or optimization_result.get("status") != "success":
-                logger.error(f"Optimization failed (Took {optimization_elapsed_time} seconds)")
-                update_progress("Optimization failed", 100)
-                return handle_failure("Optimization failed", task_manager, optimization_result)
-
-            logger.info(f"Optimization completed in {optimization_elapsed_time} seconds")
-
-            # Result processing
-            self.progress += 10
-            # progress = 70 --> 80
-            update_progress("Processing results", 80)
-            best_solution = optimization_result.get("best_solution", {})
-            iterations = optimization_result.get("iterations", [])
-
-            logger.info("Optimization Result received:")
-            logger.info(
-                f"-- Best Solution's card count: {best_solution.get('nbr_card_in_solution', 0) if isinstance(best_solution, dict) else 0}"
-            )
-            logger.info(f"-- Iterations count: {len(iterations)}")
-
-            update_progress("Optimization completed successfully", 100)
-
-            # Total execution time
-            total_elapsed_time = round(time.time() - total_start_time, 2)
-            logger.info(f"Total task execution time: {total_elapsed_time} seconds")
-
-            return handle_success(optimization_result, task_manager)
-
-        except Exception as e:
-            total_elapsed_time = round(time.time() - total_start_time, 2)
-            logger.exception(f"Task execution failed (Took {total_elapsed_time} seconds)")
-            self.update_state(
-                state=states.FAILURE,
-                meta={"exc_type": type(e).__name__, "exc_message": str(e)},
-            )
-            raise
+    return filtered_results
 
 
-@celery_app.task
-def refresh_scryfall_cache():
-    app = create_app()  # Create the Flask app
-    with app.app_context():
-        """Periodically refresh the Scryfall card name and set caches."""
-        print("Refreshing Scryfall card name and set caches...")
-        CardService.fetch_scryfall_card_names()
-        CardService.fetch_scryfall_set_codes()
+async def _log_scrape_statistics(scan_id):
+    async with celery_session_scope() as session:
+        result = await session.execute(
+            select(SiteStatistics)
+            .options(selectinload(SiteStatistics.site))  # <-- critical fix
+            .filter(SiteStatistics.scan_id == scan_id)
+        )
+        stats = result.scalars().all()
+        SiteScrapeStats.from_db(stats).log_summary(logger)
 
 
-def handle_success(optimization_result: Dict, task_manager: OptimizationTaskManager) -> Dict:
-    """Handle successful optimization"""
+async def _optimize_and_return_result(celery_task, config, cards, all_results, site_ids, scan_id, start_time):
+
+    async with celery_session_scope() as session:
+        celery_task.progress = 60
+        sites = (await session.execute(select(Site).filter(Site.id.in_(site_ids)))).scalars().all()
+        task_mgr = OptimizationTaskManager(
+            site_ids, sites, cards, config.strategy, config.min_store, config.find_min_store
+        )
+        await task_mgr.initialize(session)
+        listings_df, wishlist_df = await task_mgr.prepare_optimization_data(all_results)
+
+        if listings_df is None or listings_df.empty:
+            result = await handle_failure(session, "No valid card listings found", task_mgr, scan_id, config)
+            session.commit()
+            return result
+
+        celery_task.progress = 70
+        result = await task_mgr.run_optimization(listings_df, wishlist_df, celery_task)
+
+        if not result or result.get("status") != "success":
+            result = await handle_failure(session, "Optimization failed", task_mgr, scan_id, result, config)
+            session.commit()
+            return result
+
+        celery_task.progress = 100
+        elapsed = round(time.time() - start_time, 2)
+        logger.info(f"Task completed in {elapsed} seconds")
+        result = await handle_success(session, result, task_mgr, scan_id, config)
+
+        await session.commit()
+    return result
+
+
+async def handle_success(session, optimization_result, task_manager, scan_id, config):
+    """Handle successful optimization with async operations"""
     best_solution = optimization_result.get("best_solution", {})
     iterations = optimization_result.get("iterations", [])
 
@@ -665,27 +743,29 @@ def handle_success(optimization_result: Dict, task_manager: OptimizationTaskMana
     result_dto = OptimizationResultDTO(
         status="Completed",
         message="Optimization completed successfully",
-        sites_scraped=len(task_manager.sites),
+        buylist_id=config.buylist_id,
+        user_id=config.user_id,
+        sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=solutions,
         errors=optimization_result.get("errors", create_empty_errors()),
     )
 
-    OptimizationService.create_optimization_result(scan_id=task_manager.current_scan_id, result_dto=result_dto)
+    # Create the optimization result in the database
+    await OptimizationService.create_optimization_result(session, scan_id, result_dto)
     logger.info(f"Saved optimization result with {len(result_dto.solutions)} solutions")
+
     return result_dto.model_dump()
 
 
-def handle_failure(
-    message: str,
-    task_manager: OptimizationTaskManager,
-    optimization_result: Optional[Dict] = None,
-) -> Dict:
-    """Handle optimization failure"""
+async def handle_failure(session, message, task_manager, scan_id, config, optimization_result=None):
+    """Handle optimization failure with async operations"""
     result_dto = OptimizationResultDTO(
         status="Failed",
         message=message,
-        sites_scraped=len(task_manager.sites),
+        buylist_id=config.buylist_id,
+        user_id=config.user_id,
+        sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=[],
         errors=(
@@ -693,9 +773,37 @@ def handle_failure(
         ),
     )
 
-    OptimizationService.create_optimization_result(scan_id=task_manager.current_scan_id, result_dto=result_dto)
+    # Create the optimization result in the database
+    await OptimizationService.create_optimization_result(session, scan_id, result_dto)
     logger.info("start_scraping_task: Optimization failed")
+
     return result_dto.model_dump()
+
+
+@celery_app.task
+def refresh_scryfall_cache():
+    """Periodically refresh the Scryfall card name and set caches."""
+
+    async def run():
+        app = create_app()
+        async with app.app_context():
+            print("Refreshing Scryfall card name and set caches...")
+            await _async_refresh_cache()
+            print("Cache refresh completed")
+
+    try:
+        asyncio.run(run())
+    except RuntimeError as e:
+        # Prevent 'event loop is closed' errors when run from threads
+        print(f"Asyncio error: {e}")
+
+
+async def _async_refresh_cache():
+    """Async implementation of cache refresh"""
+    async with celery_session_scope() as session:
+
+        await CardService.fetch_scryfall_card_names_async(session)
+        await CardService.fetch_scryfall_set_codes_async(session)
 
 
 def create_empty_errors() -> Dict[str, List[str]]:

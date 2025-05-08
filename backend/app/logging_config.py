@@ -37,6 +37,6 @@ def setup_logging(log_filename="logs/app.log", add_pid=False):
     console_handler.setFormatter(ColoredFormatter("[%(name)s:%(lineno)d] - %(message)s"))
 
     file_handler = RotatingFileHandler(log_filename, maxBytes=5 * 1024 * 1024, backupCount=10, delay=True)
-    file_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s [in %(filename)s:%(lineno)d]"))
+    file_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s [%(name)s:%(lineno)d]"))
 
     return console_handler, file_handler

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from 'react-query';
+import { QueryClient, QueryClientProvider} from '@tanstack/react-query';
 import { AuthProvider } from './utils/AuthContext';
 import Navigation from './components/Navigation';
 import Login from './components/Login';
@@ -41,14 +41,14 @@ function App() {
     // Check if user is already logged in
     const storedUserId = localStorage.getItem('userId');
     if (storedUserId) {
-      console.log('User is :', storedUserId);
+      // console.log('User is :', storedUserId);
       setUserId(storedUserId);
     }
   }, []);
 
   const handleLogin = (userId) => {
     setUserId(userId);
-    console.log('Setting User to :', userId); // Corrected variable name
+    // console.log('Setting User to :', userId); // Corrected variable name
     localStorage.setItem('userId', userId);
   };
 

@@ -131,10 +131,22 @@ class OptimizationSolution(BaseModel):
         from_attributes = True
 
 
+class CardPreference(BaseModel):
+    set_name: Optional[str] = None
+    language: Optional[str] = "English"
+    quality: Optional[str] = "NM"
+    version: Optional[str] = "Standard"
+    foil: Optional[bool] = False
+
+
 class OptimizationConfigDTO(BaseModel):
     strategy: str = Field(..., pattern="^(milp|nsga-ii|hybrid)$")
     min_store: int = Field(..., gt=0)
     find_min_store: bool
+    buylist_id: int
+    user_id: int
+    strict_preferences: bool = False
+    user_preferences: Optional[Dict[str, CardPreference]] = None
 
     @field_validator("strategy")
     @classmethod
@@ -155,6 +167,8 @@ class OptimizationConfigDTO(BaseModel):
 class OptimizationResultDTO(BaseModel):
     status: str
     message: str
+    buylist_id: int
+    user_id: int
     sites_scraped: int
     cards_scraped: int
     solutions: List[OptimizationSolution]

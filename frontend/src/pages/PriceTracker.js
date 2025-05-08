@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { Card, Typography, Button, Spin, Modal, message, Space, Input, Checkbox } from 'antd';
+import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
+import { Card, Typography, Button, Spin, Modal, message, Space, Popconfirm, Input, Checkbox } from 'antd';
 import { DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import { 
   getStandardTableColumns, 
   getColumnSearchProps, 
-  getNumericFilterProps,
-  getNumericRangeFilterProps
+  getNumericFilterProps
 } from '../utils/tableConfig';
 import api from '../utils/api';
+import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
@@ -21,12 +21,21 @@ const { Title, Text } = Typography;
 const PriceTracker = ({ userId }) => {
   const { theme } = useTheme();
   const [selectedScan, setSelectedScan] = useState(null);
-  const [cardData, setCardData] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
-  const [isCardLoading, setIsCardLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState('view');
   const queryClient = useQueryClient();
-  
+
+  const [cardData, setFetchedCard] = useState(null);
+  const {
+    mutateAsync: fetchCard,
+    isLoading: isCardLoading,
+  } = useFetchScryfallCard({
+    onSuccess: (resData) => {
+      setFetchedCard(resData); // or whatever your variable is
+    }
+  });
+
   // Use our enhanced table handler for the main scans table
   const {
     filteredInfo,
@@ -61,153 +70,137 @@ const PriceTracker = ({ userId }) => {
   } = useEnhancedTableHandler({}, 'price_tracker_detail_table');
   
   // React Query to fetch scans
-  const { data: scans = [], isLoading: scansLoading } = useQuery(
-    ['scans', userId],
-    () => api.get('/scans', { params: { user_id: userId } }).then(res => res.data),
-    { staleTime: 300000 }
-  );
+  const { data: scans = [], isLoading: scansLoading } = useQuery({
+    queryKey: ['scans', userId],
+    queryFn: () => api.get('/scans', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  })
   
   // React Query to fetch scan details (when a scan is selected)
-  const { data: selectedScanDetails, isLoading: detailsLoading } = useQuery(
-    ['scanDetails', userId, selectedScan?.id],
-    () => api.get(`/scans/${selectedScan.id}`, { params: { user_id: userId } }).then(res => res.data),
-    { enabled: !!selectedScan?.id, staleTime: 300000 }
-  );
+  const { data: selectedScanDetails, isLoading: detailsLoading } = useQuery({
+    queryKey: ['scanDetails', userId, selectedScan?.id],
+    queryFn: () => api.get(`/scans/${selectedScan.id}`, { params: { user_id: userId } }).then(res => res.data),
+    enabled: !!selectedScan?.id,
+    staleTime: 300000
+  })
   
   // Mutation to delete a scan
-  const deleteScanMutation = useMutation(
-    (scanId) => api.delete(`/scans/${scanId}`, { params: { user_id: userId } }),
-    {
+  const deleteScanMutation = useMutation({
+    mutationFn: (scanId) => api.delete(`/scans/${scanId}`, { params: { user_id: userId } }),
       // Optimistic update - remove the item immediately from UI
-      onMutate: async (scanId) => {
-        // Cancel any outgoing refetches so they don't overwrite our optimistic update
-        await queryClient.cancelQueries(['scans', userId]);
-        
-        // Save the previous value
-        const previousScans = queryClient.getQueryData(['scans', userId]);
-        
-        // Optimistically update to the new value
-        queryClient.setQueryData(['scans', userId], old => 
-          old.filter(scan => scan.id !== scanId)
-        );
-        
-        // Return the previous value in case of rollback
-        return { previousScans };
-      },
-      onError: (err, scanId, context) => {
-        // Roll back to the previous value if there's an error
-        queryClient.setQueryData(['scans', userId], context.previousScans);
-        message.error('Failed to delete scan.');
-      },
-      onSettled: () => {
-        // Always refetch after error or success to make sure the server state
-        // and client state are in sync
-        queryClient.invalidateQueries(['scans', userId]);
-      }
+    onMutate: async (scanId) => {
+      // Cancel any outgoing refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries(['scans', userId]);
+      
+      // Save the previous value
+      const previousScans = queryClient.getQueryData(['scans', userId]);
+      
+      // Optimistically update to the new value
+      queryClient.setQueryData(['scans', userId], old => 
+        old.filter(scan => scan.id !== scanId)
+      );
+      
+      // Return the previous value in case of rollback
+      return { previousScans };
+    },
+    onError: (err, scanId, context) => {
+      // Roll back to the previous value if there's an error
+      queryClient.setQueryData(['scans', userId], context.previousScans);
+      message.error('Failed to delete scan.');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to make sure the server state
+      // and client state are in sync
+      queryClient.invalidateQueries(['scans', userId]);
     }
-  );
+  });
   
   const handleDelete = useCallback((scanId) => {
     setSelectedScan(null);
     deleteScanMutation.mutate(scanId);
   }, [deleteScanMutation]);
+
+  const handleCardClick = async (card) => {
+    setSelectedCard(card);
+    setModalMode('view');
+    setIsModalVisible(true);
   
-  // Mutation to fetch card data
-  const fetchCardMutation = useMutation(
-    (params) => api.get('/fetch_card', { params }),
-    {
-      onSuccess: (response) => {
-        if (!response.data?.scryfall) throw new Error('Invalid card data');
-        setCardData(response.data.scryfall);
-        setIsModalVisible(true);
-      },
-      onError: (error) => {
-        console.error('Error fetching card:', error);
-        message.error(`Failed to fetch card details: ${error.message}`);
-      },
-      onSettled: () => {
-        setIsCardLoading(false);
+    try {
+      const cardName = card.name;
+      const setCode = card.set_code || card.set || null; // fallback for Results
+      // console.log("Fetching card:", cardName, "Set:", setCode);
+  
+      await fetchCard({ name: cardName, set_code: setCode });
+    } catch (err) {
+      message.error('Failed to fetch card data');
+    }
+  };
+
+  const handleSaveEdit = (updatedData) => {
+    // console.log('[PriceTracker] Saved card data:', updatedData);
+    setIsModalVisible(false);
+  };
+
+  const handleModalClose = () => {
+    setIsModalVisible(false);
+    setFetchedCard(null);  // 🧹 Clear the card data
+  };
+
+  const formatDate = (input) => {
+    if (!input) return '—';
+  
+    try {
+      const date = new Date(input);
+      if (isNaN(date))
+      {
+        // console.log("incorrect date:", input); 
+        return input; // fallback for unparsable input
       }
-    }
-  );
-  
-  const handleCardClick = useCallback(async (record) => {
-    setSelectedCard(record);
-    setIsCardLoading(true);
-    try {
-      const deriveSetCode = (setName) => setName?.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const setCode = record.set_code || record.set || deriveSetCode(record.set_name);
-      const params = {
-        name: record.name,
-        set: setCode,
-        language: record.language || 'en',
-        version: record.version || 'Normal',
-        user_id: userId
-      };
-      fetchCardMutation.mutate(params);
-    } catch (error) {
-      console.error('Error preparing card fetch:', error);
-      message.error(`Failed to prepare card details request: ${error.message}`);
-      setIsCardLoading(false);
-    }
-  }, [fetchCardMutation, userId]);
-  
-  // Formatter for dates
-  const formatDate = useCallback((dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) return 'N/A';
-      return date.toLocaleString('en-US', {
+
+      const new_date = new Intl.DateTimeFormat('en-CA', {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         year: 'numeric',
         month: 'short',
-        day: 'numeric',
+        day: '2-digit',
         hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return 'N/A';
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(date);
+      return new_date;
+    } catch (err) {
+      console.error('Error formatting date:', err);
+      return input;
     }
-  }, []);
+  };
   
   // Handle bulk deletion
-  const handleBulkDelete = useCallback(() => {
+  const handleBulkDelete = useCallback(async () => {
     if (selectedScanIds.size === 0) {
       message.warning('No scans selected for deletion.');
       return;
     }
     
-    Modal.confirm({
-      title: `Are you sure you want to delete ${selectedScanIds.size} selected scan(s)?`,
-      content: 'This action cannot be undone.',
-      okText: 'Yes, delete',
-      okType: 'danger',
-      cancelText: 'Cancel',
-      onOk: async () => {
-        try {
-          // Create a Promise.all array to wait for all deletions
-          const deletionPromises = Array.from(selectedScanIds).map(scanId => 
-            deleteScanMutation.mutateAsync(scanId)
-          );
-          
-          // Wait for all deletions to complete
-          await Promise.all(deletionPromises);
-          
-          // Clear selection and show success
-          setSelectedScanIds(new Set());
-          message.success(`Successfully deleted ${selectedScanIds.size} scan(s).`);
-          
-          // Invalidate after everything is done
-          queryClient.invalidateQueries(['scans', userId]);
-        } catch (error) {
-          console.error('Bulk deletion error:', error);
-          message.error('Failed to delete some or all of the selected scans.');
-          // Invalidate to get back to a consistent state
-          queryClient.invalidateQueries(['scans', userId]);
+
+    try {
+      const scanIdList = Array.from(selectedScanIds);
+      // console.log("🔥 Sending bulk delete payload:", scanIdList);
+      await api.delete('/scans', {
+        data: {
+          user_id: userId,
+          scan_ids: scanIdList
         }
-      }
-    });
-  }, [selectedScanIds, deleteScanMutation, setSelectedScanIds]);
+      });
+  
+      setSelectedScanIds(new Set());
+      message.success(`Successfully deleted ${scanIdList.length} scan(s).`);
+      queryClient.invalidateQueries(['scans', userId]);
+    } catch (error) {
+      console.error('Bulk deletion error:', error);
+      message.error('Failed to delete some or all of the selected scans.');
+      queryClient.invalidateQueries(['scans', userId]);
+    }
+  }, [selectedScanIds, setSelectedScanIds, queryClient, userId]);
   
   // Define columns for the scans table using the new utility functions
   const scanColumns = useMemo(() => {
@@ -327,9 +320,11 @@ const PriceTracker = ({ userId }) => {
             </Space>
           </div>
         ),
-        onFilterDropdownVisibleChange: visible => {
-          if (visible && searchInput.current['cards_scraped']) {
-            setTimeout(() => searchInput.current['cards_scraped'].focus(), 10);
+        filterDropdownProps: {
+          onOpenChange: visible => {
+            if (visible && searchInput.current['cards_scraped']) {
+              setTimeout(() => searchInput.current['cards_scraped'].focus(), 10);
+            }
           }
         },
       },
@@ -395,9 +390,11 @@ const PriceTracker = ({ userId }) => {
             </Space>
           </div>
         ),
-        onFilterDropdownVisibleChange: visible => {
-          if (visible && searchInput.current['sites_scraped']) {
-            setTimeout(() => searchInput.current['sites_scraped'].focus(), 10);
+        filterDropdownProps: {
+          onOpenChange: visible => {
+            if (visible && searchInput.current['sites_scraped']) {
+              setTimeout(() => searchInput.current['sites_scraped'].focus(), 10);
+            }
           }
         },
       },
@@ -453,7 +450,11 @@ const PriceTracker = ({ userId }) => {
                       title: 'Last Updated',
                       dataIndex: 'updated_at',
                       key: 'updated_at',
-                      render: (text) => formatDate(text),
+                      render: (text, record) => {
+                        const formatted = formatDate(text);
+                        // console.log("📆 Formatting date for row ID", record?.id, ":", text, "→", formatted);
+                        return formatted;
+                      },
                       sorter: (a, b) => new Date(a.updated_at || 0) - new Date(b.updated_at || 0),
                       ...getColumnSearchProps('updated_at', detailSearchInput, detailFilteredInfo, 'Search date', handleDetailSearch, handleDetailReset),
                     }
@@ -487,9 +488,18 @@ const PriceTracker = ({ userId }) => {
                 Reset All Filters
               </Button>
               {selectedScanIds.size > 0 && (
-                  <Button danger onClick={handleBulkDelete} icon={<DeleteOutlined />}>
-                  Delete Selected ({selectedScanIds.size})
-                </Button>
+                  <Popconfirm
+                  title={`Are you sure you want to delete ${selectedScanIds.size} selected scan(s)?`}
+                  okText="Yes"
+                  cancelText="No"
+                  onConfirm={handleBulkDelete}
+                  disabled={selectedScanIds.size === 0}
+                >
+                  <Button danger icon={<DeleteOutlined />} disabled={selectedScanIds.size === 0}>
+                    Delete Selected ({selectedScanIds.size})
+                  </Button>
+                </Popconfirm>
+                
               )}
             </Space>
           </div>
@@ -511,31 +521,26 @@ const PriceTracker = ({ userId }) => {
       <Modal
         title={selectedCard?.name}
         open={isModalVisible}
-        onCancel={() => setIsModalVisible(false)}
+        onCancel={handleModalClose}
+        footer={null}
         width={800}
         destroyOnClose
-        footer={[
-          <Button key="close" onClick={() => setIsModalVisible(false)}>
-            Close
-          </Button>
-        ]}
       >
         {isCardLoading ? (
           <div style={{ textAlign: 'center', padding: '20px' }}>
             <Spin size="large" />
-            <Typography.Text style={{ marginTop: '10px', display: 'block' }}>
-              Loading card details...
-            </Typography.Text>
+            <p>Loading card details...</p>
           </div>
         ) : cardData ? (
-          <ScryfallCardView 
+          <ScryfallCardView
             key={`${selectedCard?.id}-${cardData.id}`}
             cardData={cardData}
-            mode="view"
+            mode={modalMode}
+            onSave={handleSaveEdit}
           />
         ) : (
           <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Typography.Text>No card data available</Typography.Text>
+            <p>No card data available</p>
           </div>
         )}
       </Modal>

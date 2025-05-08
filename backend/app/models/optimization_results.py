@@ -1,22 +1,24 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from app.extensions import db
+from sqlalchemy import Column, Integer, String, JSON, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
+from app import Base
 
 
-class OptimizationResult(db.Model):
+class OptimizationResult(Base):
     __tablename__ = "optimization_results"
 
-    id = db.Column(db.Integer, primary_key=True)
-    scan_id = db.Column(db.Integer, db.ForeignKey("scan.id"), nullable=False)
-    status = db.Column(db.String(50), nullable=False)
-    message = db.Column(db.String(255))
-    sites_scraped = db.Column(db.Integer)
-    cards_scraped = db.Column(db.Integer)
-    solutions = db.Column(db.JSON)
-    errors = db.Column(db.JSON)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    scan_id = Column(Integer, ForeignKey("scan.id"), nullable=False)
+    status = Column(String(50), nullable=False)
+    message = Column(String(255))
+    sites_scraped = Column(Integer)
+    cards_scraped = Column(Integer)
+    solutions = Column(JSON)
+    errors = Column(JSON)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    scan = db.relationship("Scan", back_populates="optimization_result", overlaps="optimization_results")
+    scan = relationship("Scan", back_populates="optimization_result")
 
     def to_dict(self):
         """Basic dictionary representation of the model"""

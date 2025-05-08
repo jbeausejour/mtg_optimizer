@@ -1,342 +1,483 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Image, List, Space, Divider, Tag, Typography, message } from 'antd';
+import React, { useEffect, useState, useRef } from 'react';
+import { Col, Divider, Image, Row, Space, Typography, Select, Card } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
-import api from '../../utils/api';  // Add this import
+import SetSymbol from '../Shared/SetSymbol';
+import ManaSymbol from '../Shared/ManaSymbol';
+import LegalityTag from '../Shared/LegalityTag';
+import api from '../../utils/api';
+import { formatOracleText, formatCardName } from '../../utils/formatting';
 
-const { Title, Text, Paragraph } = Typography;
-
-//Formats a card name to lowercase with hyphens, removing apostrophes. (Utility function)
-const formatCardName = (name) => {
-  if (!name) return '';
-  const part = name.split(' // ')[0]; // Take the first part if split by ' // '
-  const noApostrophes = part.replace(/'/g, ''); // Remove apostrophes
-  const formatted = noApostrophes.replace(/\s+/g, '-').toLowerCase(); // Replace spaces with hyphens and convert to lowercase
-  return formatted;
+const { Title, Text } = Typography;
+const languageLabelMap = {
+  en: 'English',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  it: 'Italian',
+  pt: 'Portuguese',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zhs: 'Simplified Chinese',
+  zht: 'Traditional Chinese',
+  ru: 'Russian',
 };
+const ALLOWED_QUALITIES = ['NM', 'LP', 'MP', 'HP', 'DMG'];
 
-//Formats the set code to lowercase, handling special cases for prefixes like 'p' or 't'. (Utility function)
-const formatSetCode = (setCode, collector_number) => {
-  if (!setCode) {
-    console.error('Error: setCode is undefined or null');
-    return '';
-  }
-
-  let formattedSetCode = setCode;
-  console.log('Component formatSetCode:', { formattedSetCode });
-  if (formattedSetCode.length > 3 && (formattedSetCode.startsWith('p') || formattedSetCode.startsWith('t'))) {
-    formattedSetCode = collector_number.split('-')[0];
-  }
-  console.log('Component formattedSetCode:', { formattedSetCode });
-  return formattedSetCode.toLowerCase();
-};
-
-//Formats oracle text into paragraphs, with symbols converted to icons. (Utility function)
-const formatOracleText = (text) => {
-  if (!text) return null; // Return null or an appropriate fallback if text is undefined or empty
-  return text.split('\n').map((paragraph, index) => (
-    <Paragraph key={index}>
-      {paragraph.split(/(\{[^}]+\})/).map((part, i) => (
-        part.startsWith('{') ? <ManaSymbol key={i} symbol={part} /> : part
-      ))}
-    </Paragraph>
-  ));
-};
-
-//Renders an image of the mana symbol based on the input. (Utility function)
-const ManaSymbol = ({ symbol }) => {
-  const cleanSymbol = symbol.replace(/[{/}]/g, '');
-  const symbolUrl = `https://svgs.scryfall.io/card-symbols/${cleanSymbol}.svg`;
-  return (
-    <img
-      src={symbolUrl}
-      alt={cleanSymbol}
-      className="mana-symbol"
-      style={{ width: '16px', height: '16px', margin: '0 1px', verticalAlign: 'text-bottom' }}
-    />
-  );
-};
-
-//Renders the symbol of a card set with coloring based on rarity. (Utility function)
-const SetSymbol = ({ setCode, rarity, collector_number }) => {
-  const formattedSetCode = formatSetCode(setCode, collector_number);
-  const symbolUrl = `https://svgs.scryfall.io/sets/${formattedSetCode}.svg`;
-  const rarityColor = {
-    common: '#000000', // Black
-    uncommon: '#C0C0C0', // Silver
-    rare: '#FFD700', // Gold
-    special: '#FFD700', // Gold    
-    mythic: '#D37E2A', // Orange
-    bonus: '#FFD700' // Gold
-  };
-
-  return (
-    <img
-      src={symbolUrl}
-      alt={formattedSetCode} 
-      className="set-symbol"
-      style={{
-        width: '16px',
-        height: '16px',
-        marginRight: '4px',
-        verticalAlign: 'text-bottom',
-        filter: `brightness(0) saturate(100%) ${rarityColor[rarity]}`,
-        fill: rarityColor[rarity]
-      }}
-    />
-  );
-};
-
-//Displays the legality of the card in different formats. (Utility function)
-const LegalityTag = ({ format, legality }) => {
-  const color = {
-    legal: 'green',
-    not_legal: 'lightgray',
-    banned: 'red',
-    restricted: 'blue'
-  };
-  return (
-    <Tag color={color[legality]}>
-      {format}
-    </Tag>
-  );
-};
-
-//Displays detailed information of a card from Scryfall API. (Result of user clicking on a card)
-const ScryfallCard = ({ data, onPrintingSelect, onSetClick, isEditable }) => {
-  console.group('ScryfallCard Component');
-  console.log('Component mounted with props:', { 
-    hasData: Boolean(data), 
-    dataKeys: data ? Object.keys(data) : [],
+const ScryfallCard = ({ data, isEditable, onChange }) => {
+  if (!data) return null;
+  // console.log ("ScryfallCard data recevied: ", data);
+  
+  const [availableLanguages, setAvailableLanguages] = useState([]);
+  const [availableVersions, setAvailableVersions] = useState([]);
+  const [displayData, setDisplayData] = useState(data);
+  const [editingFields, setEditingFields] = useState(() => ({
+    id: data?.id,
+    buylist_id: data?.buylist_id,
+    user_id: data?.user_id,
     name: data?.name,
-    printingsCount: data?.all_printings?.length 
-  });
+    language: data?.language || 'en',
+    quality: data?.quality || 'NM',
+    quantity: data?.quantity || 1,
+    set_code: data?.set_code,
+    set_name: data?.set_name,
+    version: data?.version || 'Standard',
+    foil: data?.foil ?? false,
+  }));
+  
+  const currentPrintingRef = useRef(null);
+  const hasInitializedRef = useRef(false); 
 
-  if (!data || !data.name) {
-    console.error('Invalid card data received:', data);
-    console.groupEnd();
-    return <div>Error: Invalid card data received</div>;
-  }
-
-  const [availablePrints, setAvailablePrints] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedPrinting, setSelectedPrinting] = useState(null);
+  
   const [hoveredPrinting, setHoveredPrinting] = useState(null);
+  const [isFront, setIsFront] = useState(true);
+  const [allPrintings, setAllPrintings] = useState([]);
+  const isDoubleFaced = Array.isArray(data?.card_faces) && data.card_faces.length === 2;
+  const selectedPrintingIdRef = useRef(null);
 
-  // Add component state logging
-  useEffect(() => {
-    console.log('Component State:', {
-      availablePrintsCount: availablePrints.length,
-      isLoading,
-      selectedPrinting: selectedPrinting?.name
+  const handleFieldChange = (field, value) => {
+    setEditingFields(prev => {
+      const updated = { ...prev, [field]: value };
+      // console.log(`[handleFieldChange] ${field}: ${prev[field]} → ${value}`);
+      if (onChange) onChange(updated);
+      return updated;
     });
-  }, [availablePrints, isLoading, selectedPrinting]);
+  };
 
-  // Fetch all printings when component mounts or data changes
+
   useEffect(() => {
-    const fetchPrints = async () => {
-      console.group('Prints Fetching');
-      if (!data?.name) {
-        console.warn('No card name available');
-        console.groupEnd();
-        return;
-      }
-      
-      try {
-        // All printings should already be in the data from backend
-        if (data.all_printings && Array.isArray(data.all_printings)) {
-          console.log('3. Using provided printings:', data.all_printings);
-          const prints = data.all_printings.filter(print => !print.digital);
-          console.log('4. Filtered prints:', prints);
-          setAvailablePrints(prints);
-          setSelectedPrinting(prints.find(p => p.id === data.id) || prints[0]);
-        } else {
-          console.warn('5. No printings found in data, falling back to API');
-          // Fallback to fetching from backend
-          const response = await api.get('/fetch_card', {
-            params: {
-              name: data.name,
-              include_prints: true
-            }
-          });
-          if (response.data.scryfall?.all_printings) {
-            const prints = response.data.scryfall.all_printings;
-            setAvailablePrints(prints);
-            setSelectedPrinting(prints.find(p => p.id === data.id) || prints[0]);
-          }
-        }
-      } catch (error) {
-        console.error('6. Error processing prints:', error);
-        message.error('Failed to load card printings');
-      }
-      console.groupEnd();
-    };
-
-    fetchPrints();
-    return () => {
-      console.log('7. ScryfallCard unmounting');
-    };
-  }, [data]);
-
-  // Log when prints or selection changes
-  useEffect(() => {
-    console.log('8. Available prints updated:', availablePrints);
-    console.log('9. Selected printing:', selectedPrinting);
-  }, [availablePrints, selectedPrinting]);
-
-  const handleSetChange = async (print) => {
-    setIsLoading(true);
-    try {
-      setSelectedPrinting(print);
-      if (onSetClick) onSetClick(print.set_code);
-      if (onPrintingSelect) onPrintingSelect(print);
-    } catch (error) {
-      message.error('Failed to update card printing');
-    } finally {
-      setIsLoading(false);
+    if (!displayData || !displayData?.id || !Array.isArray(allPrintings)) {
+      return;
     }
-  };
+    // console.log("[Lang DEBUG] displayData.id:", displayData?.id);
 
-  // Handle hover effect for card image
-  const handleHover = (e) => {
-    e.target.style.transform = 'scale(1.1)';
-    e.target.style.transition = 'transform 0.3s ease';
-  };
+    // console.log("[Lang DEBUG] All printings:", allPrintings);
+    const printingMeta = allPrintings.find(p => p.id === displayData?.id);
+    if (printingMeta?.available_languages) {
+      const structured = printingMeta.available_languages.map(lang => ({
+        label: languageLabelMap[lang] || lang,
+        value: lang,
+      }));
+      // console.log("[Lang] Updating languages to:", structured);
+      setAvailableLanguages(structured);
+    } else {
+      console.warn("No language metadata found for current printing.");
+      setAvailableLanguages([]);
+    }
+  }, [displayData?.id, allPrintings]);
 
-  const handleMouseOut = (e) => {
-    e.target.style.transform = 'scale(1)';
-  };
+  useEffect(() => {
+    if (availableLanguages.length && !availableLanguages.find(l => l.value === editingFields.language)) {
+      setEditingFields(prev => ({
+        ...prev,
+        language: 'en'
+      }));
+    }
+  }, [availableLanguages]);  
+  useEffect(() => {
+    if (data && 'scryfall' in data) {
+      // console.log("[DEBUG] Full Scryfall metadata (data.scryfall):", data.scryfall);
+    } else {
+      // console.warn("[DEBUG] scryfall metadata missing from `data`");
+    }
+  }, [data]);
+  useEffect(() => {
+    if (displayData) {
+      // console.log("[DEBUG] Selected Printing (displayData):", displayData);
+    }
+  }, [displayData]);
+  
+  useEffect(() => {
+    if (!Array.isArray(data.scryfall?.all_printings)) {
+      console.warn("Missing all_printings:", data.scryfall);
+      return;
+    }
+      
+    const enrichedPrintings = data.scryfall?.all_printings.filter(p => !p.digital);
+    setAllPrintings(enrichedPrintings);
+    // console.log("Enriched printing: ", enrichedPrintings)
+  
+    const matched = enrichedPrintings.find(p =>
+      p.id === selectedPrintingIdRef.current ||
+      (p.set_code === data.set_code && p.name === data.name) ||
+      p.id === data.scryfall.id
+    ) || enrichedPrintings[0];
+  
+    if (!hasInitializedRef.current && matched) {
+      hasInitializedRef.current = true;
+      selectedPrintingIdRef.current = matched.id;
+      currentPrintingRef.current = matched;
+  
+      // Merge selected printing with base Scryfall info
+      setDisplayData({
+        ...matched,
+        available_versions: matched.available_versions || {}
+      });
+      // console.log("Final displayData being rendered:", displayData);
+      setEditingFields(prev => ({
+        ...prev,
+        set_code: matched.set_code,
+        set_name: matched.set_name,
+        foil: matched.finishes?.includes('foil') || false,
+        version: matched?.version || 'Standard', 
+        language: matched.lang || 'en',
+      }));
+    }
+  }, [data?.scryfall?.id]);
+  
 
-  // Add new styles
-  const printingItemStyle = {
-    display: 'inline-block',
-    margin: '0 8px 8px 0',
-    padding: '4px 8px',
-    border: '1px solid #d9d9d9',
-    borderRadius: '4px',
-    cursor: isEditable ? 'pointer' : 'default',
-    transition: 'all 0.3s',
-    opacity: isEditable ? 1 : 0.7,
-  };
+  // useEffect(() => {
+  //   // Re-apply current printing if editingFields change
+  //   if (currentPrintingRef.current) {
+  //     setDisplayData(currentPrintingRef.current);
+  //   }
+  // }, [editingFields.quality, editingFields.language, editingFields.version]);  
+  
 
-  const selectedPrintingStyle = {
-    ...printingItemStyle,
-    backgroundColor: '#f0f0f0',
-    borderColor: '#1890ff'
-  };
+  // ✅ Version & finish types
+  useEffect(() => {
+    if (!displayData) return;
+  
+    const versions = displayData.available_versions;
+    // console.log("[Version] From displayData.available_versions:", versions);
+  
+    if (!versions) {
+      setAvailableVersions([]);
+      return;
+    }
+  
+    const versionSet = new Set();
+  
+    (versions.finishes || []).forEach(f => {
+      if (f === 'foil') versionSet.add('Foil');
+      if (f === 'etched') versionSet.add('Etched');
+      if (f === 'nonfoil') versionSet.add('Standard');
+    });
+  
+    (versions.frame_effects || []).forEach(fx => {
+      if (fx === 'showcase') versionSet.add('Showcase');
+      if (fx === 'extendedart') versionSet.add('Extended Art');
+    });
+  
+    if (versions.full_art) versionSet.add('Full Art');
+    if (versions.textless) versionSet.add('Textless');
+    if (versions.border_color === 'borderless') versionSet.add('Borderless');
+  
+    const versionArray = Array.from(versionSet);
+    // console.log("[Version] Available dropdown values:", versionArray);
+    setAvailableVersions(versionArray);
+  }, [displayData]);
+  
+
+  useEffect(() => {
+    if (
+      availableVersions.length > 0 &&
+      !availableVersions.includes(editingFields.version)
+    ) {
+      setEditingFields(prev => ({
+        ...prev,
+        version: availableVersions.includes('Standard') ? 'Standard' : availableVersions[0],
+      }));
+    }
+  }, [availableVersions, editingFields.version]);
 
   const handlePrintClick = (print) => {
-    setSelectedPrinting(print); // Always update the selected printing
-    if (isEditable) { // Only trigger save actions if in edit mode
-      handleSetChange(print);
+    selectedPrintingIdRef.current = print.id;
+    currentPrintingRef.current = print;
+    // console.log("handlePrintClick data:", print);
+    setDisplayData({
+      ...print,
+      available_versions: print.available_versions || {}
+    });
+  
+    const group = allPrintings.filter(p =>
+      p.set_code === print.set_code &&
+      p.collector_number === print.collector_number
+    );
+    const englishPrint = group.find(p => p.lang === 'en');
+    const versionOptions = englishPrint?.available_versions || {};
+  
+    const dynamicVersions = new Set();
+    (versionOptions.finishes || []).forEach(f => {
+      if (f === 'foil') dynamicVersions.add('Foil');
+      if (f === 'etched') dynamicVersions.add('Etched');
+      if (f === 'nonfoil') dynamicVersions.add('Standard');
+    });
+    (versionOptions.frame_effects || []).forEach(effect => {
+      if (effect === 'showcase') dynamicVersions.add('Showcase');
+      if (effect === 'extendedart') dynamicVersions.add('Extended Art');
+    });
+    if (versionOptions.full_art) dynamicVersions.add('Full Art');
+    if (versionOptions.textless) dynamicVersions.add('Textless');
+    if (versionOptions.border_color === 'borderless') {
+      dynamicVersions.add('Borderless');
     }
+  
+    const versions = Array.from(dynamicVersions);
+    setAvailableVersions(versions);
+  
+    setEditingFields(prev => {
+      const updated = {
+        ...prev,
+        set_code: print.set_code,
+        set_name: print.set_name,
+        foil: print.finishes?.includes('foil') || false,
+        language: print.lang,
+        version: versions.includes('Standard') ? 'Standard' : versions[0],
+      };
+      if (onChange) onChange(updated);
+      return updated;
+    });
+  };
+  
+
+  useEffect(() => {
+    if (availableLanguages.length) {
+      // console.log("[Render] Language options in Select:", availableLanguages);
+    }
+  }, [availableLanguages]);
+  
+  const handleImageHover = (print) => setHoveredPrinting(print);
+  const handleImageLeave = () => setHoveredPrinting(null);
+  const toggleFace = () => setIsFront(prev => !prev);
+
+  const getDisplayImage = () => {
+    const source = hoveredPrinting || displayData;
+    const cardFaces = source?.card_faces || source?.scryfall?.card_faces;
+  
+    if (Array.isArray(cardFaces) && cardFaces.length === 2) {
+      return cardFaces[isFront ? 0 : 1]?.image_uris?.normal || null;
+    }
+    return (
+      source?.image_uris?.normal ||
+      source?.scryfall?.image_uris?.normal ||
+      null
+    );
   };
 
-  if (!data) return <div>No card data available</div>;
+  const renderedPrintings = allPrintings.map((print, index) => {
+    const isSelected = displayData?.scryfall?.id === print.id;
+    let imageSrc = print.image_uris?.small || '';
+    if (Array.isArray(print?.card_faces) && print.card_faces.length === 2) {
+      imageSrc = print.card_faces[isFront ? 0 : 1]?.image_uris?.small || '';
+    }
 
-  console.log('Rendering card display');
+    return (
+      <div
+        key={print.id}
+        onClick={() => handlePrintClick(print)}
+        onMouseEnter={() => handleImageHover(print)}
+        onMouseLeave={handleImageLeave}
+        style={{
+          display: 'inline-block',
+          textAlign: 'center',
+          marginRight: 8,
+          cursor: 'pointer',
+          border: isSelected ? '2px solid #1890ff' : '1px solid #ccc',
+          borderRadius: 4,
+          padding: 4,
+          width: 56,
+        }}
+      >
+        {imageSrc ? (
+          <Image src={imageSrc} preview={false} style={{ width: 48, height: 68 }} />
+        ) : (
+          <div style={{ width: 48, height: 68, backgroundColor: '#eee' }} />
+        )}
+        <div style={{ fontSize: 12, marginTop: 4, color: '#666' }}>
+          {print.prices?.usd ? `$${print.prices.usd}` : 'N/A'}
+        </div>
+      </div>
+    );
+  });
+  
+
   return (
     <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
-      {console.log('Card render started')}
       <Row gutter={16}>
         <Col span={8}>
           {isLoading ? (
             <div>Loading...</div>
           ) : (
             <>
-              <Image 
-                src={(hoveredPrinting || selectedPrinting)?.image_uris?.normal || data.image_uris?.normal} 
-                alt={data.name}
-                onMouseEnter={handleHover}
-                onMouseLeave={handleMouseOut}
-                style={{ transition: "transform 0.3s", borderRadius: "8px" }}
-              />
+              <div style={{ position: 'relative' }}>
+                <Image
+                  src={getDisplayImage()}
+                  alt={displayData?.name}
+                  style={{ width: '100%', borderRadius: '4px' }}
+                  onMouseEnter={() => handleImageHover(displayData)}
+                  onMouseLeave={handleImageLeave}
+                />
+                {isDoubleFaced && (
+                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center' }}>
+                    <button
+                      onClick={toggleFace}
+                      style={{
+                        backgroundColor: '#f0f0f0',
+                        border: '1px solid #d9d9d9',
+                        borderRadius: '6px',
+                        padding: '4px 12px',
+                        fontSize: '0.875rem',
+                        fontWeight: 500,
+                        color: '#333',
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease',
+                      }}
+                    >
+                      {isFront ? 'Back' : 'Front'}
+                    </button>
+                  </div>
+                )}
+              </div>
               <Divider />
               <Space direction="vertical" size="small">
-                <Text><strong>Mana Value:</strong> {data.cmc || 'N/A'}</Text>
-                <Text><strong>Types:</strong> {data.type_line || 'N/A'}</Text>
-                <Text><strong>Rarity:</strong> {data.rarity || 'N/A'}</Text>
+                <Text><strong>Mana Value:</strong> {data?.scryfall?.cmc ?? 'N/A'}</Text>
+                <Text><strong>Types:</strong> {data?.scryfall?.type_line ?? 'N/A'}</Text>
+                <Text><strong>Rarity:</strong> {displayData?.rarity ?? 'N/A'}</Text>
                 <Text>
-                  <strong>Expansion:</strong>
-                  {data.set ? (
+                  <strong>Expansion:</strong>{' '}
+                  {displayData.set_name ? (
                     <>
-                      <SetSymbol setCode={data.set} rarity={data.rarity} collector_number={data.collector_number} /> {data.set_name || 'N/A'}
+                      <SetSymbol
+                        setCode={displayData.set_code}
+                        rarity={displayData.rarity}
+                        collector_number={displayData.collector_number}
+                      />
+                      {displayData.set_name}
                     </>
                   ) : 'N/A'}
                 </Text>
-                <Text><strong>Card Number:</strong> {data.collector_number || 'N/A'}</Text>
-                <Text><strong>Artist:</strong> {data.artist || 'N/A'}</Text>
+                <Text><strong>Card Number:</strong> {displayData?.collector_number ?? 'N/A'}</Text>
+                <Text><strong>Artist:</strong> {displayData?.artist ?? 'N/A'}</Text>
               </Space>
             </>
           )}
-          
-          {console.log('Available Printings:', availablePrints)}
           <Divider orientation="left">Available Printings</Divider>
-          <div style={{ marginBottom: '16px' }}>
-            {availablePrints.map(print => (
-              <div
-                key={`${print.set_code}-${print.collector_number}`}
-                style={selectedPrinting?.id === print.id ? selectedPrintingStyle : printingItemStyle}
-                onClick={() => handlePrintClick(print)}
-                onMouseEnter={() => setHoveredPrinting(print)}
-                onMouseLeave={() => setHoveredPrinting(null)}
-              >
-                {console.log('Available Printings:', print)}
-                <Space>
-                  <SetSymbol setCode={print.set_code} rarity={print.rarity} collector_number={print.collector_number} />
-                  <span>{print.set_code?.toUpperCase() || 'Unknown Set'}</span>
-                  {print.prices?.usd && <span>${print.prices.usd}</span>}
-                </Space>
-              </div>
-            ))}
-          </div>
+          <div style={{ marginBottom: '16px' }}>{renderedPrintings}</div>
           <Divider />
           <Space direction="vertical">
-            {data.scryfall_uri && (
-              <a href={data.scryfall_uri} target="_blank" rel="noopener noreferrer">
+            {data?.scryfall?.scryfall_uri && (
+              <a href={data.scryfall.scryfall_uri} target="_blank" rel="noopener noreferrer">
                 <LinkOutlined /> View on Scryfall
               </a>
             )}
-            {data.multiverse_ids?.[0] && (
-              <a href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.multiverse_ids[0]}`} target="_blank" rel="noopener noreferrer">
+            {data?.scryfall?.multiverse_ids?.[0] && (
+              <a
+                href={`https://gatherer.wizards.com/Pages/Card/Details.aspx?multiverseid=${data.scryfall.multiverse_ids[0]}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <LinkOutlined /> View on Gatherer
               </a>
             )}
-            <a href={`https://edhrec.com/cards/${formatCardName(data.name)}`} target="_blank" rel="noopener noreferrer">
+            <a
+              href={`https://edhrec.com/cards/${formatCardName(data?.scryfall?.name || '')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               <LinkOutlined /> Card analysis on EDHREC
             </a>
           </Space>
         </Col>
         <Col span={16}>
           <Title level={3}>
-            {data.name}
+            {data?.scryfall?.name}
             <span className="mana-cost">
-              {data.mana_cost && data.mana_cost.split('').map((char, index) => 
-                char === '{' || char === '}' ? null : <ManaSymbol key={index} symbol={`{${char}}`} />
-              )}
+              {data?.scryfall?.mana_cost &&
+                data.scryfall.mana_cost.split('').map((char, index) =>
+                  char === '{' || char === '}' ? null : (
+                    <ManaSymbol key={index} symbol={`{${char}}`} />
+                  )
+                )}
             </span>
           </Title>
           <Text strong>
-            {(selectedPrinting || data).set_name} ({(selectedPrinting || data).set_code?.toUpperCase() || 'N/A'})
+            {displayData?.set_name} ({displayData?.set_code?.toUpperCase() ?? 'N/A'})
           </Text>
           <Divider />
-          <Text>{data.type_line || 'N/A'}</Text>
-          {data.oracle_text && formatOracleText(data.oracle_text)}
-          {data.flavor_text && <Text italic>{data.flavor_text}</Text>}
-          <Text>{data.power && data.toughness ? `${data.power}/${data.toughness}` : ''}</Text>
+          <Text>{data?.scryfall?.type_line ?? 'N/A'}</Text>
+          {data?.scryfall?.oracle_text && formatOracleText(data.scryfall.oracle_text)}
+          {data?.scryfall?.flavor_text && <Text italic>{data.scryfall.flavor_text}</Text>}
+          <Text>
+            {data?.scryfall?.power && data?.scryfall?.toughness
+              ? `${data.scryfall.power}/${data.scryfall.toughness}`
+              : ''}
+          </Text>
           <Divider />
           <Title level={4}>Format Legality</Title>
-          <Row gutter={[8, 8]}>
-            {Object.entries(data.legalities || {}).map(([format, legality]) => (
-              <Col key={format}>
+          <Row gutter={[16, 8]}>
+            {Object.entries(data?.scryfall?.legalities ?? {}).map(([format, legality], index) => (
+              <Col span={12} key={index}>
                 <LegalityTag format={format} legality={legality} />
               </Col>
             ))}
           </Row>
+          <Divider />
+          {isEditable && editingFields && (
+            <>
+              <Title level={5}>Edit Preferences</Title>
+              <Space direction="vertical" style={{ marginBottom: 16 }}>
+                <div>
+                  <Text strong>Language: </Text>
+                  <Select
+                    value={editingFields.language}
+                    onChange={(val) => handleFieldChange('language', val)}
+                    style={{ width: 200 }}
+                    options={availableLanguages}
+                  />
+                </div>
+                <div>
+                  <Text strong>Quality: </Text>
+                  <Select
+                    value={editingFields.quality}
+                    onChange={(val) => handleFieldChange('quality', val)}
+                    style={{ width: 200 }}
+                  >
+                    {ALLOWED_QUALITIES.map((q) => (
+                      <Select.Option key={q} value={q}>{q}</Select.Option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <Text strong>Version: </Text>
+                  <Select
+                    value={editingFields.version}
+                    onChange={(val) => handleFieldChange('version', val)}
+                    style={{ width: 200 }}
+                  >
+                    {availableVersions.map((v) => (
+                      <Select.Option key={v} value={v}>{v}</Select.Option>
+                    ))}
+                  </Select>
+                </div>
+              </Space>
+            </>
+          )}
         </Col>
       </Row>
-      {console.log('Card render completed')}
     </Card>
   );
 };
+  
 
-export default React.memo(ScryfallCard); // Add memoization to prevent unnecessary rerenders
+export default React.memo(ScryfallCard);

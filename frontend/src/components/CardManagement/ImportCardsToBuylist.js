@@ -58,7 +58,7 @@ const ImportCardsToBuylist = ({ buylistId, onCardsAdded, userId, cardText, setCa
 
     try {
         const response = await api.post("/buylist/cards/import", {
-            id: buylistId,
+            buylistid: buylistId,
             cards,
             user_id: userId,
         });

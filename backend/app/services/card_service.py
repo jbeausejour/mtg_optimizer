@@ -1,40 +1,42 @@
 import json
-import logging
 import re
-import functools
-from urllib.parse import urlparse
-from contextlib import contextmanager
+import logging
 from datetime import datetime
+from typing import List, Dict, Any, Optional
 
-import redis
-import requests
-from app.constants.card_mappings import CardLanguage, CardVersion
-from app.extensions import db, redis_host
-from app.models.buylist import UserBuylist
-from app.models.UserBuylistCard import UserBuylistCard
+import aiohttp
+import asyncio
 
-from flask import current_app
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.sql import func
+# Use aioredis instead of synchronous redis client
+import redis.asyncio as aioredis
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import redis_host
+from app.services.async_base_service import AsyncBaseService
+
 from thefuzz import fuzz, process
+import contextvars
+from redis.asyncio import Redis
+
+_redis_ctx = contextvars.ContextVar("redis_client")
 
 logger = logging.getLogger(__name__)
 
 SCRYFALL_API_BASE = "https://api.scryfall.com"
-SCRYFALL_CATALOG_CARD_NAMES = f"{SCRYFALL_API_BASE}/catalog/card-names"
 SCRYFALL_SETS_URL = f"{SCRYFALL_API_BASE}/sets"
 
 SCRYFALL_API_NAMED_URL = f"{SCRYFALL_API_BASE}/cards/named"
-SCRYFALL_API_SEARCH_URL = f"{SCRYFALL_API_BASE}/cards/search"
 CARDCONDUIT_URL = "https://cardconduit.com/buylist"
 
 REDIS_PORT = 6379
 CACHE_EXPIRATION = 86400  # 24 hours (same as card names)
 REDIS_SETS_KEY = "scryfall_set_codes"
 REDIS_CARDNAME_KEY = "scryfall_card_names"
+SCRYFALL_CACHE = {}
+SCRYFALL_CACHE_LOCK = asyncio.Lock()
 
 
-class CardService:
+class CardService(AsyncBaseService):
 
     # Promo mappings for known catalog references or special sets
     promo_mappings = {
@@ -60,42 +62,50 @@ class CardService:
         "set boosters reserved list": "Mystery Booster: The List",
     }
 
-    @contextmanager
-    def transaction_context():
-        """Context manager for database transactions"""
-        session = db.session  # Ensure the session is explicitly retrieved
+    @staticmethod
+    async def get_redis_client() -> Redis:
         try:
-            yield session
-            session.commit()
-        except SQLAlchemyError as e:
-            session.rollback()
-            logger.error(f"Database error: {str(e)}")
-            raise
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error in transaction: {str(e)}")
-            raise
-        finally:
-            session.close()
-
-    """Handles card-related operations including validation and buylist management."""
+            return _redis_ctx.get()
+        except LookupError:
+            client = await aioredis.from_url(
+                f"redis://{redis_host}:{REDIS_PORT}", db=0, encoding="utf-8", decode_responses=True
+            )
+            _redis_ctx.set(client)
+            return client
 
     @staticmethod
-    def get_redis_client():
-        """Returns a Redis client instance."""
-        return redis.Redis(host=redis_host, port=REDIS_PORT, db=0, decode_responses=True)
+    async def close_redis_client():
+        """Close the Redis client connection."""
+        if hasattr(CardService, "_redis_client"):
+            CardService._redis_client.close()
+            await CardService._redis_client.wait_closed()
+            delattr(CardService, "_redis_client")
 
-    # ====== 🔹 Caching Scryfall Card Names 🔹 ======
+    # ====== 🔹 Caching Scryfall Card Names and Sets 🔹 ======
+    @classmethod
+    async def fetch_scryfall_card_names_async(cls, session: AsyncSession):
+        """Async version of fetch_scryfall_card_names that accepts a session"""
+        # This method doesn't actually use the session, but we include it for consistency
+        return await cls.fetch_scryfall_card_names()
+
+    @classmethod
+    async def fetch_scryfall_set_codes_async(cls, session: AsyncSession):
+        """Async version of fetch_scryfall_set_codes that accepts a session"""
+        # This method doesn't actually use the session, but we include it for consistency
+        return await cls.fetch_scryfall_set_codes()
+
     @staticmethod
-    def fetch_scryfall_card_names():
+    async def fetch_scryfall_card_names():
         """Fetch the full list of valid card names from Scryfall and cache it in Redis with normalization."""
-        redis_client = CardService.get_redis_client()
+        redis_client = await CardService.get_redis_client()
 
         try:
             logger.info("Fetching full card list from Scryfall...")
-            response = requests.get("https://api.scryfall.com/catalog/card-names")
-            response.raise_for_status()
-            card_names = response.json().get("data", [])
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://api.scryfall.com/catalog/card-names") as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    card_names = data.get("data", [])
 
             # ✅ Normalize all card names
             normalized_card_names = set()
@@ -113,25 +123,283 @@ class CardService:
 
             # ✅ Store in Redis (convert set to list)
             logger.info("Storing full card list in redis...")
-            redis_client.set(REDIS_CARDNAME_KEY, json.dumps(list(normalized_card_names)))
+            await redis_client.set(REDIS_CARDNAME_KEY, json.dumps(list(normalized_card_names)))
 
             logger.info(f"Cached {len(normalized_card_names)} card names from Scryfall.")
             return normalized_card_names
 
-        except requests.RequestException as e:
+        except Exception as e:
             logger.error(f"Error fetching Scryfall card names: {str(e)}")
             return []
 
     @staticmethod
-    def is_valid_card_name(card_name):
-        """Check if a given card name exists in the cached Scryfall card list, handling double-sided names."""
-        redis_client = CardService.get_redis_client()
-        card_names = redis_client.get(REDIS_CARDNAME_KEY)
+    async def fetch_scryfall_set_codes():
+        """Fetch all set codes from Scryfall API and cache them in Redis."""
+        redis_client = await CardService.get_redis_client()
 
-        if not card_names:
-            card_names = CardService.fetch_scryfall_card_names()
+        try:
+            logger.info("Fetching all set codes from Scryfall...")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(SCRYFALL_SETS_URL) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    sets_data = data.get("data", [])
+
+            # Process sets into a dictionary
+            sets_dict = {}
+            for set_data in sets_data:
+                set_name = set_data.get("name")
+                if set_name:
+                    sets_dict[set_name.lower()] = {
+                        "code": set_data.get("code"),
+                        "released_at": set_data.get("released_at"),
+                        "set_type": set_data.get("set_type"),
+                    }
+
+            # Cache in Redis
+            await redis_client.set(REDIS_SETS_KEY, json.dumps(sets_dict), ex=CACHE_EXPIRATION)
+            logger.info(f"Cached {len(sets_dict)} Scryfall sets.")
+            return sets_dict
+
+        except Exception as e:
+            logger.error(f"Error fetching Scryfall sets: {str(e)}")
+            return {}
+
+    @classmethod
+    async def fetch_scryfall_card_data(
+        cls,
+        session: AsyncSession,
+        card_name: str,
+        set_code: Optional[str] = None,
+        language: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        def extract_available_versions(printing: dict) -> dict:
+            return {
+                "finishes": printing.get("finishes", []),
+                "frame_effects": printing.get("frame_effects", []),
+                "full_art": printing.get("full_art", False),
+                "textless": printing.get("textless", False),
+                "border_color": printing.get("border_color", ""),
+            }
+
+        cache_key = f"{card_name.lower()}|{set_code or ''}|{language or 'en'}|{version or ''}"
+
+        async with SCRYFALL_CACHE_LOCK:
+            if cache_key in SCRYFALL_CACHE:
+                logger.debug(f"[CACHE HIT] Scryfall for: {cache_key}")
+                return SCRYFALL_CACHE[cache_key]
+
+        logger.debug(f"[CACHE MISS] Scryfall for: {cache_key}")
+        try:
+            params = {
+                "exact": card_name,
+                "set": set_code,
+                "lang": language or "en",
+            }
+            params = {k: v for k, v in params.items() if v is not None}
+
+            async with aiohttp.ClientSession() as http_session:
+                # Fetch main card data
+                async with http_session.get(SCRYFALL_API_NAMED_URL, params=params) as response:
+                    if response.status != 200:
+                        params.pop("exact", None)
+                        params["fuzzy"] = card_name
+                        async with http_session.get(SCRYFALL_API_NAMED_URL, params=params) as fuzzy_response:
+                            if fuzzy_response.status != 200:
+                                return None
+                            card_data = await fuzzy_response.json()
+                    else:
+                        card_data = await response.json()
+
+                oracle_id = card_data.get("oracle_id")
+                if not oracle_id:
+                    logger.warning(f"No oracle_id found for card '{card_name}'")
+                    return None
+
+                # Fetch all printings including multilingual
+                print_url = (
+                    f"https://api.scryfall.com/cards/search?q=oracleid:{oracle_id}&unique=prints&include_multilingual=1"
+                )
+                async with http_session.get(print_url) as prints_response:
+                    if prints_response.status != 200:
+                        return None
+                    prints_data = await prints_response.json()
+                    all_printings = prints_data.get("data", [])
+
+            # Group printings by a unique key (e.g., set code and collector number)
+            from collections import defaultdict
+
+            printing_groups = defaultdict(list)
+            for printing in all_printings:
+                key = (printing.get("set"), printing.get("collector_number"))
+                printing_groups[key].append(printing)
+
+            # Construct list of English printings with available languages
+            official_printings = []
+            for group in printing_groups.values():
+                languages = sorted({p["lang"] for p in group if "lang" in p})
+                # Find the English printing
+                english_printing = next((p for p in group if p.get("lang") == "en"), None)
+                if english_printing:
+
+                    official_printings.append(
+                        {
+                            "id": english_printing.get("id"),
+                            "name": english_printing.get("name"),
+                            "set_code": english_printing.get("set"),
+                            "set_name": english_printing.get("set_name"),
+                            "collector_number": english_printing.get("collector_number"),
+                            "artist": english_printing.get("artist"),
+                            "rarity": english_printing.get("rarity"),
+                            "image_uris": english_printing.get("image_uris", {}),
+                            "prices": english_printing.get("prices", {}),
+                            "digital": english_printing.get("digital", False),
+                            "lang": english_printing.get("lang", "en"),
+                            "available_languages": languages,
+                            "available_versions": extract_available_versions(english_printing),
+                        }
+                    )
+
+            enriched_response = {
+                "scryfall": {**card_data, "all_printings": official_printings},
+                "scan_timestamp": datetime.now().isoformat(),
+            }
+
+            async with SCRYFALL_CACHE_LOCK:
+                SCRYFALL_CACHE[cache_key] = enriched_response
+
+            return enriched_response
+
+        except Exception as e:
+            logger.error(f"Error in fetch_scryfall_card_data: {str(e)}", exc_info=True)
+            return None
+
+    @classmethod
+    async def generate_purchase_links(
+        cls, purchase_data: List[Dict[str, Any]], active_sites: Dict[int, Any]
+    ) -> List[Dict[str, Any]]:
+        """Generate properly formatted purchase URLs for cards grouped by site."""
+        results = []
+        try:
+            for store in purchase_data:
+                try:
+                    site_id = store.get("site_id")
+                    cards = store.get("cards", [])
+
+                    if not site_id:
+                        logger.warning(f"Missing site_id in store data: {store}")
+                        continue
+
+                    site = active_sites.get(site_id)
+                    if not site:
+                        logger.warning(f"Site with ID {site_id} not found in active sites.")
+                        continue
+
+                    if not cards:
+                        logger.warning(f"No cards to process for site with ID {site_id}.")
+                        continue
+
+                    card_names = [card.get("name", "") for card in cards if card.get("name")]
+                    site_method = site.method.lower() if hasattr(site, "method") else ""
+                    purchase_url, payload = None, {}
+
+                    if site_method in ["crystal", "scrapper"]:
+                        payload = {
+                            "authenticity_token": "Dwn7IuTOGRMC6ekxD8lNnJWrsg45BVs85YplhjuFzbM=",
+                            "query": "\n".join(card_names),
+                            "submit": "Continue",
+                        }
+                        purchase_url = site.url
+
+                    elif site_method == "shopify":
+                        _, payload = cls.create_shopify_url_and_payload(site, card_names)
+                        purchase_url = site.url
+
+                    elif site_method == "f2f":
+                        payload = {
+                            "pageSize": 0,
+                            "filters": [
+                                {"field": "Card Name", "values": card_names},
+                                {"field": "in_stock", "values": ["1"]},
+                            ],
+                        }
+                        purchase_url = site.url
+
+                    else:
+                        logger.warning(f"Unsupported purchase method '{site_method}' for site ID {site_id}.")
+                        continue
+
+                    results.append(
+                        {
+                            "site_name": store.get("site_name", f"Unknown Site {site_id}"),
+                            "site_id": site_id,
+                            "purchase_url": purchase_url,
+                            "payload": payload,
+                            "method": site_method,
+                            "country": getattr(site, "country", "Unknown"),
+                            "cards": cards,
+                            "card_count": len(cards),
+                        }
+                    )
+
+                    logger.info(f"Generated purchase link for site {store.get('site_name')} with {len(cards)} cards.")
+
+                except Exception as e:
+                    logger.error(f"Error processing store {store.get('site_name', 'Unknown')}: {str(e)}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error in generate_purchase_links: {str(e)}", exc_info=True)
+
+        return results
+
+    @staticmethod
+    def create_shopify_url_and_payload(site, card_names):
+        try:
+            # Format the payload
+            payload = [{"card": name, "quantity": 1} for name in card_names]
+            # URLs
+            api_url = ""
+            base_url = "https://api.binderpos.com/external/shopify/decklist"
+            alternate_url = "https://portal.binderpos.com/external/shopify/decklist"
+
+            # Safely extract site data as dict
+            if isinstance(site, dict):
+                site_api_url = site.get("api_url", "")
+                site_url = site.get("url", "")
+                site_name = site.get("name", "Unknown Site")
+            else:
+                site_api_url = getattr(site, "api_url", "")
+                site_url = getattr(site, "url", "")
+                site_name = getattr(site, "name", "Unknown Site")
+
+            # Determine the correct API URL based on site name
+            if site_api_url:
+                if "kingdomtitans" in site_url:
+                    api_url = f"{alternate_url}?storeUrl={site_api_url}&type=mtg"
+                else:
+                    api_url = f"{base_url}?storeUrl={site_api_url}&type=mtg"
+            else:
+                api_url = ""
+
+            json_payload = json.dumps(payload)
+            return api_url, json_payload
+
+        except Exception as e:
+            logger.error(f"Error creating Shopify request for {site_name}: {str(e)}")
+            return None, None
+
+    @classmethod
+    async def is_valid_card_name(cls, card_name: str) -> bool:
+        """Check if a given card name exists in the cached Scryfall card list, handling double-sided names."""
+        redis_client = await cls.get_redis_client()
+        card_names_json = await redis_client.get(REDIS_CARDNAME_KEY)
+
+        if not card_names_json:
+            card_names = await cls.fetch_scryfall_card_names()
         else:
-            card_names = json.loads(card_names)
+            card_names = json.loads(card_names_json)
 
         # Normalize input (remove extra spaces, handle case sensitivity)
         normalized_input = card_name.strip().lower()
@@ -151,84 +419,44 @@ class CardService:
         return False  # No match found
 
     @staticmethod
-    def fetch_scryfall_set_codes():
-        """Fetch all valid set codes from Scryfall and cache them in Redis, excluding certain sets."""
-        redis_client = CardService.get_redis_client()
-        cached_data = redis_client.get(REDIS_SETS_KEY)
-
-        if cached_data:
-            return json.loads(cached_data)
-
+    async def extract_magic_set_from_href(url):
         try:
-            logger.info("Fetching full set list from Scryfall...")
-            response = requests.get(SCRYFALL_SETS_URL, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            sets_data = await CardService.get_sets_data()
+            known_sets = sets_data.keys()
 
-            if not isinstance(data, dict) or "data" not in data:
-                raise ValueError("Invalid response format from Scryfall API")
+            # Normalize URL for robust matching
+            normalized_url = url.lower().replace("_", " ").replace("-", " ").replace("/", " ")
 
-            sets_data = {}
-            excluded_set_types = {
-                "minigame",
-                "alchemy",
-                "memorabilia",
-                "treasure_chest",
-            }
+            # Check against known sets directly (robust extraction)
+            for known_set in known_sets:
+                normalized_known_set = known_set.lower()
+                if normalized_known_set in normalized_url:
+                    return known_set  # Immediately return the matched known set
 
-            for set_data in data["data"]:
-                if set_data["set_type"] in excluded_set_types:
-                    continue
+            # Fallback logic based on "singles-" if no direct matches found
+            if "singles-" in url:
+                part = url.split("singles-")[-1].split("/")[0]
+                potential_set_name = part.replace("-brawl", "").replace("_", " ").replace("-", " ").strip()
 
-                set_name = set_data["name"].lower()
-                sets_data[set_name] = {
-                    "code": set_data["code"],
-                    "name": set_data["name"],
-                    "released_at": set_data.get("released_at", None),
-                    "set_type": set_data["set_type"],
-                }
+                # Validate the extracted potential set name with fuzzy matching
+                best_match = process.extractOne(
+                    potential_set_name, known_sets, scorer=fuzz.token_set_ratio, score_cutoff=70
+                )
+                if best_match:
+                    return best_match[0]  # Return validated fuzzy matched set
 
-            if sets_data:
-                redis_client.setex(REDIS_SETS_KEY, CACHE_EXPIRATION, json.dumps(sets_data))
-                logger.info(f"Cached {len(sets_data)} valid set codes from Scryfall.")
-                return sets_data
-            else:
-                logger.warning("No valid set codes found from Scryfall API.")
-                return {}
+            logger.warning(f"No magic set extracted reliably from URL: {url}")
+            return None
 
-        except requests.RequestException as e:
-            logger.error(f"Error fetching Scryfall set codes: {str(e)}")
-            return {}
+        except Exception as e:
+            logger.error(f"Fatal error in extract_magic_set: {str(e)}", exc_info=True)
+            return None
 
+    ##################
     # Set Operations
-    @staticmethod
-    def get_sets_data(force_refresh=False):
-        """Fetch set data from Redis or refresh if needed."""
-        redis_client = CardService.get_redis_client()
-
-        if force_refresh:
-            return CardService.fetch_scryfall_set_codes()
-
-        cached_sets = redis_client.get(REDIS_SETS_KEY)
-        if cached_sets:
-            return json.loads(cached_sets)
-
-        return CardService.fetch_scryfall_set_codes()  # Refresh if missing
-
-    @staticmethod
-    def fetch_all_sets():
-        """Fetch all valid sets from Redis (cached from Scryfall)."""
-        redis_client = CardService.get_redis_client()
-        cached_sets = redis_client.get(REDIS_SETS_KEY)
-
-        if cached_sets:
-            return [{"set": code, "name": name} for name, code in json.loads(cached_sets).items()]
-
-        return []
-
+    ##################
     @classmethod
-    @functools.lru_cache(maxsize=1000)
-    def _normalize_set_name(cls, name):
+    async def _normalize_set_name(cls, name: str) -> List[str]:
         """Robustly normalize set name to ensure accurate matching."""
         if not name:
             return []
@@ -355,12 +583,6 @@ class CardService:
             "doctor who": ["dr. who (who)", "doctor who (who)" "Dr. Who (WHO)"],
             "from the vault: twenty": ["ftv: twenty"],
             "the brothers' war commander": ["commander brother's war"],
-            # "promo pack": [
-            #     "pre-release promos",
-            #     "shooting stars promos",
-            #     "unique promos",
-            #     "unique & misc promos",
-            # ],
         }
 
         for candidate in list(results):
@@ -372,14 +594,42 @@ class CardService:
         return list(filter(None, results))
 
     @staticmethod
-    def clean_set_name_for_matching(name):
+    async def clean_set_name_for_matching(name: str) -> str:
         # Remove descriptors like "Alternate Art", "Extended Art", punctuation, multiple spaces
         name = re.sub(r"[^a-zA-Z0-9\s]", " ", name)  # remove special chars
         name = re.sub(r"\b(alternate|extended|art|showcase|borderless)\b", "", name, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", name).strip().lower()
 
     @classmethod
-    def get_set_code(cls, set_name):
+    async def fetch_all_sets(cls) -> List[Dict[str, str]]:
+        """Fetch all valid sets from Redis (cached from Scryfall)."""
+        redis_client = await cls.get_redis_client()
+        cached_sets = await redis_client.get(REDIS_SETS_KEY)
+
+        if cached_sets:
+            sets_data = json.loads(cached_sets)
+            return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
+
+        # If not cached, fetch and return
+        sets_data = await cls.fetch_scryfall_set_codes()
+        return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
+
+    @classmethod
+    async def get_sets_data(cls, force_refresh=False):
+        """Fetch set data from Redis or refresh if needed."""
+        redis_client = await cls.get_redis_client()
+
+        if force_refresh:
+            return await cls.fetch_scryfall_set_codes()
+
+        cached_sets = await redis_client.get(REDIS_SETS_KEY)
+        if cached_sets:
+            return json.loads(cached_sets)
+
+        return await cls.fetch_scryfall_set_codes()  # Refresh if missing # Refresh if missing
+
+    @classmethod
+    async def get_set_code(cls, set_name: str) -> Optional[str]:
         """Get set code from set name using exact match first, then fuzzy matching"""
         if not set_name:
             logger.warning("Empty set name provided")
@@ -387,44 +637,45 @@ class CardService:
 
         logger.debug(f"Getting set code for: {set_name}")
 
-        sets_data = cls.get_sets_data()
+        sets_data = await cls.get_sets_data()
         if not sets_data:
             logger.error("No sets data available")
             return None
 
         # Get all possible normalized forms of the set name
-        normalized_names = cls._normalize_set_name(set_name)
+        normalized_names = await cls._normalize_set_name(set_name)
         logger.debug(f"Normalized forms: {normalized_names}")
 
-        # Try exact matches first
+        # Try exact matches using keys and code fields
         for norm_name in normalized_names:
-            # Direct match against cache keys
+            # Direct match against cache keys (outer keys are set names)
             if norm_name in sets_data:
-                logger.debug(f"Exact match found for '{set_name}' using '{norm_name}'")
-                return sets_data[norm_name]["code"]
+                logger.debug(f"Exact match found for '{set_name}' using outer key '{norm_name}'")
+                return sets_data[norm_name].get("code")
 
-            # Match against set names and codes
-            for set_info in sets_data.values():
-                if norm_name == set_info["name"].lower() or norm_name == set_info["code"].lower():
-                    logger.debug(f"Exact match found against name/code for '{set_name}'")
-                    return set_info["code"]
+            # Match against values' "code" fields
+            for outer_name, set_info in sets_data.items():
+                if not isinstance(set_info, dict):
+                    continue  # Malformed cache entry
+                if norm_name == set_info.get("code", "").lower():
+                    logger.debug(f"Exact match found against code for '{set_name}' -> {set_info.get('code')}")
+                    return set_info.get("code")
 
-        # Partial matching using "in"
+        # Try partial matching using cleaned names
         for norm_name in normalized_names:
-            cleaned_norm_name = CardService.clean_set_name_for_matching(norm_name)
-            for set_info in sets_data.values():
-                cleaned_set_name = CardService.clean_set_name_for_matching(set_info["name"])
+            cleaned_norm_name = await CardService.clean_set_name_for_matching(norm_name)
+            for outer_name, set_info in sets_data.items():
+                cleaned_outer = await CardService.clean_set_name_for_matching(outer_name)
 
-                if cleaned_norm_name in cleaned_set_name or cleaned_set_name in cleaned_norm_name:
-                    logger.debug(f"Clean partial match found: '{set_name}' -> '{set_info['name']}'")
-                    return set_info["code"]
+                if cleaned_norm_name in cleaned_outer or cleaned_outer in cleaned_norm_name:
+                    logger.debug(f"Partial match: '{set_name}' -> '{outer_name}'")
+                    return set_info.get("code")
 
-                # Add fuzzy fallback with a threshold
-                if fuzz.partial_ratio(cleaned_norm_name, cleaned_set_name) > 85:
-                    logger.debug(f"Fuzzy match found: '{set_name}' -> '{set_info['name']}'")
-                    return set_info["code"]
+                if fuzz.partial_ratio(cleaned_norm_name, cleaned_outer) > 85:
+                    logger.debug(f"Fuzzy partial match: '{set_name}' -> '{outer_name}'")
+                    return set_info.get("code")
 
-        # If no exact match, try fuzzy matching with all normalized forms
+        # Final fuzzy fallback
         try:
             best_score = 0
             best_code = None
@@ -432,949 +683,120 @@ class CardService:
             for norm_name in normalized_names:
                 matches = process.extractBests(
                     norm_name,
-                    [s["name"].lower() for s in sets_data.values()],
-                    scorer=fuzz.token_set_ratio,  # Changed to token_set_ratio for better partial matches
-                    score_cutoff=70,  # Lower threshold
+                    list(sets_data.keys()),
+                    scorer=fuzz.token_set_ratio,
+                    score_cutoff=70,
                     limit=1,
                 )
 
-                if matches and matches[0][1] > best_score:
-                    best_score = matches[0][1]
-                    match_name = matches[0][0]
-                    # Find the corresponding set code
-                    for set_info in sets_data.values():
-                        if set_info["name"].lower() == match_name:
-                            best_code = set_info["code"]
-                            break
+                if matches:
+                    match_name, score = matches[0]
+                    if score > best_score:
+                        best_score = score
+                        best_code = sets_data[match_name].get("code")
 
             if best_code:
-                logger.debug(f"Fuzzy matched '{set_name}' with score: {best_score}")
+                logger.debug(f"Fuzzy matched '{set_name}' with score {best_score}")
                 return best_code
 
         except Exception as e:
             logger.error(f"Error during fuzzy matching: {str(e)}")
-            return "unknown"  # Fallback on error
+            return None
 
-        logger.debug(f"No match found for set: {set_name}.")
-        logger.debug(f"Normalized names tried: {normalized_names}.")
+        logger.debug(f"No match found for set: {set_name}")
+        logger.debug(f"Normalized names tried: {normalized_names}")
         return None
 
     @classmethod
-    def get_closest_set_name(cls, unclean_set_name):
-        """Get the official set name from an unclean set name input.
-
-        Args:
-            unclean_set_name (str): The potentially messy set name to clean
-
-        Returns:
-            str: The official set name if found, or the original name if no match
-        """
+    async def get_closest_set_name(cls, unclean_set_name: str) -> Optional[str]:
+        """Get the official set name from an unclean set name input."""
         if not unclean_set_name:
             logger.warning(f"[SET CODE] Empty set name received")
             return None
 
-        sets_data = cls.get_sets_data()
+        sets_data = await cls.get_sets_data()
         if not sets_data:
             return unclean_set_name
 
-        normalized_names = cls._normalize_set_name(unclean_set_name)
+        normalized_names = await cls._normalize_set_name(unclean_set_name)
 
         # Attempt direct exact match first
         for name_normalized in normalized_names:
             if name_normalized in sets_data:
-                return sets_data[name_normalized]["name"]
+                logger.debug(f"Exact match found for set name: {name_normalized}")
+                return name_normalized
 
+            # Check in promo mappings
             if name_normalized in cls.promo_mappings:
                 mapped_name = cls.promo_mappings[name_normalized].lower()
                 if mapped_name in sets_data:
-                    return sets_data[mapped_name]["name"]
+                    logger.debug(f"Promo mapping matched: {name_normalized} -> {mapped_name}")
+                    return mapped_name
 
-        # Attempt fuzzy match against each normalized candidate
+        # Fuzzy match using keys only (since 'name' is not in set_info)
         best_match = None
         best_score = 0
 
         try:
-            set_names_lower = [set_info["name"].lower() for set_info in sets_data.values()]
+            set_names_lower = list(sets_data.keys())
             filtered_candidates = [candidate for candidate in normalized_names if candidate.strip()]
 
             for candidate in filtered_candidates:
-                match = process.extractOne(
-                    candidate,
-                    set_names_lower,
-                    scorer=fuzz.token_set_ratio,
-                    score_cutoff=65,  # Lower cutoff to improve partial matching
-                )
+                match = process.extractOne(candidate, set_names_lower, scorer=fuzz.token_set_ratio, score_cutoff=65)
                 if match and match[1] > best_score:
                     best_match = match
                     best_score = match[1]
 
             if best_match:
                 matched_name = best_match[0]
-                for set_info in sets_data.values():
-                    if set_info["name"].lower() == matched_name:
-                        logger.debug(
-                            f"Fuzzy matched '{unclean_set_name}' to '{set_info['name']}' with score {best_score}"
-                        )
-                        return set_info["name"]
+                logger.debug(f"Fuzzy matched '{unclean_set_name}' to '{matched_name}' with score {best_score}")
+                return matched_name
 
         except Exception as e:
             logger.error(f"[SET NAME] Error during fuzzy matching: {str(e)}")
 
         # Fallback: try to match against set codes
         input_lower = unclean_set_name.lower()
-        for set_info in sets_data.values():
-            if set_info["code"].lower() == input_lower or input_lower in set_info["code"].lower():
-                logger.debug(
-                    f"Matched '{unclean_set_name}' directly to set code '{set_info['code']}' ({set_info['name']})"
-                )
-                return set_info["name"]
+        for outer_name, set_info in sets_data.items():
+            if set_info.get("code", "").lower() == input_lower or input_lower in set_info.get("code", "").lower():
+                logger.debug(f"Matched '{unclean_set_name}' directly to set code '{set_info['code']}'")
+                return outer_name  # The outer_name *is* the set name
 
         logger.debug(f"[SET NAME] No match found for '{unclean_set_name}', returning original.")
         return unclean_set_name
 
     @classmethod
-    def get_clean_set_code_from_set_name(cls, unclean_set_name):
-        """Get the official set code from an unclean set name input.
-
-        Args:
-            unclean_set_name (str): The potentially messy set name to clean
-
-        Returns:
-            str: The official set code if found, or 'unknown' if no match
-        """
+    async def get_clean_set_code_from_set_name(cls, unclean_set_name: str) -> Optional[str]:
+        """Get the official set code from an unclean set name input."""
         # First get the proper set name
-        clean_set_name = cls.get_closest_set_name(unclean_set_name)
+        clean_set_name = await cls.get_closest_set_name(unclean_set_name)
         if not clean_set_name:
             logger.warning(f"[SET CODE] No clean set name found for: {unclean_set_name}")
             return None
 
         # Then get the set code using the existing method
-        return cls.get_set_code(clean_set_name)
-
-    # @classmethod
-    # def _find_full_set_name(cls, code):
-    #     """Find full set name from a set code."""
-    #     # Common set code to full name mappings
-    #     known_sets = {
-    #         "znr": "zendikar rising",
-    #         "afr": "adventures in the forgotten realms",
-    #         "neo": "kamigawa neon dynasty",
-    #         "dmu": "dominaria united",
-    #         "one": "phyrexia all will be one",
-    #         "mom": "march of the machine",
-    #         "ltr": "lord of the rings",
-    #         "bro": "the brothers war",
-    #         "woe": "wilds of eldraine",
-    #         "lci": "lost caverns of ixalan",
-    #         "mkm": "murders at karlov manor",
-    #         "who": "doctor who",
-    #         "mat": "march of the machine aftermath",
-    #         "mid": "innistrad midnight hunt",
-    #         "vow": "innistrad crimson vow",
-    #         "snc": "streets of new capenna",
-    #         "ncc": "new capenna commander",
-    #         "clb": "commander legends battle for baldurs gate",
-    #         "40k": "warhammer 40000",
-    #         "dmc": "dominaria united commander",
-    #         "brc": "brother's war commander",
-    #         # Add more as needed
-    #     }
-    #     return known_sets.get(code.lower())
-
-    # @classmethod
-    # def _get_all_set_variants(cls, set_name):
-    #     """Get all possible variants of a set name including extras versions."""
-    #     variants = []
-    #     name_lower = set_name.lower()
-
-    #     # Base variants
-    #     variants.extend(
-    #         [
-    #             name_lower,
-    #             name_lower.replace(" ", ""),
-    #             name_lower.replace(":", ""),
-    #             name_lower.replace(":", " "),
-    #         ]
-    #     )
-
-    #     # Add extras variants
-    #     extras_variants = [
-    #         f"{name_lower} extras",
-    #         f"{name_lower}: extras",
-    #         f"{name_lower}:extras",
-    #     ]
-    #     variants.extend(extras_variants)
-
-    #     # If it's a known set code, add full name variants
-    #     full_name = cls._find_full_set_name(name_lower)
-    #     if full_name:
-    #         full_variants = [
-    #             full_name,
-    #             f"{full_name} extras",
-    #             f"{full_name}: extras",
-    #             full_name.replace(" ", ""),
-    #             full_name.replace(":", ""),
-    #         ]
-    #         variants.extend(full_variants)
-
-    #     # Remove duplicates and empty strings
-    #     return list(set(v for v in variants if v))
-
-    @staticmethod
-    def extract_magic_set_from_href(url):
-        try:
-            sets_data = CardService.get_sets_data()
-            known_sets = sets_data.keys()
-
-            # Normalize URL for robust matching
-            normalized_url = url.lower().replace("_", " ").replace("-", " ").replace("/", " ")
-
-            # Check against known sets directly (robust extraction)
-            for known_set in known_sets:
-                normalized_known_set = known_set.lower()
-                if normalized_known_set in normalized_url:
-                    return known_set  # Immediately return the matched known set
-
-            # Fallback logic based on "singles-" if no direct matches found
-            if "singles-" in url:
-                part = url.split("singles-")[-1].split("/")[0]
-                potential_set_name = part.replace("-brawl", "").replace("_", " ").replace("-", " ").strip()
-
-                # Validate the extracted potential set name with fuzzy matching
-                best_match = process.extractOne(
-                    potential_set_name, known_sets, scorer=fuzz.token_set_ratio, score_cutoff=70
-                )
-                if best_match:
-                    return best_match[0]  # Return validated fuzzy matched set
-
-            logger.warning(f"No magic set extracted reliably from URL: {url}")
-            return None
-
-        except Exception as e:
-            logger.error(f"Fatal error in extract_magic_set: {str(e)}", exc_info=True)
-            return None
-
-    @staticmethod
-    def get_next_buylist_id(user_id):
-        """
-        Get the next available buylist_id for a user by finding the maximum and incrementing.
-
-        Args:
-            user_id (int): The ID of the user.
-
-        Returns:
-            int: The next available buylist_id.
-        """
-        try:
-            with CardService.transaction_context() as session:
-                # Query for the maximum buylist_id for the given user_id
-                max_buylist_id = session.query(func.max(UserBuylist.id)).filter(UserBuylist.user_id == user_id).scalar()
-
-                # Increment the maximum buylist_id or start from 1 if no buylists exist
-                return (max_buylist_id or 0) + 1
-        except Exception as e:
-            logger.error(f"Error fetching max buylist_id for user {user_id}: {str(e)}")
-            raise
-
-    #  Card Operations
-    @staticmethod
-    def get_all_user_buylist_cards(user_id):
-        return UserBuylistCard.query.filter_by(user_id=user_id).all()
-
-    @staticmethod
-    def add_user_buylist_card(
-        card_id=None,
-        name=None,
-        set_name=None,
-        language="English",
-        quality="NM",
-        quantity=1,
-        version="Standard",
-        foil=False,
-        buylist_id=None,
-        user_id=None,
-    ):
-        """Save a new card or update an existing card with proper validation and error handling"""
-        try:
-            with CardService.transaction_context():
-                if not name:
-                    raise ValueError("Card name is required")
-
-                if quantity < 1:
-                    raise ValueError("Quantity must be positive")
-
-                # Get set code if set_name is provided
-                set_code = None
-                if set_name:
-                    set_code = CardService.get_clean_set_code_from_set_name(set_name)
-                    if not set_code:
-                        raise ValueError(f"Invalid set name: {set_name}")
-                    logger.info(f"Mapped set name '{set_name}' to code '{set_code}'")
-
-                if card_id:
-                    card = UserBuylistCard.query.get(card_id)
-                    if not card:
-                        raise ValueError(f"Card with ID {card_id} not found")
-
-                    card.name = name
-                    card.set_code = set_code
-                    card.set_name = set_name
-                    card.language = language
-                    card.quantity = quantity
-                    card.version = version
-                    card.foil = foil
-                    card.buylist_id = buylist_id
-                    card.user_id = user_id
-                else:
-                    card = UserBuylistCard(
-                        name=name,
-                        set_name=set_name,
-                        set_code=set_code,
-                        language=language,
-                        quality=quality,
-                        quantity=quantity,
-                        version=version,
-                        foil=foil,
-                        buylist_id=buylist_id,
-                        user_id=user_id,
-                    )
-                    db.session.add(card)
-
-                return card
-        except Exception as e:
-            logger.error(f"Error saving card: {str(e)}")
-            raise
-
-    @staticmethod
-    def update_user_buylist_card(card_id, user_id, data):
-        """Update a specific card in the user's buylist."""
-        try:
-            current_app.logger.info(f"Updating card {card_id} with data: {data}")
-
-            card = UserBuylistCard.query.get(card_id)
-            if not card:
-                return None
-
-            buylist_id = data.get("buylist_id")
-            if not buylist_id:
-                raise ValueError("Buylist ID is required")
-
-            buylist = UserBuylist.query.filter_by(id=buylist_id, user_id=user_id).first()
-            if not buylist:
-                raise ValueError("Buylist does not exist")
-
-            if card.buylist_id != buylist_id:
-                raise ValueError("Card does not belong to the provided buylist")
-
-            card.name = data.get("name", card.name)
-            card.set_code = data.get("set_code", card.set_code)
-            card.set_name = data.get("set_name", card.set_name)
-            card.language = data.get("language", card.language)
-            card.quantity = data.get("quantity", card.quantity)
-            card.quality = data.get("quality", card.quality)
-            card.version = data.get("version", card.version)
-            card.foil = data.get("foil", card.foil)
-
-            db.session.commit()
-            db.session.refresh(card)
-            return card
-        except Exception as e:
-            current_app.logger.error(f"Error updating card: {str(e)}")
-            db.session.rollback()
-            raise
-
-    @staticmethod
-    def update_user_buylist_name(id, user_id, newbuylist_name):
-        """Update the name of a specific buylist for a user."""
-        # Find the buylist
-        buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
-
-        if not buylist:
-            raise ValueError("Buylist does not exist.")
-
-        buylist.name = newbuylist_name
-        db.session.commit()
-        current_app.logger.info(f"Buylist '{buylist.name}' updated successfully")
-        return buylist
-
-    @staticmethod
-    def get_all_buylists(user_id):
-        """Retrieve all unique buylists for a specific user."""
-        try:
-            buylists = UserBuylist.query.filter_by(user_id=user_id).all()
-            # buylists = db.session.query(UserBuylist.id, UserBuylist.name).filter(UserBuylist.user_id == user_id).all()
-
-            return [buylist.to_dict() for buylist in buylists]
-        except Exception as e:
-            logger.error(f"Error fetching buylists: {str(e)}")
-            raise
-
-    @staticmethod
-    def get_top_buylists(user_id):
-        """Get the top buylists for a specific user, sorted by most recently updated."""
-        try:
-            buylists = (
-                db.session.query(UserBuylist.id, UserBuylist.name)
-                .filter(UserBuylist.user_id == user_id)
-                .order_by(UserBuylist.updated_at.desc())
-                .limit(3)
-                .all()
-            )
-
-            return [{"id": buylist.id, "name": buylist.name} for buylist in buylists]
-        except Exception as e:
-            logger.error(f"Error fetching top buylists: {str(e)}")
-            raise
-
-    @staticmethod
-    def create_buylist(name, user_id):
-        buylist = UserBuylist(name=name, user_id=user_id)
-        db.session.add(buylist)
-        db.session.commit()
-        db.session.refresh(buylist)
-        return buylist
-
-    @staticmethod
-    def add_card_to_buylist(id, user_id, cards_data):
-        """
-        Adds cards to a buylist, preventing duplicates.
-        """
-        buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
-        if not buylist:
-            raise ValueError("Buylist does not exist.")
-
-        if not cards_data:
-            raise ValueError("No cards provided.")
-
-        try:
-            with CardService.transaction_context() as session:
-                existing_cards = {c.name.lower() for c in buylist.cards}
-
-                for card in cards_data:
-                    card_name = card["name"].strip().lower()
-                    if card_name in existing_cards:
-                        continue  # Skip duplicate cards
-
-                    new_card = UserBuylistCard(
-                        user_id=user_id,
-                        buylist_id=id,
-                        name=card["name"],
-                        set_name=card["set_name"],
-                        set_code=card["set_code"],
-                        language=card["language"],
-                        quantity=card["quantity"],
-                        version=card["version"],
-                        foil=card["foil"],
-                    )
-                    session.add(new_card)
-
-            updated_buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
-            return updated_buylist
-        except Exception as e:
-            logger.error(f"Error adding cards to buylist: {str(e)}")
-            raise
-
-    @staticmethod
-    def delete_buylist(id, user_id):
-        """
-        Deletes a buylist and all associated cards by its ID and user.
-
-        Args:
-            buylist_id (int): The ID of the buylist to delete.
-            user_id (int): The ID of the user who owns the buylist.
-
-        Returns:
-            bool: True if the buylist was deleted, False otherwise.
-        """
-        try:
-            with CardService.transaction_context():
-                # ✅ Check if the buylist exists
-                buylist = UserBuylist.query.filter_by(id=id, user_id=user_id).first()
-                if not buylist:
-                    logger.warning(f"Buylist {id} not found for user {user_id}.")
-                    return False
-
-                # ✅ Delete all associated cards
-                db.session.query(UserBuylistCard).filter_by(buylist_id=id, user_id=user_id).delete()
-
-                # ✅ Delete the buylist itself
-                db.session.delete(buylist)
-
-                # ✅ Commit the transaction once
-                db.session.commit()
-
-                logger.info(f"Buylist {id} and all associated cards deleted successfully.")
-                return True
-
-        except Exception as e:
-            logger.error(f"Error deleting buylist {id}: {str(e)}")
-            return False
-
-    @staticmethod
-    def delete_card_from_buylist(id, card_name, quantity, user_id):
-        """
-        Deletes a card from the specified buylist.
-
-        Args:
-            buylist_id (int): The ID of the buylist.
-            card_name (str): The name of the card to delete.
-            quantity (int): The quantity of the card to remove.
-            user_id (int): The ID of the user performing the operation.
-
-        Returns:
-            bool: True if the card was successfully deleted, False otherwise.
-        """
-        try:
-            with CardService.transaction_context():
-                # Query for the card in the user's buylist
-                card = UserBuylistCard.query.filter_by(buylist_id=id, name=card_name, user_id=user_id).first()
-
-                if not card:
-                    logger.warning(f"Card '{card_name}' not found in buylist ID {id}.")
-                    return False
-
-                # If the card exists, adjust quantity or delete it
-                if card.quantity > quantity:
-                    card.quantity -= quantity
-                    logger.info(
-                        f"Reduced quantity of '{card_name}' in buylist ID {id} by {quantity}. Remaining: {card.quantity}."
-                    )
-                else:
-                    db.session.delete(card)
-                    logger.info(f"Deleted '{card_name}' from buylist ID {id}.")
-
-                return True
-        except Exception as e:
-            logger.error(f"Error deleting card '{card_name}' from buylist ID {id}: {str(e)}")
-            return False
-
-    @staticmethod
-    def get_buylist_cards_by_id(id):
-        """Get all cards for a specific buylist by ID."""
-        try:
-            return UserBuylistCard.query.filter_by(buylist_id=id).all()
-        except Exception as e:
-            logger.error(f"Error fetching buylist cards: {str(e)}")
-            raise
-
-    @staticmethod
-    def fetch_scryfall_data(card_name, set_code=None, language=None, version=None):
-        current_app.logger.info(f"Fetching Scryfall data for: {card_name} (set: {set_code})")
-
-        try:
-            # First try exact match with set
-            params = {
-                "exact": card_name,
-                "set": set_code if set_code else None,
-                "lang": language if language else "en",
-            }
-            # Remove None values
-            params = {k: v for k, v in params.items() if v is not None}
-
-            current_app.logger.info(f"Making exact request to Scryfall with params: {params}")
-            response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
-
-            if response.status_code != 200:
-                # If exact match fails, try fuzzy search
-                current_app.logger.info("Exact match failed, trying fuzzy search")
-                params["fuzzy"] = card_name
-                del params["exact"]
-                response = requests.get(SCRYFALL_API_NAMED_URL, params=params)
-
-                if response.status_code != 200:
-                    current_app.logger.error(f"Scryfall API error: {response.text}")
-                    return None
-
-            card_data = response.json()
-            current_app.logger.info(f"Successfully retrieved card data for: {card_name} (set: {set_code})")
-
-            # Fetch all printings
-            all_printings = []
-            if prints_uri := card_data.get("prints_search_uri"):
-                prints_response = requests.get(prints_uri)
-                if prints_response.status_code == 200:
-                    prints_data = prints_response.json()
-                    all_printings = [
-                        {
-                            "id": print_data.get("id"),
-                            "name": print_data.get("name"),
-                            "set_code": print_data.get("set"),
-                            "set_name": print_data.get("set_name"),
-                            "collector_number": print_data.get("collector_number"),
-                            "rarity": print_data.get("rarity"),
-                            "image_uris": print_data.get("image_uris", {}),
-                            "prices": print_data.get("prices", {}),
-                            "digital": print_data.get("digital", False),
-                            "lang": print_data.get("lang", "en"),
-                        }
-                        for print_data in prints_data.get("data", [])
-                    ]
-
-            result = {
-                "scryfall": {**card_data, "all_printings": all_printings},
-                "scan_timestamp": datetime.now().isoformat(),
-            }
-
-            current_app.logger.info(f"Returning data structure with {len(all_printings)} printings")
-            return result
-
-        except Exception as e:
-            current_app.logger.error(f"Error in fetch_scryfall_data: {str(e)}", exc_info=True)
-            return None
-
-    @staticmethod
-    def fetch_scryfall_card_data(card_name, set_code=None, language=None, version=None):
-        try:
-            data = CardService.fetch_scryfall_data(card_name, set_code, language, version)
-            if not data:
-                current_app.logger.debug(f"No data found for card '{card_name}'")
-                return None
-            return data
-        except Exception as e:
-            current_app.logger.error(f"Error in fetch_card_data: {str(e)}")
-            return None
-
-    # @staticmethod
-    # def fetch_all_printings(prints_search_uri):
-    #     all_printings = []
-    #     next_page = prints_search_uri
-
-    #     while next_page:
-    #         try:
-    #             response = requests.get(next_page)
-    #             response.raise_for_status()
-    #         except requests.exceptions.RequestException as e:
-    #             current_app.logger.error(f"Error fetching printings data from Scryfall: {str(e)}")
-    #             return []
-
-    #         data = response.json()
-    #         current_app.logger.debug(f"Scryfall all printings data for page: {data}")
-
-    #         for card in data.get('data', []):
-    #             current_app.logger.debug(f"Processing card printing: {card}")
-    #             all_printings.append({
-    #                 'set_code': card.get('set'),
-    #                 'set_name': card.get('set_name'),
-    #                 'rarity': card.get('rarity'),
-    #                 'collector_number': card.get('collector_number'),
-    #                 'prices': card.get('prices'),
-    #                 'scryfall_uri': card.get('scryfall_uri'),
-    #                 'image_uris': card.get('image_uris')  # Include image_uris for hover previews
-    #             })
-
-    #         next_page = data.get('next_page')
-
-    #     return all_printings
-
-    @staticmethod
-    def get_card_suggestions(query, limit=20):
-        scryfall_api_url = f"{SCRYFALL_API_BASE}/catalog/card-names"
-        try:
-            response = requests.get(scryfall_api_url)
-            response.raise_for_status()
-            all_card_names = response.json()["data"]
-            # Filter card names based on the query
-            suggestions = [name for name in all_card_names if query.lower() in name.lower()]
-            return suggestions[:limit]  # Return only up to the limit
-        except requests.RequestException as e:
-            logger.error("Error fetching card suggestions from Scryfall: %s", str(e))
+        return await cls.get_set_code(clean_set_name)
+
+    @classmethod
+    async def get_card_suggestions(cls, query: str) -> List[str]:
+        """Get card name suggestions based on a query string."""
+        if not query or len(query) < 2:
             return []
 
-    @staticmethod
-    def validate_card_data(card_data):
-        """Validate card data before saving"""
-        errors = []
+        redis_client = await cls.get_redis_client()
+        cached_names = await redis_client.get(REDIS_CARDNAME_KEY)
 
-        # Required fields validation
-        if not card_data.get("name"):
-            errors.append("Card name is required")
+        if not cached_names:
+            card_names = await cls.fetch_scryfall_card_names()
+        else:
+            card_names = json.loads(cached_names)
 
-        # Set validation - either set_name or set_code should be present
-        if not card_data.get("set_name") and not card_data.get("set_code"):
-            errors.append("Either set name or set code must be provided")
+        # Normalize query
+        query_lower = query.lower().strip()
 
-        # Quantity validation
-        quantity = card_data.get("quantity", 0)
-        if not isinstance(quantity, int) or quantity < 0:
-            errors.append("Quantity must be a positive integer")
+        # Find matches
+        matches = [name for name in card_names if query_lower in name.lower()]
 
-        # Language validation
-        valid_languages = [lang.value for lang in CardLanguage]
-        if card_data.get("language") and card_data.get("language") not in valid_languages:
-            errors.append(f"Invalid language. Must be one of: {', '.join(valid_languages)}")
-
-        # Version validation
-        valid_versions = [version.value for version in CardVersion]
-        if card_data.get("version") and card_data.get("version") not in valid_versions:
-            errors.append(f"Invalid version. Must be one of: {', '.join(valid_versions)}")
-
-        # Foil validation
-        if not isinstance(card_data.get("foil", False), bool):
-            errors.append("Foil must be a boolean value")
-
-        return errors
-
-    @staticmethod
-    def create_shopify_url_and_payload(site, card_names):
-        try:
-            # Format the payload
-            payload = [{"card": name, "quantity": 1} for name in card_names]
-            # URLs
-            api_url = ""
-            base_url = "https://api.binderpos.com/external/shopify/decklist"
-            alternate_url = "https://portal.binderpos.com/external/shopify/decklist"
-
-            # Determine the correct API URL based on site name
-            if hasattr(site, "api_url") and site.api_url:
-                if "kingdomtitans" in site.url:
-                    api_url = alternate_url + f"?storeUrl={site.api_url}&type=mtg"
-                else:
-                    api_url = base_url + f"?storeUrl={site.api_url}&type=mtg"
-
-            # Make the request
-            json_payload = json.dumps(payload)  # Convert list to JSON string
-            return api_url, json_payload
-        except Exception as e:
-            logger.error(f"Error creating Shopify request for {site.name}: {str(e)}")
-            return None
-
-    def create_f2f_url_and_payload(site, cards):
-        """
-        Generate the cart POST request payload for FaceToFace (Shopify).
-        cards: list of dicts with each containing 'variant_id' and 'quantity'.
-        """
-        items = []
-        for card in cards:
-            variant_id = card.get("variant_id")  # <-- Make sure your scraping results store this!
-            if variant_id:
-                items.append({"id": variant_id, "quantity": card.get("quantity", 1)})
-
-        payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
-        return "https://facetofacegames.com/cart/add.js", payload
-
-    def create_crystal_url_and_payload(site, cards):
-        """
-        Generate the cart POST request payload for FaceToFace (Shopify).
-        cards: list of dicts with each containing 'variant_id' and 'quantity'.
-        """
-        items = []
-        for card in cards:
-            variant_id = card.get("variant_id")  # <-- Make sure your scraping results store this!
-            if variant_id:
-                items.append({"id": variant_id, "quantity": card.get("quantity", 1)})
-
-        payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
-        return "https://facetofacegames.com/cart/add.js", payload
-
-    # @staticmethod
-    # def generate_search_links(purchase_data, active_sites):
-    #     results = []
-    #     try:
-    #         for store in purchase_data:
-    #             site_id = store.get("site_id")
-    #             cards = store.get("cards", [])
-
-    #             if not site_id or not cards:
-    #                 continue
-
-    #             site = active_sites.get(site_id)
-    #             if not site:
-    #                 continue
-
-    #             site_method = site.method.lower()
-    #             card_names = [card.get("name") for card in cards if card.get("name")]
-    #             base_url = f"{site.url.rstrip('/')}"
-    #             query = "+".join([name.replace(" ", "+") for name in card_names])
-
-    #             payload = None
-    #             request_headers = None
-
-    #             if site_method == "shopify":
-    #                 generated_search_url = f"{base_url}/products/multi_search?q={query}"
-
-    #             elif site_method == "f2f":
-    #                 generated_search_url = f"{base_url}/products/multi_search?q={query}"
-
-    #             elif site_method in ["crystal", "scrapper"]:
-    #                 generated_search_url = base_url
-    #                 payload, request_headers = generate_search_payload_crystal(site, card_names)
-
-    #             else:
-    #                 generated_search_url = None
-
-    #             if generated_search_url:
-    #                 results.append(
-    #                     {
-    #                         "site_name": site.name,
-    #                         "site_id": site_id,
-    #                         "method": site_method,
-    #                         "cards": cards,
-    #                         "card_count": len(cards),
-    #                         "generated_search_url": generated_search_url,
-    #                         "payload": payload,
-    #                         "request_headers": request_headers,
-    #                     }
-    #                 )
-
-    #     except Exception as e:
-    #         logger.error(f"Error generating search links: {str(e)}", exc_info=True)
-
-    #     return results
-
-    @staticmethod
-    def generate_purchase_links(purchase_data, active_sites):
-        """
-        Generate properly formatted purchase URLs for cards grouped by site.
-
-        Args:
-            purchase_data (list): List of dicts containing card_name and site_name.
-
-        Returns:
-            list: List of dicts with site info and formatted purchase URLs.
-        """
-        results = []
-        try:
-
-            # Process each store's cards
-            for store in purchase_data:
-                try:
-                    site_id = store.get("site_id")
-                    cards = store.get("cards", [])
-
-                    card_names = [card.get("name", "") for card in cards if card.get("name")]
-
-                    if not site_id:
-                        logger.warning(f"Missing site_id in store data: {store}")
-                        continue
-
-                    # Fetch site details
-                    site = active_sites.get(site_id)
-                    if not site:
-                        logger.warning(f"Site with ID {site_id} not found in active sites.")
-                        continue
-
-                    if not cards:
-                        logger.warning(f"No cards to process for site with ID {site_id}.")
-                        continue
-
-                    # Generate payload and URLs based on site method
-                    site_method = site.method.lower() if hasattr(site, "method") else ""
-
-                    if site_method in ["crystal", "scrapper"]:
-                        # payload, request_headers = generate_search_payload_crystal(site, card_names)
-                        payload = {
-                            "authenticity_token": "Dwn7IuTOGRMC6ekxD8lNnJWrsg45BVs85YplhjuFzbM=",
-                            "query": "\n".join(card.get("name", "") for card in cards if card.get("name")),
-                            "submit": "Continue",
-                        }
-                        purchase_url = site.url
-                    elif site_method == "shopify":
-                        purchase_url, payload = CardService.create_shopify_url_and_payload(site, card_names)
-                        purchase_url = site.url
-                    elif site_method == "f2f":
-
-                        # Prepare payload for this batch //Not Used
-                        payload = {
-                            "pageSize": 0,
-                            # "sort": False,
-                            "filters": [
-                                {"field": "Card Name", "values": card_names},
-                                {"field": "in_stock", "values": ["1"]},
-                            ],
-                        }
-                        purchase_url = site.url
-
-                    else:
-                        logger.warning(f"Unsupported purchase method '{site_method}' for site ID {site_id}.")
-                        continue
-
-                    # Add the result
-                    results.append(
-                        {
-                            "site_name": store.get("site_name", f"Unknown Site {site_id}"),
-                            "site_id": site_id,
-                            "purchase_url": purchase_url,
-                            "payload": payload,
-                            "method": site_method,
-                            "country": getattr(site, "country", "Unknown"),
-                            "cards": cards,
-                            "card_count": len(cards),
-                        }
-                    )
-
-                    logger.info(f"Generated purchase link for site {store.get('site_name')} with {len(cards)} cards.")
-
-                except Exception as e:
-                    logger.error(f"Error processing store {store.get('site_name', 'Unknown')}: {str(e)}")
-                    continue
-
-        except Exception as e:
-            logger.error(f"Error in generate_purchase_links: {str(e)}")
-            logger.exception("Full traceback:")
-
-        return results
-
-    # @staticmethod
-    # def create_crystal_purchase_link(site, cards):
-    #     parsed_url = urlparse(site.url)
-    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    #     purchase_url = f"{base_url}/api/v1/cart/line_items"
-    #     line_items = []
-    #     skipped_cards = []
-
-    #     for card in cards:
-    #         variant_id = card.get("variant_id")
-    #         qty = card.get("quantity", 1)
-
-    #         if not variant_id:
-    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
-    #             skipped_cards.append(card.get("name"))
-    #             continue
-    #         line_items.append({"variant_id": int(variant_id), "qty": qty})
-
-    #     payload = {"line_items": line_items}
-    #     return purchase_url, payload, skipped_cards
-
-    # @staticmethod
-    # def create_shopify_purchase_link(site, cards):
-    #     parsed_url = urlparse(site.url)
-    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    #     purchase_url = f"{base_url}/cart/add.js"
-
-    #     items = []
-    #     skipped_cards = []
-
-    #     for card in cards:
-    #         variant_id = card.get("variant_id")
-    #         qty = card.get("quantity", 1)
-
-    #         if not variant_id:
-    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
-    #             skipped_cards.append(card.get("name"))
-    #             continue
-    #         items.append({"id": variant_id, "quantity": qty})
-
-    #     payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
-    #     return purchase_url, payload, skipped_cards
-
-    # @staticmethod
-    # def create_f2f_purchase_link(site, cards):
-    #     parsed_url = urlparse(site.url)
-    #     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    #     purchase_url = f"{base_url}/cart/add.js"
-
-    #     items = []
-    #     skipped_cards = []
-
-    #     for card in cards:
-    #         variant_id = card.get("variant_id")
-    #         qty = card.get("quantity", 1)
-
-    #         if not variant_id:
-    #             logger.warning(f"Missing variant_id for {card.get('name')} at {site.url}.")
-    #             skipped_cards.append(card.get("name"))
-    #             continue
-    #         items.append({"id": variant_id, "quantity": qty})
-
-    #     payload = {"items": items, "sections": ["cart-drawer", "cart-icon-bubble"]}
-    #     return purchase_url, payload, skipped_cards
+        # Sort by relevance and limit results
+        matches.sort(key=lambda x: (0 if x.lower().startswith(query_lower) else 1, len(x)))
+        return matches[:20]

@@ -2,14 +2,15 @@ import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag, Tooltip } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
-import ScryfallCard from '../components/CardManagement/ScryfallCard'; 
 import { OptimizationSummary } from '../components/OptimizationDisplay';
+import { useBuylistState } from '../hooks/useBuylistState';
+import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
+import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title, Text } = Typography;
 
 const Optimize = ({ userId }) => {
   const [cards, setCards] = useState([]);
-  const [cardData, setCardData] = useState(null);
   const [selectedCard, setSelectedCard] = useState({});
   const [sites, setSites] = useState([]);
   const [selectedSites, setSelectedSites] = useState({});
@@ -18,12 +19,13 @@ const Optimize = ({ userId }) => {
   const [findMinStore, setFindMinStore] = useState(true);
   const [taskId, setTaskId] = useState(null);
   const [taskState, setTaskState] = useState(null);
+  const [taskDetails, setTaskDetails] = useState(null);
   const [taskStatus, setTaskStatus] = useState(null);
   const [optimizationResult, setOptimizationResult] = useState(null);
   const { theme } = useTheme();
   const { Option } = Select;
-  const [isLoading, setIsLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [modalMode, setModalMode] = useState('view');
   const [taskProgress, setTaskProgress] = useState(0);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [siteType, setSiteType] = useState('extended');
@@ -31,13 +33,41 @@ const Optimize = ({ userId }) => {
   const [methodFilter, setMethodFilter] = useState(['all']); 
   const [selectedSiteCount, setSelectedSiteCount] = useState(0); 
   const [buylists, setBuylists] = useState([]); 
-  const [selectedBuylist, setSelectedBuylist] = useState(null); 
+  const { selectedBuylist, setSelectedBuylist} = useBuylistState();
   const [minAge, setMinAge] = useState(1800);  // default 30 minutes
+  const [strictPreferences, setStrictPreferences] = useState(false);
+
+  const [cardData, setFetchedCard] = useState(null);
+  const {
+    mutateAsync: fetchCard,
+    isLoading: isCardLoading,
+  } = useFetchScryfallCard({
+    onSuccess: (resData) => {
+      setFetchedCard(resData); // or whatever your variable is
+    }
+  });
+
+
+  const filteredSites = sites.filter(site => {
+    if (!site.active) return false;
+    if (countryFilter !== 'all' && site.country?.toLowerCase() !== countryFilter) {
+      return false;
+    }
+    if (siteType === 'primary' && site.type?.toLowerCase() !== 'primary') {
+      return false;
+    }
+    if (!methodFilter.includes('all') && !methodFilter.includes(site.method?.toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
 
   useEffect(() => {
-    fetchSites();
-    fetchBuylists(); // Fetch buylists on component mount
-  }, []);
+    if (userId) {
+      fetchSites();
+      fetchBuylists(); 
+    }
+  }, [userId]);
 
   useEffect(() => {
     if (taskId) {
@@ -51,15 +81,51 @@ const Optimize = ({ userId }) => {
 
   useEffect(() => {
     if (buylists.length > 0 && !selectedBuylist) {
-      setSelectedBuylist(buylists[0].id);
-      handleSelectBuylist(buylists[0].id);
+      const first = buylists[0];
+      setSelectedBuylist({ id: first.id, name: first.name }); 
     }
   }, [buylists]);
+  
+  useEffect(() => {
+    if (selectedBuylist) {
+      setCards([]);
+      handleSelectBuylist(selectedBuylist.buylistId);
+    }
+  }, [selectedBuylist]);
+
+  useEffect(() => {
+    setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
+  }, [filteredSites, selectedSites]);
+
+  const checkTaskStatus = async (id) => {
+    try {
+      const response = await api.get(`/task_status/${id}`);
+      setTaskState(response.data.state);
+      setTaskStatus(response.data.status);
+      setTaskProgress(response.data.progress ?? 0);
+      setTaskDetails(response.data.details ?? null); // ← this line fixes it
+
+      if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
+        setIsOptimizing(false);
+        setTaskId(null);
+        if (response.data.state === 'SUCCESS') {
+          message.success('Optimization completed successfully!');
+          setOptimizationResult(response.data.result?.optimization);
+        } else {
+          message.error(`Optimization failed: ${response.data.error}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking task status:', error);
+      setIsOptimizing(false);
+      setTaskId(null);
+    }
+  };
 
   const fetchSites = async () => {
     try {
       const response = await api.get('/sites', {
-        params: { user_id: 'your_user_id' } // Add user ID
+        params: { user_id: userId } 
       });
       const sitesWithTypes = response.data.map(site => ({
         ...site,
@@ -89,6 +155,7 @@ const Optimize = ({ userId }) => {
 
   const handleOptimize = async () => {
     try {
+      // console.log("Sending userId:", userId);
       const sitesToOptimize = filteredSites
         .filter(site => selectedSites[site.id])
         .map(site => site.id.toString());
@@ -97,19 +164,32 @@ const Optimize = ({ userId }) => {
         message.warning('Please select at least one site to optimize');
         return;
       }
-
       const response = await api.post('/start_scraping', {
         sites: sitesToOptimize,
         strategy: optimizationStrategy,
         min_store: minStore,
         find_min_store: findMinStore,
-        min_age_seconds: minAge,  
-        buylist_id: selectedBuylist,  
+        min_age_seconds: minAge,
+        user_id: userId,
+        buylist_id: selectedBuylist?.id,
+        strict_preferences: strictPreferences,
+        user_preferences: Object.fromEntries(
+          cards.map(card => [
+            card.name,
+            {
+              set_name: card.set_name,
+              language: card.language,
+              quality: card.quality,
+              version: card.version
+            }
+          ])
+        ),
         card_list: cards.map(card => ({
           name: card.name,
-          quantity: card.quantity,
           set_name: card.set_name,
-          quality: card.quality
+          language: card.language,
+          quality: card.quality,
+          quantity: card.quantity
         }))
       });
       setTaskId(response.data.task_id);
@@ -117,30 +197,6 @@ const Optimize = ({ userId }) => {
     } catch (error) {
       message.error('Failed to start optimization task');
       console.error('Error during optimization:', error);
-    }
-  };
-
-  const checkTaskStatus = async (id) => {
-    try {
-      const response = await api.get(`/task_status/${id}`);
-      setTaskState(response.data.state);
-      setTaskStatus(response.data.status);
-      setTaskProgress(response.data.progress ?? 0);
-
-      if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
-        setIsOptimizing(false);
-        setTaskId(null);
-        if (response.data.state === 'SUCCESS') {
-          message.success('Optimization completed successfully!');
-          setOptimizationResult(response.data.result?.optimization);
-        } else {
-          message.error(`Optimization failed: ${response.data.error}`);
-        }
-      }
-    } catch (error) {
-      console.error('Error checking task status:', error);
-      setIsOptimizing(false);
-      setTaskId(null);
     }
   };
 
@@ -158,17 +214,23 @@ const Optimize = ({ userId }) => {
 
   const handleCardClick = async (card) => {
     setSelectedCard(card);
-    setIsLoading(true);
+    setModalMode('view');
+    setIsModalVisible(true);
+  
     try {
-      const response = await api.get(`/fetch_card?name=${card.name}`);
-      if (response.data.error) throw new Error(response.data.error);
-      setCardData(response.data);
-      setIsModalVisible(true);
-    } catch (error) {
-      message.error(`Failed to fetch card data: ${error.message}`);
-    } finally {
-      setIsLoading(false);
+      const cardName = card.name;
+      const setCode = card.set_code || card.set || null; // fallback for Results
+      // console.log("Fetching card:", cardName, "Set:", setCode);
+  
+      await fetchCard({ name: cardName, set_code: setCode });
+    } catch (err) {
+      message.error('Failed to fetch card data');
     }
+  };
+
+  const handleSaveEdit = (updatedData) => {
+    // console.log('[Optimize] Saved card data:', updatedData);
+    setIsModalVisible(false);
   };
 
   const handleSiteSelect = (siteId) => {
@@ -181,20 +243,6 @@ const Optimize = ({ userId }) => {
       return newSelectedSites;
     });
   };
-
-  const filteredSites = sites.filter(site => {
-    if (!site.active) return false;
-    if (countryFilter !== 'all' && site.country?.toLowerCase() !== countryFilter) {
-      return false;
-    }
-    if (siteType === 'primary' && site.type?.toLowerCase() !== 'primary') {
-      return false;
-    }
-    if (!methodFilter.includes('all') && !methodFilter.includes(site.method?.toLowerCase())) {
-      return false;
-    }
-    return true;
-  });
 
   const getCountryCounts = () => {
     const counts = sites.reduce((acc, site) => {
@@ -218,15 +266,10 @@ const Optimize = ({ userId }) => {
     return counts;
   };
 
-  // useEffect(() => {
-  //   console.log('Current sites:', sites);
-  //   console.log('Site type:', siteType);
-  //   console.log('Filtered sites:', filteredSites);
-  // }, [sites, siteType, selectedSites]);
-
-  useEffect(() => {
-    setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
-  }, [filteredSites, selectedSites]);
+  const handleModalClose = () => {
+    setIsModalVisible(false);
+    setFetchedCard(null);  // 🧹 Clear the card data
+  };
 
   const handleSelectAll = () => {
     const newSelectedSites = {};
@@ -252,21 +295,8 @@ const Optimize = ({ userId }) => {
 
   const findMinStoretooltipContent = (
     <div>
-      <p>When find_min_store is True:</p>
-      <p>
-        The algorithm will perform a search to find the minimum number of stores required to fulfill the user's wishlist.
-        It iterates through different store counts, starting from 1 up to the total number of unique stores available.
-        For each store count, it attempts to find a feasible solution that meets the user's requirements.
-        The goal is to find the solution with the fewest stores that still meets the user's wishlist, while also considering the cost.
-        This approach ensures that the solution uses the minimum number of stores possible, which can be beneficial for reducing shipping costs and simplifying logistics.
-      </p>
-      <p>When find_min_store is False:</p>
-      <p>
-        The algorithm will use the min_store value provided in the configuration to set a fixed minimum number of stores that must be used.
-        It does not attempt to minimize the number of stores beyond this fixed value.
-        The focus is primarily on finding a feasible solution that meets the user's requirements while adhering to the specified minimum store constraint.
-        This approach is useful when the user has a preference for using a certain number of stores, regardless of whether fewer stores could potentially fulfill the wishlist.
-      </p>
+      <p><strong>When enabled:</strong> The algorithm tries to minimize the number of stores needed to fulfill the wishlist, starting from one and going up, prioritizing feasibility and cost efficiency.</p>
+      <p><strong>When disabled:</strong> It uses the fixed <code>min_store</code> value from the config, without trying to reduce store count further—useful when the user prefers a specific number of stores.</p>
     </div>
   );
 
@@ -301,12 +331,21 @@ const Optimize = ({ userId }) => {
           />
         </Col>
         <Col span={6}>
-          <Tooltip title={findMinStoretooltipContent} overlayStyle={{ width: 900 }}>
+          <Tooltip title={findMinStoretooltipContent} styles={{ root: { width: 900 }}}>
             <Switch
               checked={findMinStore}
               onChange={setFindMinStore}
               checkedChildren="Find Min Store"
               unCheckedChildren="Don't Find Min Store"
+            />
+          </Tooltip>
+          <Tooltip title="Strict Preferences: If enabled, only exact matches for language, set, quality, and version will be considered.">
+            <Switch
+              checked={strictPreferences}
+              onChange={setStrictPreferences}
+              checkedChildren="Strict Preferences"
+              unCheckedChildren="Flexible Preferences"
+              style={{ marginTop: 8 }}
             />
           </Tooltip>
           <Tooltip title="Specify how old the cached data can be (in seconds) before it’s considered stale.">
@@ -323,13 +362,13 @@ const Optimize = ({ userId }) => {
         </Col>
       </Row>
 
-      {taskState && (
-        <div className="my-4">
-          <Text>Task Status: {taskState}: {taskStatus}</Text>
-          {taskProgress > 0 && taskProgress < 100 && (
-            <Progress percent={taskProgress} status="active" />
-          )}
-        </div>
+      {isOptimizing && (
+        <>
+          <Progress percent={Math.round(taskProgress)} status="active" />
+          <Text>{taskStatus}</Text>
+          {taskDetails && <pre>{JSON.stringify(taskDetails, null, 2)}</pre>}
+          <Divider />
+        </>
       )}
 
       {optimizationResult && (
@@ -363,14 +402,14 @@ const Optimize = ({ userId }) => {
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>MTG Card List</span>
-                <Select 
-                  value={selectedBuylist} 
-                  onChange={(value) => {
-                    setSelectedBuylist(value);
-                    handleSelectBuylist(value);
-                  }} 
+                <Select
+                  labelInValue
                   style={{ width: 200 }}
                   placeholder="Select Buylist"
+                  value={selectedBuylist ? { value: selectedBuylist.buylistId, label: selectedBuylist.name } : null}
+                  onChange={(option) => {
+                    setSelectedBuylist({ id: option.value, name: option.label });
+                  }}
                 >
                   {buylists.map(buylist => (
                     <Option key={buylist.id} value={buylist.id}>
@@ -471,25 +510,29 @@ const Optimize = ({ userId }) => {
       </Row>
 
       <Modal
-        title={selectedCard.name}
+        title={selectedCard?.name}
         open={isModalVisible}
-        onCancel={() => setIsModalVisible(false)}
+        onCancel={handleModalClose}
+        footer={null}
         width={800}
-        footer={[
-          <Button key="close" onClick={() => setIsModalVisible(false)}>
-            Close
-          </Button>
-        ]}
+        destroyOnClose
       >
-        {isLoading ? (
-          <div className="text-center p-4">
+        {isCardLoading ? (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
             <Spin size="large" />
-            <Text className="mt-4">Loading card data...</Text>
+            <p>Loading card details...</p>
           </div>
-        ) : cardData?.scryfall ? (
-          <ScryfallCard data={cardData.scryfall} />
+        ) : cardData ? (
+          <ScryfallCardView
+            key={`${selectedCard?.id}-${cardData.id}`}
+            cardData={cardData}
+            mode={modalMode}
+            onSave={handleSaveEdit}
+          />
         ) : (
-          <div>No card data available</div>
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <p>No card data available</p>
+          </div>
         )}
       </Modal>
     </div>

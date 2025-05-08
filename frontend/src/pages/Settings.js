@@ -21,7 +21,7 @@ const Settings = ({ userId }) => {
       const response = await api.get('/settings', {
         params: { user_id: userId }
       });
-      console.log('Fetched settings:', response.data);
+      // console.log('Fetched settings:', response.data);
       setSettings(response.data);
       form.setFieldsValue(response.data);
     } catch (error) {
@@ -83,24 +83,47 @@ const Settings = ({ userId }) => {
     <div className="settings">
       <h1>Settings</h1>
       <Form form={form} onFinish={onFinish} layout="vertical">
-        <Form.Item name="defaultOptimizationStrategy" label="Default Optimization Strategy">
-          <Select>
+        <Form.Item
+          name="defaultOptimizationStrategy"
+          label="Default Optimization Strategy"
+          rules={[{ required: true, message: 'Please select a strategy' }]}
+          >
+          <Select placeholder="Select a strategy">
             <Option value="milp">MILP</Option>
             <Option value="nsga-ii">NSGA-II</Option>
             <Option value="hybrid">Hybrid</Option>
           </Select>
         </Form.Item>
-        <Form.Item name="priceAlertThreshold" label="Price Alert Threshold (%)">
-          <Input type="number" />
+        <Form.Item
+          name="priceAlertThreshold"
+          label="Price Alert Threshold (%)"
+          rules={[
+            { required: true, message: 'Please enter a threshold' },
+            { type: 'number', min: 0, max: 100, message: 'Must be between 0 and 100' }
+          ]}
+          >
+          <Input type="number" placeholder="e.g. 10 for 10%" />
         </Form.Item>
-        <Form.Item name="enablePriceAlerts" label="Enable Price Alerts" valuePropName="checked">
+        <Form.Item
+          name="enablePriceAlerts"
+          label="Enable Price Alerts"
+          valuePropName="checked"
+        >
           <Switch />
         </Form.Item>
-        <Form.Item name="scryfallApiKey" label="Scryfall API Key">
-          <Input />
+        <Form.Item
+          name="scryfallApiKey"
+          label="Scryfall API Key"
+          rules={[{ required: false }]}
+        >
+          <Input placeholder="Optional (if applicable)" />
         </Form.Item>
-        <Form.Item name="theme" label="Theme">
-          <Select>
+        <Form.Item
+          name="theme"
+          label="Theme"
+          rules={[{ required: true, message: 'Please select a theme' }]}
+        >
+          <Select placeholder="Choose theme">
             <Option value="light">Light</Option>
             <Option value="dark">Dark</Option>
           </Select>

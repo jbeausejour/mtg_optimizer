@@ -2,69 +2,84 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button, Typography, Statistic, Space, Badge, Tag, Spin } from 'antd';
 import { ScanOutlined, ShoppingOutlined, FieldTimeOutlined, DollarOutlined, ShopOutlined } from '@ant-design/icons';
-import { useQuery } from 'react-query';
+import { useQuery} from '@tanstack/react-query';
 import api from '../utils/api';
 import { useTheme } from '../utils/ThemeContext';
-import CardDetail from '../components/CardDetail';
 
 const { Title } = Typography; 
 
 
 const Dashboard = ({ userId }) => {
-  const [cardDetailVisible, setCardDetailVisible] = useState(false);
-  const [selectedCard, setSelectedCard] = useState(null);
   const navigate = useNavigate();
   const { theme } = useTheme();
 
   // Use React Query for caching and automatic refetching
-  const { data: sitesData } = useQuery(['sites', userId], 
-    () => api.get('/sites', { params: { user_id: userId } })
-      .then(res => res.data),
-    { staleTime: 300000 } // 5 minutes
-  );
+  const { data: sitesData } = useQuery({
+    queryKey: ['sites', userId],
+    queryFn: () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  });
   
-  const { data: buylistsData } = useQuery(['buylists', userId], 
-    () => api.get('/buylists', { params: { user_id: userId } })
-      .then(res => res.data),
-    { staleTime: 300000 }
-  );
   
-  const { data: scansData, isLoading: scansLoading } = useQuery(['scans', userId], 
-    () => api.get('/scans', { params: { user_id: userId, limit: 3 } })
-      .then(res => res.data),
-    { staleTime: 300000 }
-  );
+  const { data: buylistsData } = useQuery({
+    queryKey: ['buylists', userId],
+    queryFn: () => api.get('/buylists', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  });
   
-  const { data: optimizationsData, isLoading: optimizationsLoading } = useQuery(['optimizations', userId], 
-    () => api.get('/results', { params: { user_id: userId, limit: 3 } })
-      .then(res => {
-        // Process data on server response instead of in render
-        const validOptimizations = res.data.filter(opt => opt.solutions?.length > 0);
-        return validOptimizations;
-      }),
-    { staleTime: 300000 }
-  );
   
-  const { data: topBuylistsData } = useQuery(['topBuylists', userId], 
-    () => api.get('/buylists/top', { params: { user_id: userId } })
-      .then(res => res.data),
-    { staleTime: 300000 }
-  );
+  const { data: scansData, isLoading: scansLoading } = useQuery({
+    queryKey: ['scans', userId],
+    queryFn: () => api.get('/scans', { params: { user_id: userId, limit: 3 } }).then(res => res.data),
+    staleTime: 300000
+  });
+  
+  
+  const { data: optimizationsData, isLoading: optimizationsLoading } = useQuery({
+    queryKey: ['optimizations', userId],
+    queryFn: () => api.get('/results', { params: { user_id: userId, limit: 3 } }).then(res => {
+      const validOptimizations = res.data.filter(opt => opt.solutions?.length > 0);
+      return validOptimizations;
+    }),
+    staleTime: 300000
+  });
+  
+  
+  const { data: topBuylistsData } = useQuery({
+    queryKey: ['topBuylists', userId],
+    queryFn: () => api.get('/buylists/top', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  });
+  
 
   const loading = scansLoading || optimizationsLoading;
   const totalSites = sitesData?.length || 0;
   const totalBuylists = buylistsData?.length || 0;
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  const formatDate = (input) => {
+    if (!input) return '—';
+  
+    try {
+      const date = new Date(input);
+      if (isNaN(date)) return input; // fallback for unparsable input
+  
+      const new_date = new Intl.DateTimeFormat('en-CA', {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(date);
+      return new_date;
+    } catch (err) {
+      console.error('Error formatting date:', err);
+      return input;
+    }
   };
+  
 
   const handleNavigation = (path, state) => {
     navigate(path, { state });
@@ -200,7 +215,7 @@ const Dashboard = ({ userId }) => {
         <Col span={8}>
           <Card 
             title="Total Sites" 
-            bordered={false}
+            variant="outlined"
             onClick={() => handleNavigation('/site-management')}
             style={{ cursor: 'pointer' }}
           >
@@ -210,7 +225,7 @@ const Dashboard = ({ userId }) => {
         <Col span={8}>
           <Card 
             title="Total Buylists" 
-            bordered={false}
+            variant="outlined"
             onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
@@ -220,7 +235,7 @@ const Dashboard = ({ userId }) => {
         <Col span={8}>
           <Card 
             title="Top 3 Buylists" 
-            bordered={false}
+            variant="outlined"
             onClick={() => handleNavigation('/buylist-management')}
             style={{ cursor: 'pointer' }}
           >
@@ -298,17 +313,6 @@ const Dashboard = ({ userId }) => {
           </Card>
         </Col>
       </Row>
-      {selectedCard && (
-        <CardDetail
-          cardName={selectedCard.name}
-          setName={selectedCard.set_name}
-          language={selectedCard.language}
-          version={selectedCard.version}
-          foil={selectedCard.foil}
-          isModalVisible={cardDetailVisible}
-          onClose={() => setCardDetailVisible(false)}
-        />
-      )}
     </div>
   );
 };

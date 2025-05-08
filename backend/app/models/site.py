@@ -1,16 +1,18 @@
-from app.extensions import db
+from sqlalchemy import Column, String, Integer, Boolean
+from app import Base
 
 
-class Site(db.Model):
+class Site(Base):
     __tablename__ = "site"
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), nullable=False, unique=True)
-    url = db.Column(db.String(255), nullable=False)
-    method = db.Column(db.String(50), nullable=False)
-    api_url = db.Column(db.String(255))
-    active = db.Column(db.Boolean, default=True)
-    type = db.Column(db.String(50), nullable=False)
-    country = db.Column(db.String(50), nullable=False)
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    url = Column(String(255), nullable=False)
+    method = Column(String(50), nullable=False)
+    api_url = Column(String(255))
+    active = Column(Boolean, default=True)
+    type = Column(String(50), nullable=False)
+    country = Column(String(50), nullable=False)
 
     # No need to define relationship here as it's defined in ScanResult
 

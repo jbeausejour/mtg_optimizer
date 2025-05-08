@@ -1,19 +1,22 @@
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+from app import Base
 
-from app.extensions import db
 
-
-class UserBuylist(db.Model):
+class UserBuylist(Base):
     __tablename__ = "user_buylist"
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    name = db.Column(db.String(255), nullable=False, default="Untitled Buylist")
-    created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    name = Column(String(255), nullable=False, default="Untitled Buylist")
 
-    # Relationship to user_buylist_card
-    cards = db.relationship("UserBuylistCard", backref="buylist", lazy=True, cascade="all, delete-orphan")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    cards = relationship("UserBuylistCard", backref="buylist", lazy="selectin", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {

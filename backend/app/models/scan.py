@@ -1,15 +1,16 @@
 from datetime import datetime, timezone
 
-from app.extensions import db
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
 from sqlalchemy.orm import relationship, validates
 
+from app import Base
 from .base_card import BaseCard
 
 
-class Scan(db.Model):
+class Scan(Base):
     __tablename__ = "scan"
-    id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     scan_results = relationship("ScanResult", backref="scan", cascade="all, delete-orphan")
     optimization_result = relationship(
         "OptimizationResult",
@@ -18,7 +19,8 @@ class Scan(db.Model):
         cascade="all, delete-orphan",
         overlaps="optimization_results",
     )
-    buylist_id = db.Column(db.Integer, db.ForeignKey("user_buylist.id"))
+
+    buylist_id = Column(Integer, ForeignKey("user_buylist.id"))
     buylist = relationship("UserBuylist", backref="scans")
 
     def to_dict(self):
@@ -35,16 +37,14 @@ class Scan(db.Model):
 
 
 class ScanResult(BaseCard):
-    """Raw card data from scraping"""
-
     __tablename__ = "scan_result"
-    id = db.Column(db.Integer, primary_key=True)
-    scan_id = db.Column(db.Integer, db.ForeignKey("scan.id"))
-    site_id = db.Column(db.Integer, db.ForeignKey("site.id"))
-    price = db.Column(db.Float)
-    variant_id = db.Column(db.String, nullable=True)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
-    site = relationship("Site", backref="scan_results")
+    id = Column(Integer, primary_key=True)
+    scan_id = Column(Integer, ForeignKey("scan.id"))
+    site_id = Column(Integer, ForeignKey("site.id"))
+    price = Column(Float)
+    variant_id = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    site = relationship("Site", backref="scan_results", lazy="selectin")
 
     def to_dict(self):
         return {
@@ -60,6 +60,7 @@ class ScanResult(BaseCard):
             "language": self.language,
             "version": self.version,
             "variant_id": self.variant_id,
+            "updated_at": self.updated_at,
             "site_name": self.site.name if self.site else None,
         }
 

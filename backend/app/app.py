@@ -1,9 +1,6 @@
-from flask import jsonify
+from quart import Quart, jsonify
 from app import create_app
-from dotenv import load_dotenv
 import os
-
-load_dotenv()  # Load environment variables
 
 app = create_app()
 
@@ -14,14 +11,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
 
     print(f"Running from main with: host={host}, port={port}, debug={debug}", flush=True)
-    app.run(
-        debug=debug,
-        use_reloader=debug,
-        host=host,
-        port=port,
-    )
+    import uvicorn
+
+    uvicorn.run("app:app", host=host, port=port, reload=debug)
 
 
 @app.route("/api/v1/test-cors", methods=["GET", "OPTIONS"])
-def test_cors():
+async def test_cors():
     return jsonify({"message": "CORS is working!"})

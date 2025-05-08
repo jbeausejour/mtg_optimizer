@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from app import create_app
@@ -12,14 +13,19 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-# Create Flask app and push context
-app = create_app()
-app.app_context().push()
 
-logger.info("Flask app created and context pushed")
-logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
-logger.info(f"Celery result backend: {celery_app.conf.result_backend}")
+async def start_worker():
+    app = create_app()
+
+    async with app.app_context():
+        logger.info("Quart app created and async context pushed")
+        logger.info(f"Celery broker URL: {celery_app.conf.broker_url}")
+        logger.info(f"Celery result backend: {celery_app.conf.result_backend}")
+
+        # Start celery (synchronously)
+        celery_app.start(["worker", "--loglevel=info", "--pool=solo"])
+
 
 if __name__ == "__main__":
-    print("Starting Celery worker...")
-    celery_app.start(["worker", "--loglevel=info", "--pool=solo"])
+    print("Starting Celery worker with async context...")
+    asyncio.run(start_worker())

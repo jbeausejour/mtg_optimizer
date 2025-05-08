@@ -66,11 +66,13 @@ export const getColumnSearchProps = (dataIndex, searchInputRef, filteredInfo, pl
     record[dataIndex]
       ? record[dataIndex].toString().toLowerCase().includes(value.toLowerCase())
       : '',
-  onFilterDropdownVisibleChange: visible => {
-    if (visible && searchInputRef.current[dataIndex]) {
-      setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
-    }
-  },
+      filterDropdownProps: {
+        onOpenChange: visible => {
+          if (visible && searchInputRef.current[dataIndex]) {
+            setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
+          }
+        },
+      },
   render: (text, record) =>
     filteredInfo?.[dataIndex] ? (
       <Highlighter
@@ -146,10 +148,12 @@ export const getNumericFilterProps = (dataIndex, searchInputRef, filteredInfo, p
     
     return recordValue === filterValue;
   },
-  onFilterDropdownVisibleChange: visible => {
-    if (visible && searchInputRef.current[dataIndex]) {
-      setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
-    }
+  filterDropdownProps: {
+    onOpenChange: visible => {
+      if (visible && searchInputRef.current[dataIndex]) {
+        setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
+      }
+    },
   },
 });
 
@@ -217,10 +221,12 @@ export const getNumericRangeFilterProps = (dataIndex, searchInputRef, filteredIn
       </Space>
     </div>
   ),
-  onFilterDropdownVisibleChange: visible => {
-    if (visible && searchInputRef.current[dataIndex]) {
-      setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
-    }
+  filterDropdownProps: {
+    onOpenChange: visible => {
+      if (visible && searchInputRef.current[dataIndex]) {
+        setTimeout(() => searchInputRef.current[dataIndex].focus(), 10);
+      }
+    },
   },
 });
 

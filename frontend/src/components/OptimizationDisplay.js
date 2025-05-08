@@ -80,7 +80,10 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
           <Row gutter={[16, 16]}>
             {storeData.map(({ name, count }, index) => (
               <Col span={8} key={index}>
-                <Card size="small" bordered={false} className="bg-gray-50">
+                <Card 
+                  size="small" 
+                  variant="outlined"
+                  className="bg-gray-50">
                   <Text strong>{name}</Text>
                   <div>
                     <Text type="secondary">{count} cards</Text>
@@ -202,7 +205,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                       key={card}
                       color="red"
                       className="cursor-pointer"
-                      onClick={() => onCardClick({ name: card })}
+                      onClick={() => onCardClick({ name: card, set: card.set_code })}
                     >
                       {card}
                     </Tag>
@@ -255,7 +258,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                           key={card} 
                           color="red"
                           className="cursor-pointer"
-                          onClick={() => onCardClick({ name: card })}
+                          onClick={() => onCardClick({ name: card, set: card.set_code })}
                         >
                           {card}
                         </Tag>
@@ -319,6 +322,12 @@ const SolutionDetails = ({ solution, onCardClick }) => {
       pagination={false}
       scroll={{ y: 400 }}
       size="small"
+      onRow={(record) => ({
+        onClick: () => {
+          // console.log("Clicked card:", record);
+          onCardClick?.(record);
+        }
+      })}
     />
   );
 };

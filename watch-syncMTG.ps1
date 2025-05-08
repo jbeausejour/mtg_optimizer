@@ -4,13 +4,13 @@ $LocalBackendDir = "C:\Users\jules\Desktop\Jules\Github\mtg_optimizer\backend"
 $FrontendAppSrc = Join-Path $LocalFrontendDir "src"
 
 # Define Synology SSH connection details
-$SynologyServer = "192.168.68.61"
+$SynologyServer = "ext.julzandfew.com"
 $SynologyUser = "root" # Replace with your Synology username if different
 $CommandToRun = "sudo docker-compose --profile all -f /volume1/docker/dc-t3.yml "
 $ParamRec = "up -d --force-recreate "
 $ParamUp = "up -d --build --remove-orphans "
 $ParamBuild = "build --no-cache "
-$BackendApp = "mtg-flask-app"
+$BackendApp = "mtg-flask-app mtg-celery-beat mtg-celery-worker-main mtg-celery-worker-crystal-1 mtg-celery-worker-crystal-2 mtg-celery-worker-shopify mtg-celery-worker-other"
 $FrontendApp = "mtg-frontend"
 
 # Create timestamp function
@@ -40,7 +40,7 @@ function Run-SshCommand {
         Write-Host "$(Get-TimeStamp) 🖥️ Running SSH command: $Command" -ForegroundColor Magenta
         
         # Use plink with pageant for SSH in batch mode to avoid interactive prompts
-        $plinkCmd = "plink -batch -agent -load `"192.168.68.61 root`" bash -l -c '`"$Command`"' "
+        $plinkCmd = "plink -batch -agent -load `"ext.julzandfew.com root`" bash -l -c '`"$Command`"' "
         
         # Execute the command
         $output = Invoke-Expression $plinkCmd

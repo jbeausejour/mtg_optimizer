@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
 import { Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
@@ -41,96 +41,90 @@ const SiteManagement = ({ userId }) => {
   const [editMethodValue, setEditMethodValue] = useState('');
   const [addMethodValue, setAddMethodValue] = useState('');
   // React Query to fetch sites
-  const { data: sites = [], isLoading: loading } = useQuery(
-    ['sites', userId],
-    () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
-    { staleTime: 300000 }
-  );
+  const { data: sites = [], isLoading: loading } = useQuery({
+    queryKey: ['sites', userId],
+    queryFn: () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
+    staleTime: 300000
+  })
   
   // Mutation to add a site
-  const addSiteMutation = useMutation(
-    (values) => api.post('/sites', { ...values, user_id: userId }),
-    {
-      onSuccess: () => {
-        queryClient.invalidateQueries(['sites', userId]);
-        message.success('Site added successfully');
-        setIsAddModalVisible(false);
-        addForm.resetFields();
-      },
-      onError: (error) => {
-        console.error('Error adding site:', error);
-        message.error('Failed to add site');
-      }
+  const addSiteMutation = useMutation({
+    mutationFn: (values) => api.post('/sites', { ...values, user_id: userId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['sites', userId]);
+      message.success('Site added successfully');
+      setIsAddModalVisible(false);
+      addForm.resetFields();
+    },
+    onError: (error) => {
+      console.error('Error adding site:', error);
+      message.error('Failed to add site');
     }
-  );
+  });
   
   // Mutation to update a site
-  const updateSiteMutation = useMutation(
-    (values) => api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }),
-    {
-      onSuccess: (response) => {
-        if (!response.data) {
-          message.error('Failed to update site: No response data');
-          return;
-        }
-        switch (response.data.status) {
-          case 'success':
-            message.success(response.data.message || 'Site updated successfully');
-            queryClient.invalidateQueries(['sites', userId]);
-            setIsEditModalVisible(false);
-            break;
-          case 'info':
-            message.info(response.data.message || 'Site updated with some considerations');
-            setIsEditModalVisible(false);
-            break;
-          case 'warning':
-            message.warning(response.data.message || 'Site updated with warnings');
-            break;
-          default:
-            message.error('Failed to update site: Unknown status');
-        }
-      },
-      onError: (error) => {
-        console.error('Error updating site:', error);
-        message.error('Failed to update site');
+  const updateSiteMutation = useMutation({
+    mutationFn: (values) => api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }),
+    onSuccess: (response) => {
+      if (!response.data) {
+        message.error('Failed to update site: No response data');
+        return;
       }
+      switch (response.data.status) {
+        case 'success':
+          message.success(response.data.message || 'Site updated successfully');
+          queryClient.invalidateQueries(['sites', userId]);
+          setIsEditModalVisible(false);
+          break;
+        case 'info':
+          message.info(response.data.message || 'Site updated with some considerations');
+          setIsEditModalVisible(false);
+          break;
+        case 'warning':
+          message.warning(response.data.message || 'Site updated with warnings');
+          break;
+        default:
+          message.error('Failed to update site: Unknown status');
+      }
+    },
+    onError: (error) => {
+      console.error('Error updating site:', error);
+      message.error('Failed to update site');
     }
-  );
+  });
   
   // Mutation to delete a site
-  const deleteSiteMutation = useMutation(
-    (id) => api.delete(`/sites/${id}`, { params: { user_id: userId } }),
-    {
-      // Optimistic update - remove the item immediately from UI
-      onMutate: async (siteId) => {
-        // Cancel any outgoing refetches
-        await queryClient.cancelQueries(['sites', userId]);
-        
-        // Save the previous value
-        const previousSites = queryClient.getQueryData(['sites', userId]);
-        
-        // Optimistically update to the new value
-        queryClient.setQueryData(['sites', userId], old => 
-          old.filter(site => site.id !== siteId)
-        );
-        
-        // Return the previous value in case of rollback
-        return { previousSites };
-      },
-      onError: (err, siteId, context) => {
-        // Roll back to the previous value if there's an error
-        queryClient.setQueryData(['sites', userId], context.previousSites);
-        message.error('Failed to delete site.');
-      },
-      onSuccess: () => {
-        message.success('Site deleted successfully');
-      },
-      onSettled: () => {
-        // Always refetch after error or success
-        queryClient.invalidateQueries(['sites', userId]);
-      }
+  const deleteSiteMutation = useMutation({
+    mutationFn: (id) => api.delete(`/sites/${id}`, { params: { user_id: userId } }),
+    // Optimistic update - remove the item immediately from UI
+    onMutate: async (siteId) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries(['sites', userId]);
+      
+      // Save the previous value
+      const previousSites = queryClient.getQueryData(['sites', userId]);
+      
+      // Optimistically update to the new value
+      queryClient.setQueryData(['sites', userId], old => 
+        old.filter(site => site.id !== siteId)
+      );
+      
+      // Return the previous value in case of rollback
+      return { previousSites };
+    },
+    onError: (err, siteId, context) => {
+      // Roll back to the previous value if there's an error
+      queryClient.setQueryData(['sites', userId], context.previousSites);
+      message.error('Failed to delete site.');
+    },
+    onSuccess: () => {
+      message.success('Site deleted successfully');
+    },
+    onSettled: () => {
+      // Always refetch after error or success
+      queryClient.invalidateQueries(['sites', userId]);
     }
-  );
+  });
   
   
   const handleEdit = useCallback((record, e) => {
@@ -218,6 +212,7 @@ const SiteManagement = ({ userId }) => {
       setAddMethodValue(value);
     }
   }, []);
+
   // Column definitions for the sites table
   const siteColumns = useMemo(() => [
     {

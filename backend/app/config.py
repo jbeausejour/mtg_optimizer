@@ -2,15 +2,36 @@ import os
 from datetime import timedelta
 
 basedir = os.path.abspath(os.path.dirname(__file__))
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
+# Loaded from appdata/.mtg-env
 class Config:
-    # Secret key for Flask sessions and other security features
-    SECRET_KEY = "your_secret_key"  # Replace with a strong, random key
 
-    # Database configuration
-    SQLALCHEMY_DATABASE_URI = f"sqlite:///{os.path.join(basedir, 'instance', 'site_data.db')}"
+    SECRET_KEY = os.getenv("SECRET_KEY", "your_secret_key")
+    FLASK_ENV = os.getenv("FLASK_ENV", "production")
+    FLASK_DEBUG = os.getenv("FLASK_DEBUG", "False") == "True"
+
+    # SQLAlchemy
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "SQLALCHEMY_DATABASE_URI", f"mysql+aiomysql:///{os.path.join(basedir, 'instance', 'site_data.db')}"
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Celery
+    CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND")
+
+    # Logging
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+    # Custom MTG app settings
+    SCRAPER_USER_AGENT = os.getenv("SCRAPER_USER_AGENT", "DefaultAgent/1.0")
+    MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
+    RETRY_BACKOFF = float(os.getenv("RETRY_BACKOFF", 2.5))
+    # Secret key for Flask sessions and other security features
 
     # JWT configuration
     JWT_SECRET_KEY = "your-jwt-secret-key-here"  # Replace with a different strong, random key

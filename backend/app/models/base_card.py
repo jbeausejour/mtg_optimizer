@@ -2,24 +2,26 @@ import re
 from datetime import datetime
 from venv import logger
 
-from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion
-from app.extensions import db
+from sqlalchemy import Column, String, Boolean, Integer
 from sqlalchemy.orm import validates
 
+from app.constants.card_mappings import CardLanguage, CardQuality, CardVersion
+from app import Base
 
-class BaseCard(db.Model):
+
+class BaseCard(Base):
     """Abstract base class for card-related models"""
 
-    __abstract__ = True  # This ensures BaseCard won't create its own table
+    __abstract__ = True
 
-    name = db.Column(db.String(255), nullable=False)  # This already defines the name column
-    set_name = db.Column(db.String(255), nullable=True)
-    set_code = db.Column(db.String(10), nullable=True)
-    language = db.Column(db.String(50), nullable=True, default="English")
-    version = db.Column(db.String(255), nullable=True, default="Standard")
-    foil = db.Column(db.Boolean, nullable=True, default=False)
-    quantity = db.Column(db.Integer, nullable=True, default=0)
-    quality = db.Column(db.String(50), nullable=True, default="NM")  # Add quality column
+    name = Column(String(255), nullable=False)
+    set_name = Column(String(255), nullable=True)
+    set_code = Column(String(10), nullable=True)
+    language = Column(String(50), nullable=True, default="English")
+    version = Column(String(255), nullable=True, default="Standard")
+    foil = Column(Boolean, nullable=True, default=False)
+    quantity = Column(Integer, nullable=True, default=0)
+    quality = Column(String(50), nullable=True, default="NM")
 
     @validates("name")
     def validate_name(self, key, name):

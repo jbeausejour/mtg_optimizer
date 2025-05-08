@@ -37,8 +37,8 @@ class CeleryConfig:
     worker_redirect_stdouts_level = "INFO"  # Ensure all standard output is logged
 
     # Logging configuration
-    worker_log_format = "%(asctime)s - %(message)s"
-    worker_task_log_format = "%(asctime)s - %(task_name)s - %(message)s"
+    worker_log_format = "%(message)s"
+    worker_task_log_format = "%(task_name)s - %(message)s"
 
     task_serializer = "json"
     result_serializer = "json"
@@ -55,6 +55,12 @@ class CeleryConfig:
             "task": "app.tasks.optimization_tasks.refresh_scryfall_cache",
             "schedule": crontab(hour=3, minute=0),
         },
+    }
+
+    task_routes = {
+        "app.tasks.optimization_tasks.scrape_site_task": {"queue": "main"},  # fallback/default queue,
+        "app.tasks.optimization_tasks.start_scraping_task": {"queue": "main"},
+        "app.tasks.optimization_tasks.refresh_scryfall_cache": {"queue": "main"},
     }
 
     @staticmethod
