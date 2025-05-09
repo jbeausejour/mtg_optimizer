@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button } from 'antd';
 import ScryfallCard from '../CardManagement/ScryfallCard';
 
-const ScryfallCardView = ({ cardData, mode, onSave }) => {
-
+const ScryfallCardView = ({ cardData, mode, onSave, onChange }) => {
+  // console.log("ScryfallCardView Receiving carddata: ", cardData);
   const isEditMode = mode === 'edit';
   const [pendingSelection, setPendingSelection] = useState(() => ({
     id: cardData.id,
@@ -40,7 +39,7 @@ const ScryfallCardView = ({ cardData, mode, onSave }) => {
   const handleChange = (partialUpdate) => {
     setPendingSelection((prev) => {
       const merged = { ...prev, ...partialUpdate };
-      // console.log('[handleChange] Updated pendingSelection:', merged);
+      if (onChange) onChange(merged); // ← propagate to parent
       return merged;
     });
   };
@@ -56,7 +55,7 @@ const ScryfallCardView = ({ cardData, mode, onSave }) => {
       editingFields={pendingSelection}
       isEditable={isEditMode}
       onChange={isEditMode ? handleChange : undefined}
-    />
+    />  
   </>
   );
 };

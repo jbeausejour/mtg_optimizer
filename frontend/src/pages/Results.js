@@ -21,16 +21,12 @@ const Results = ({ userId }) => {
   const [selectedCard, setSelectedCard] = useState(null);
   const [modalMode, setModalMode] = useState('view');
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isModalLoading, setIsModalLoading] = useState(false);
   const queryClient = useQueryClient();
   const [cardData, setFetchedCard] = useState(null);
   const {
     mutateAsync: fetchCard,
-    isLoading: isCardLoading,
-  } = useFetchScryfallCard({
-    onSuccess: (resData) => {
-      setFetchedCard(resData); // or whatever your variable is
-    }
-  });
+  } = useFetchScryfallCard();
   // Use enhanced table handler for consistent behavior
   const {
     filteredInfo,
@@ -63,23 +59,33 @@ const Results = ({ userId }) => {
   
   const handleModalClose = () => {
     setIsModalVisible(false);
-    setFetchedCard(null);  // 🧹 Clear the card data
+    setFetchedCard(null);
   };
 
-  // Define handleCardClick
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     setModalMode('view');
+    setFetchedCard(null);
     setIsModalVisible(true);
   
     try {
-      const cardName = card.name;
-      const setCode = card.set_code || card.set || null; // fallback for Results
-      // console.log("Fetching card:", cardName, "Set:", setCode);
-  
-      await fetchCard({ name: cardName, set_code: setCode });
+      const data = await fetchCard({
+        name: card.name,
+        set_code: card.set || card.set_code || '',
+        language: card.language || 'en',
+        version: card.version || 'Standard',
+        user_id: userId,
+      });
+      const enrichedCard = {
+        ...card,
+        ...data,
+      };
+      setFetchedCard(enrichedCard);
     } catch (err) {
       message.error('Failed to fetch card data');
+      setIsModalVisible(false);    // Close modal on error
+    } finally {
+      setIsModalLoading(false);    // Stop spinner
     }
   };
 
@@ -447,19 +453,15 @@ const Results = ({ userId }) => {
       )}
 
       <Modal
-        title={selectedCard?.name}
+        key={selectedCard?.id}
         open={isModalVisible}
         onCancel={handleModalClose}
         footer={null}
         width={800}
         destroyOnClose
       >
-        {isCardLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin size="large" />
-            <p>Loading card details...</p>
-          </div>
-        ) : cardData ? (
+        <Spin spinning={isModalLoading} tip="Loading card details...">
+        { cardData ? (
           <ScryfallCardView
             key={`${selectedCard?.id}-${cardData.id}`}
             cardData={cardData}
@@ -471,6 +473,7 @@ const Results = ({ userId }) => {
             <p>No card data available</p>
           </div>
         )}
+        </Spin>
       </Modal>
     </div>
   );

@@ -61,7 +61,7 @@ const Navigation = () => {
     {
       key: "user",
       label: (
-        <Dropdown overlay={userMenu} trigger={['click']}>
+        <Dropdown menu={{ items: userMenu }}  trigger={['click']}>
           <Avatar icon={<UserOutlined />} style={{ cursor: 'pointer' }} />
         </Dropdown>
       )

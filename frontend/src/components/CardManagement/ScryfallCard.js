@@ -1,32 +1,21 @@
 import React, { useEffect, useState, useRef } from 'react';
+import api from '../../utils/api';
 import { Col, Divider, Image, Row, Space, Typography, Select, Card } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
 import SetSymbol from '../Shared/SetSymbol';
 import ManaSymbol from '../Shared/ManaSymbol';
 import LegalityTag from '../Shared/LegalityTag';
-import api from '../../utils/api';
 import { formatOracleText, formatCardName } from '../../utils/formatting';
+import { languageLabelMap, labelToCodeMap, ALLOWED_QUALITIES } from '../../utils/constants';
 
 const { Title, Text } = Typography;
-const languageLabelMap = {
-  en: 'English',
-  es: 'Spanish',
-  fr: 'French',
-  de: 'German',
-  it: 'Italian',
-  pt: 'Portuguese',
-  ja: 'Japanese',
-  ko: 'Korean',
-  zhs: 'Simplified Chinese',
-  zht: 'Traditional Chinese',
-  ru: 'Russian',
-};
-const ALLOWED_QUALITIES = ['NM', 'LP', 'MP', 'HP', 'DMG'];
 
 const ScryfallCard = ({ data, isEditable, onChange }) => {
   if (!data) return null;
   // console.log ("ScryfallCard data recevied: ", data);
   
+  const resolvedLanguageCode = labelToCodeMap[data?.language] || data?.language || 'en';
+
   const [availableLanguages, setAvailableLanguages] = useState([]);
   const [availableVersions, setAvailableVersions] = useState([]);
   const [displayData, setDisplayData] = useState(data);
@@ -35,7 +24,7 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     buylist_id: data?.buylist_id,
     user_id: data?.user_id,
     name: data?.name,
-    language: data?.language || 'en',
+    language: resolvedLanguageCode,
     quality: data?.quality || 'NM',
     quantity: data?.quantity || 1,
     set_code: data?.set_code,
@@ -52,7 +41,7 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
   const [hoveredPrinting, setHoveredPrinting] = useState(null);
   const [isFront, setIsFront] = useState(true);
   const [allPrintings, setAllPrintings] = useState([]);
-  const isDoubleFaced = Array.isArray(data?.card_faces) && data.card_faces.length === 2;
+  const isDoubleFaced = Array.isArray(data?.scryfall?.card_faces) && data?.scryfall?.card_faces.length === 2;
   const selectedPrintingIdRef = useRef(null);
 
   const handleFieldChange = (field, value) => {
@@ -64,15 +53,40 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     });
   };
 
-
+  useEffect(() => {
+    if (!allPrintings.length || hasInitializedRef.current) return;
+  
+    const matched = allPrintings.find(p =>
+      p.id === selectedPrintingIdRef.current ||
+      (p.set_code === data.set_code && p.name === data.name) ||
+      p.id === data.scryfall.id
+    ) || allPrintings[0];
+  
+    if (!matched) return;
+  
+    hasInitializedRef.current = true;
+    selectedPrintingIdRef.current = matched.id;
+    currentPrintingRef.current = matched;
+  
+    setDisplayData({ ...data.scryfall, ...matched });
+  
+    setEditingFields(prev => ({
+      ...prev,
+      set_code: matched.set_code,
+      set_name: matched.set_name,
+      foil: matched.finishes?.includes('foil') || false,
+      version: matched.version || 'Standard',
+      language: labelToCodeMap[data?.language] || matched.lang || 'en',
+    }));
+  }, [allPrintings, data]);
+  
   useEffect(() => {
     if (!displayData || !displayData?.id || !Array.isArray(allPrintings)) {
       return;
     }
-    // console.log("[Lang DEBUG] displayData.id:", displayData?.id);
 
-    // console.log("[Lang DEBUG] All printings:", allPrintings);
     const printingMeta = allPrintings.find(p => p.id === displayData?.id);
+    console.log("printingMeta:", printingMeta);
     if (printingMeta?.available_languages) {
       const structured = printingMeta.available_languages.map(lang => ({
         label: languageLabelMap[lang] || lang,
@@ -93,68 +107,32 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
         language: 'en'
       }));
     }
-  }, [availableLanguages]);  
-  useEffect(() => {
-    if (data && 'scryfall' in data) {
-      // console.log("[DEBUG] Full Scryfall metadata (data.scryfall):", data.scryfall);
-    } else {
-      // console.warn("[DEBUG] scryfall metadata missing from `data`");
-    }
-  }, [data]);
-  useEffect(() => {
-    if (displayData) {
-      // console.log("[DEBUG] Selected Printing (displayData):", displayData);
-    }
-  }, [displayData]);
+  }, [availableLanguages]);
   
   useEffect(() => {
-    if (!Array.isArray(data.scryfall?.all_printings)) {
-      console.warn("Missing all_printings:", data.scryfall);
-      return;
-    }
-      
-    const enrichedPrintings = data.scryfall?.all_printings.filter(p => !p.digital);
-    setAllPrintings(enrichedPrintings);
-    // console.log("Enriched printing: ", enrichedPrintings)
+    const printings = data.scryfall?.all_printings ?? [];
+    if (!Array.isArray(printings)) return;
   
-    const matched = enrichedPrintings.find(p =>
-      p.id === selectedPrintingIdRef.current ||
-      (p.set_code === data.set_code && p.name === data.name) ||
-      p.id === data.scryfall.id
-    ) || enrichedPrintings[0];
+    const enriched = printings.filter(p => !p.digital);
+    const needsEnhancement = enriched.filter(p => {
+      const isDFC = ['transform', 'modal_dfc', 'double_faced_token'].includes(p.layout);
+      return isDFC || !p.image_uris?.normal;
+    });
   
-    if (!hasInitializedRef.current && matched) {
-      hasInitializedRef.current = true;
-      selectedPrintingIdRef.current = matched.id;
-      currentPrintingRef.current = matched;
+    const updatePrintings = async () => {
+      const enhanced = await Promise.all(
+        needsEnhancement.map(p =>
+          api.get(`/scryfall/card/${p.id}`).then(res => ({ ...p, ...res.data })).catch(() => p)
+        )
+      );
   
-      // Merge selected printing with base Scryfall info
-      setDisplayData({
-        ...matched,
-        available_versions: matched.available_versions || {}
-      });
-      // console.log("Final displayData being rendered:", displayData);
-      setEditingFields(prev => ({
-        ...prev,
-        set_code: matched.set_code,
-        set_name: matched.set_name,
-        foil: matched.finishes?.includes('foil') || false,
-        version: matched?.version || 'Standard', 
-        language: matched.lang || 'en',
-      }));
-    }
+      const merged = enriched.map(p => enhanced.find(ep => ep.id === p.id) || p);
+      setAllPrintings(merged);
+    };
+  
+    updatePrintings();
   }, [data?.scryfall?.id]);
   
-
-  // useEffect(() => {
-  //   // Re-apply current printing if editingFields change
-  //   if (currentPrintingRef.current) {
-  //     setDisplayData(currentPrintingRef.current);
-  //   }
-  // }, [editingFields.quality, editingFields.language, editingFields.version]);  
-  
-
-  // ✅ Version & finish types
   useEffect(() => {
     if (!displayData) return;
   
@@ -187,7 +165,6 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     // console.log("[Version] Available dropdown values:", versionArray);
     setAvailableVersions(versionArray);
   }, [displayData]);
-  
 
   useEffect(() => {
     if (
@@ -201,14 +178,20 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     }
   }, [availableVersions, editingFields.version]);
 
+  useEffect(() => {
+    hasInitializedRef.current = false;
+  }, [data?.scryfall?.id]);
+
   const handlePrintClick = (print) => {
     selectedPrintingIdRef.current = print.id;
     currentPrintingRef.current = print;
-    // console.log("handlePrintClick data:", print);
-    setDisplayData({
+  
+    const merged = {
       ...print,
       available_versions: print.available_versions || {}
-    });
+    };
+  
+    setDisplayData(merged);
   
     const group = allPrintings.filter(p =>
       p.set_code === print.set_code &&
@@ -242,7 +225,7 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
         set_code: print.set_code,
         set_name: print.set_name,
         foil: print.finishes?.includes('foil') || false,
-        language: print.lang,
+        language: print.lang || 'en',
         version: versions.includes('Standard') ? 'Standard' : versions[0],
       };
       if (onChange) onChange(updated);
@@ -250,38 +233,41 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     });
   };
   
-
-  useEffect(() => {
-    if (availableLanguages.length) {
-      // console.log("[Render] Language options in Select:", availableLanguages);
-    }
-  }, [availableLanguages]);
-  
   const handleImageHover = (print) => setHoveredPrinting(print);
+
   const handleImageLeave = () => setHoveredPrinting(null);
+
   const toggleFace = () => setIsFront(prev => !prev);
 
   const getDisplayImage = () => {
-    const source = hoveredPrinting || displayData;
-    const cardFaces = source?.card_faces || source?.scryfall?.card_faces;
+    const src = (() => {
+      const source = hoveredPrinting || displayData;
+      if (!source) return '';
   
-    if (Array.isArray(cardFaces) && cardFaces.length === 2) {
-      return cardFaces[isFront ? 0 : 1]?.image_uris?.normal || null;
-    }
-    return (
-      source?.image_uris?.normal ||
-      source?.scryfall?.image_uris?.normal ||
-      null
-    );
+      const faces = source.card_faces;
+      if (Array.isArray(faces) && faces.length === 2) {
+        return faces[isFront ? 0 : 1]?.image_uris?.normal;
+      }
+      return source.image_uris?.normal;
+    })();
+    return src || '';
   };
 
   const renderedPrintings = allPrintings.map((print, index) => {
-    const isSelected = displayData?.scryfall?.id === print.id;
-    let imageSrc = print.image_uris?.small || '';
-    if (Array.isArray(print?.card_faces) && print.card_faces.length === 2) {
+    const isSelected = displayData?.id === print.id;
+    let imageSrc = '';
+  
+    if (Array.isArray(print.card_faces) && print.card_faces.length === 2) {
       imageSrc = print.card_faces[isFront ? 0 : 1]?.image_uris?.small || '';
+    } else if (print.image_uris?.small) {
+      imageSrc = print.image_uris.small;
+    } else if (data.scryfall?.card_faces?.length === 2) {
+      imageSrc = data.scryfall.card_faces[isFront ? 0 : 1]?.image_uris?.small || '';
+    } else {
+      imageSrc = data.scryfall?.image_uris?.small || '';
     }
-
+    // console.log("renderedPrintings imageSrc: ", imageSrc)
+    // console.log("renderedPrintings index, print: ", index, print)
     return (
       <div
         key={print.id}
@@ -300,18 +286,26 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
         }}
       >
         {imageSrc ? (
-          <Image src={imageSrc} preview={false} style={{ width: 48, height: 68 }} />
-        ) : (
-          <div style={{ width: 48, height: 68, backgroundColor: '#eee' }} />
-        )}
-        <div style={{ fontSize: 12, marginTop: 4, color: '#666' }}>
-          {print.prices?.usd ? `$${print.prices.usd}` : 'N/A'}
-        </div>
+        <Image 
+          src={imageSrc} 
+          preview={false}
+          style={{ width: 48, height: 68, cursor: 'pointer' }} 
+          onClick={() => handlePrintClick(print)}
+        />
+      ) : (
+        <div style={{ width: 48, height: 68, backgroundColor: '#eee' }} />
+      )}
+      <div style={{ fontSize: 12, marginTop: 4, color: '#666' }}>
+        {print.prices?.usd
+          ? `$${print.prices.usd}`
+          : print.prices?.usd_foil
+          ? `$${print.prices.usd_foil}*`
+          : 'N/A'}
       </div>
-    );
-  });
+    </div>
+  );
+});
   
-
   return (
     <Card className="scryfall-card" style={{ background: "#f7f7f7", borderRadius: '8px' }}>
       <Row gutter={16}>

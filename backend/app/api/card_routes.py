@@ -439,7 +439,7 @@ async def start_scraping():
 
     user_id = int(data.get("user_id", 0))
 
-    buylist_id = data.get("buylist_id", None)
+    buylist_id = int(data.get("buylist_id", None))
     site_ids = data.get("sites", [])
     card_list_from_frontend = data.get("card_list", [])
     strategy = data.get("strategy", "milp")

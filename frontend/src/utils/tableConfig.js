@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { Button, Input, Space } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import Highlighter from 'react-highlight-words';
+import { languageLabelMap } from '../utils/constants';
 
 // Style for card name links
 const cardNameStyle = {
@@ -291,15 +292,15 @@ export const getStandardTableColumns = (onCardClick, searchInputRef, filteredInf
     dataIndex: 'language',
     key: 'language',
     sorter: (a, b) => (a.language || '').localeCompare(b.language || ''),
-    filters: [
-      { text: 'English', value: 'English' },
-      { text: 'Japanese', value: 'Japanese' },
-      { text: 'German', value: 'German' },
-      { text: 'French', value: 'French' },
-    ],
+    filters: Object.entries(languageLabelMap).map(([code, label]) => ({
+      text: label,
+      value: code,
+    })),
     filteredValue: filteredInfo?.language || null,
     onFilter: (value, record) => record.language === value,
+    render: (lang) => languageLabelMap[lang] || lang,
   }
+  
 ];
 
 // New utility for handling table changes consistently

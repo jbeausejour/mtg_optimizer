@@ -25,6 +25,7 @@ const Optimize = ({ userId }) => {
   const { theme } = useTheme();
   const { Option } = Select;
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isModalLoading, setIsModalLoading] = useState(false);
   const [modalMode, setModalMode] = useState('view');
   const [taskProgress, setTaskProgress] = useState(0);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -40,12 +41,7 @@ const Optimize = ({ userId }) => {
   const [cardData, setFetchedCard] = useState(null);
   const {
     mutateAsync: fetchCard,
-    isLoading: isCardLoading,
-  } = useFetchScryfallCard({
-    onSuccess: (resData) => {
-      setFetchedCard(resData); // or whatever your variable is
-    }
-  });
+  } = useFetchScryfallCard();
 
 
   const filteredSites = sites.filter(site => {
@@ -171,7 +167,7 @@ const Optimize = ({ userId }) => {
         find_min_store: findMinStore,
         min_age_seconds: minAge,
         user_id: userId,
-        buylist_id: selectedBuylist?.id,
+        buylist_id: selectedBuylist?.buylistId,
         strict_preferences: strictPreferences,
         user_preferences: Object.fromEntries(
           cards.map(card => [
@@ -215,16 +211,27 @@ const Optimize = ({ userId }) => {
   const handleCardClick = async (card) => {
     setSelectedCard(card);
     setModalMode('view');
+    setFetchedCard(null);
     setIsModalVisible(true);
   
     try {
-      const cardName = card.name;
-      const setCode = card.set_code || card.set || null; // fallback for Results
-      // console.log("Fetching card:", cardName, "Set:", setCode);
-  
-      await fetchCard({ name: cardName, set_code: setCode });
+      const data = await fetchCard({
+        name: card.name,
+        set_code: card.set || card.set_code || '',
+        language: card.language || 'en',
+        version: card.version || 'Standard',
+        user_id: userId,
+      });
+      const enrichedCard = {
+        ...card,
+        ...data,
+      };
+      setFetchedCard(enrichedCard);
     } catch (err) {
       message.error('Failed to fetch card data');
+      setIsModalVisible(false);    // Close modal on error
+    } finally {
+      setIsModalLoading(false);    // Stop spinner
     }
   };
 
@@ -268,7 +275,7 @@ const Optimize = ({ userId }) => {
 
   const handleModalClose = () => {
     setIsModalVisible(false);
-    setFetchedCard(null);  // 🧹 Clear the card data
+    setFetchedCard(null);
   };
 
   const handleSelectAll = () => {
@@ -304,8 +311,8 @@ const Optimize = ({ userId }) => {
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
       
-      <Row gutter={16} className="mb-4">
-        <Col span={8}>
+      <Row gutter={[16, 8]} className="mb-4">
+        <Col span={6}>
           <Select value={optimizationStrategy} onChange={setOptimizationStrategy} className="w-full">
             <Option value="milp">MILP</Option>
             <Option value="nsga-ii">NSGA-II</Option>
@@ -320,8 +327,7 @@ const Optimize = ({ userId }) => {
             {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
           </Button>
         </Col>
-        
-        <Col span={8}>
+        <Col span={6}>
           <InputNumber
             min={1}
             value={minStore}
@@ -331,23 +337,6 @@ const Optimize = ({ userId }) => {
           />
         </Col>
         <Col span={6}>
-          <Tooltip title={findMinStoretooltipContent} styles={{ root: { width: 900 }}}>
-            <Switch
-              checked={findMinStore}
-              onChange={setFindMinStore}
-              checkedChildren="Find Min Store"
-              unCheckedChildren="Don't Find Min Store"
-            />
-          </Tooltip>
-          <Tooltip title="Strict Preferences: If enabled, only exact matches for language, set, quality, and version will be considered.">
-            <Switch
-              checked={strictPreferences}
-              onChange={setStrictPreferences}
-              checkedChildren="Strict Preferences"
-              unCheckedChildren="Flexible Preferences"
-              style={{ marginTop: 8 }}
-            />
-          </Tooltip>
           <Tooltip title="Specify how old the cached data can be (in seconds) before it’s considered stale.">
             <InputNumber
               min={60}
@@ -359,6 +348,35 @@ const Optimize = ({ userId }) => {
               placeholder="1800"
             />
           </Tooltip>
+        </Col>      
+        <Col span={6}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+            <Tooltip title={findMinStoretooltipContent}>
+              <div style={{ width: 180 }}>
+                <Switch
+                  size="small"
+                  checked={findMinStore}
+                  onChange={setFindMinStore}
+                  checkedChildren="Find Min Store"
+                  unCheckedChildren="Don't Find Min Store"
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </Tooltip>
+
+            <Tooltip title="Strict Preferences: If enabled, only exact matches for language, set, quality, and version will be considered.">
+              <div style={{ width: 180 }}>
+                <Switch
+                  size="small"
+                  checked={strictPreferences}
+                  onChange={setStrictPreferences}
+                  checkedChildren="Strict Preferences"
+                  unCheckedChildren="Flexible Preferences"
+                  style={{ width: '100%', marginBottom: 8  }}
+                />
+              </div>
+            </Tooltip>
+          </div>
         </Col>
       </Row>
 
@@ -510,19 +528,15 @@ const Optimize = ({ userId }) => {
       </Row>
 
       <Modal
-        title={selectedCard?.name}
+        key={selectedCard?.id}
         open={isModalVisible}
         onCancel={handleModalClose}
         footer={null}
         width={800}
         destroyOnClose
       >
-        {isCardLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin size="large" />
-            <p>Loading card details...</p>
-          </div>
-        ) : cardData ? (
+        <Spin spinning={isModalLoading} tip="Loading card details...">
+        {cardData ? (
           <ScryfallCardView
             key={`${selectedCard?.id}-${cardData.id}`}
             cardData={cardData}
@@ -534,6 +548,7 @@ const Optimize = ({ userId }) => {
             <p>No card data available</p>
           </div>
         )}
+        </Spin>
       </Modal>
     </div>
   );

@@ -10,11 +10,24 @@ export const useFetchScryfallCard = ({
   }
 } = {}) => {
   return useMutation({
-    mutationFn: (params) => api.get('/fetch_card', { params }),
-    onSuccess: (res) => {
-      if (!res.data?.scryfall) throw new Error("Invalid card data");
-      onSuccess(res.data);
+    mutationFn: async (params) => {
+      const res = await api.get('/fetch_card', { params });
+      console.log("[FetchCard] Response:", res.data);
+      if (!res.data?.scryfall) {
+        throw new Error('Missing Scryfall data in response');
+      }
+      return res.data;
     },
-    onError,
+    onSuccess: (data) => {
+      console.log("[FetchCard] onSuccess triggered");
+      onSuccess(data);
+    },
+    onError: (error) => {
+      console.log("[FetchCard] onError triggered");
+      onError(error);
+    },
+    onSettled: () => {
+      console.log("[FetchCard] onSettled triggered");
+    }
   });
 };

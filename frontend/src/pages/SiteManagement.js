@@ -329,7 +329,6 @@ const SiteManagement = ({ userId }) => {
         rowSelectionEnabled={true}
         selectedIds={selectedSiteIds}
         onSelectionChange={setSelectedSiteIds}
-        onRowClick={() => {}}
         onChange={handleTableChange}
       />
       
@@ -363,7 +362,7 @@ const SiteManagement = ({ userId }) => {
               <Option value="other">Other</Option>
             </Select>
           </Form.Item>
-          {(editForm.getFieldValue('method') === 'shopify' || editForm.getFieldValue('method') === 'f2f') && (
+          {isEditModalVisible && (editForm.getFieldValue('method') === 'shopify' || editForm.getFieldValue('method') === 'f2f') && (
             <Form.Item
               name="api_url"
               label="API URL"
@@ -424,7 +423,7 @@ const SiteManagement = ({ userId }) => {
               <Option value="other">Other</Option>
             </Select>
           </Form.Item>
-          {(addForm.getFieldValue('method') === 'shopify' || addForm.getFieldValue('method') === 'f2f') && (
+          {isAddModalVisible && (addForm.getFieldValue('method') === 'shopify' || addForm.getFieldValue('method') === 'f2f') && (
             <Form.Item
               name="api_url"
               label="API URL"

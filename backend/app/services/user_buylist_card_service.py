@@ -179,7 +179,7 @@ class UserBuylistCardService(AsyncBaseService[UserBuylistCard]):
             if not card:
                 return None
 
-            buylist_id = data.get("buylist_id")
+            buylist_id = int(data.get("buylist_id", None))
             if not buylist_id:
                 raise ValueError("Buylist ID is required")
 

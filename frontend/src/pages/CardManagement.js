@@ -13,6 +13,7 @@ import ColumnSelector from '../components/ColumnSelector';
 import { ExportOptions } from '../utils/exportUtils';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
+import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
 import debounce from 'lodash/debounce';
 
 const { Title} = Typography;
@@ -32,20 +33,24 @@ const BuylistManagement = ({ userId }) => {
   
   // Modal state for card detail view/edit
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isModalLoading, setIsModalLoading] = useState(false);
   const [modalMode, setModalMode] = useState('view');
   const [selectedCard, setSelectedCard] = useState(null);
-  const [cardData, setCardData] = useState(null);
-  const [isCardLoading, setIsCardLoading] = useState(false);
   
   // Buylist management state
   const [savedBuylists, setSavedBuylists] = useState([]);
   const [loadedBuylistName, setLoadedBuylistName] = useState("");
+  const [pendingSelection, setPendingSelection] = useState(null);
   
   // Card search and import state - Restored from old version
   const [suggestions, setSuggestions] = useState([]);
   const [cardText, setCardText] = useState('');
   const [errorCards, setErrorCards] = useState([]);
 
+  const [cardData, setFetchedCard] = useState(null);
+  const {
+    mutateAsync: fetchCard,
+  } = useFetchScryfallCard();
   // Use our enhanced table handler for consistent behavior
   const {
     filteredInfo,
@@ -224,7 +229,7 @@ const BuylistManagement = ({ userId }) => {
   const cardColumns = useMemo(() => {
     // Use standard table columns for cards with search props and click handler for card details
     const baseColumns = getStandardTableColumns(
-      (record) => handleViewCard(record),
+      (record) => handleCardClick(record),
       searchInput,
       filteredInfo,
       handleSearch,
@@ -478,66 +483,49 @@ const BuylistManagement = ({ userId }) => {
   const handleModalClose = () => {
     setIsModalVisible(false);
     setSelectedCard(null);
-    setCardData(null);
+    setFetchedCard(null);
     setModalMode('view');
   };
-  // Handlers for card view/edit
-  const handleViewCard = useCallback(async (card) => {
-    setSelectedCard(card);
-    setModalMode('view');
-    setIsCardLoading(true);
+
+  const GenericFetchCard= async (card) =>{
+    setFetchedCard(null);
+    setIsModalVisible(true);
+    setIsModalLoading(true); 
     try {
-      const params = {
+      const data = await fetchCard({
         name: card.name,
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
-        version: card.version || 'Normal',
-        user_id: userId
-      };
-      const response = await api.get('/fetch_card', { params });
-      if (!response.data?.scryfall) throw new Error('Invalid card data');
-      setCardData({ 
-        ...card, 
-        ...response.data,        // full enriched response
+        version: card.version || 'Standard',
+        user_id: userId,
       });
+      const enrichedCard = {
+        ...card,
+        ...data,
+      };
+      setFetchedCard(enrichedCard);
       // console.log("card incoming props:", card);
       // console.log("response.data incoming props:", response.data);
-      setIsModalVisible(true);
     } catch (error) {
       // console.error('Error fetching card:', error);
       message.error(`Failed to fetch card details: ${error.message}`);
+      setIsModalVisible(false);    // Close modal on error
     } finally {
-      setIsCardLoading(false);
+      setIsModalLoading(false);    // Stop spinner
     }
+  }
+
+  // Handlers for card view/edit
+  const handleCardClick = useCallback(async (card) => {
+    setSelectedCard(card);
+    setModalMode('view');
+    GenericFetchCard(card)
   }, [userId]);
   
   const handleEditCard = useCallback(async (card) => {
     setSelectedCard(card);
     setModalMode('edit');
-    setIsCardLoading(true);
-    try {
-      const params = {
-        name: card.name,
-        set_code: card.set || card.set_code || '',
-        language: card.language || 'en',
-        version: card.version || 'Normal',
-        user_id: userId
-      };
-      const response = await api.get('/fetch_card', { params });
-      if (!response.data?.scryfall) throw new Error('Invalid card data');
-      setCardData({ 
-        ...card, 
-        ...response.data,
-      });
-      // console.log("card incoming props:", card);
-      // console.log("response.data incoming props:", response.data);
-      setIsModalVisible(true);
-    } catch (error) {
-      // console.error('Error fetching card:', error);
-      message.error(`Failed to fetch card details: ${error.message}`);
-    } finally {
-      setIsCardLoading(false);
-    }
+    GenericFetchCard(card)
   }, [userId]);
   
   const handleSaveEdit = useCallback(async (updatedCard) => {
@@ -552,9 +540,6 @@ const BuylistManagement = ({ userId }) => {
       foil: updatedCard.foil || false,
 
     };
-
-  
-    // console.log('2. Payload to save:', payload);
 
     try {
       const response = await api.put(`/buylist/cards/${updatedCard.id}`, payload);
@@ -769,12 +754,13 @@ const BuylistManagement = ({ userId }) => {
         rowSelectionEnabled={true}
         selectedIds={selectedCardIds}
         onSelectionChange={setSelectedCardIds}
-        onRowClick={handleViewCard}
+        onRowClick={handleCardClick}
         onChange={handleTableChange}
       />
       
       {/* Card Detail Modal */}
       <Modal
+        key={selectedCard?.id}
         open={isModalVisible}
         onCancel={() => setIsModalVisible(false)}
         footer={
@@ -787,8 +773,7 @@ const BuylistManagement = ({ userId }) => {
                   key="save"
                   type="primary"
                   onClick={() => {
-                    // console.log('[ScryfallCardView] Saving pending update:', pendingSelection);
-                    handleSaveEdit(pendingSelection);
+                    if (pendingSelection) handleSaveEdit(pendingSelection);
                   }}
                 >
                   Save
@@ -799,27 +784,25 @@ const BuylistManagement = ({ userId }) => {
                   Close
                 </Button>,
               ]
-        }
+        }        
         width={800}
         destroyOnClose
       >
-        {isCardLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin size="large" />
-            <p>Loading card details...</p>
-          </div>
-        ) : cardData ? (
-        <ScryfallCardView 
-          key={`${selectedCard?.id}-${cardData.id}`}
-          cardData={cardData}
-          mode={modalMode}
-          onSave={handleSaveEdit}
-        />
-        ) : (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <p>No card data available</p>
-          </div>
-        )}
+          <Spin spinning={isModalLoading} tip="Loading card details...">
+          {cardData ? (
+          <ScryfallCardView 
+            key={`${selectedCard?.id}-${cardData.id}`}
+            cardData={cardData}
+            mode={modalMode}
+            onSave={handleSaveEdit}
+            onChange={setPendingSelection}
+          />
+          ) : (
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <p>No card data available</p>
+            </div>
+          )}
+        </Spin>
       </Modal>
     </div>
   );
