@@ -19,7 +19,7 @@ import debounce from 'lodash/debounce';
 const { Title} = Typography;
 
 
-const BuylistManagement = ({ userId }) => {
+const BuylistManagement = () => {
   const location = useLocation();
   const { theme } = useTheme();
   const { selectedBuylist, setSelectedBuylist } = useBuylistState();
@@ -79,17 +79,16 @@ const BuylistManagement = ({ userId }) => {
     mutationFn: ({ card_id, cardData }) => api.delete('/buylist/cards', {
       data: { 
         buylistid: selectedBuylist?.buylistId, 
-        user_id: userId, 
         cards: [cardData]
       }
     }),
       // Optimistic update - remove the item immediately from UI
       onMutate: async (cardId) => {
         // Cancel any outgoing refetches
-        await queryClient.cancelQueries(['buylist', selectedBuylist?.buylistId, userId]);
+        await queryClient.cancelQueries(['buylist', selectedBuylist?.buylistId]);
         
         // Save the previous cards
-        const previousCards = queryClient.getQueryData(['buylist', selectedBuylist?.buylistId, userId]) || [...cards];
+        const previousCards = queryClient.getQueryData(['buylist', selectedBuylist?.buylistId]) || [...cards];
         
         // Optimistically update the UI
         setCards(prev => prev.filter(card => card.id !== cardId));
@@ -114,7 +113,7 @@ const BuylistManagement = ({ userId }) => {
       },
       onSettled: () => {
         // Always refetch after error or success
-        queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId, userId]);
+        queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
       }
     }
   );
@@ -124,27 +123,25 @@ const BuylistManagement = ({ userId }) => {
       return await api.delete('/buylist/cards', {
         data: {
           buylistid: selectedBuylist?.buylistId,
-          user_id: userId,
+
           cards: cardsToDelete
         }
       });
     },
     onSuccess: (data, variables) => {
       message.success(`${variables.cardsToDelete.length} card(s) deleted successfully.`);
-      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId, userId]);
+      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
     },
     onError: (error) => {
       console.error('Bulk deletion error:', error);
       message.error('Failed to delete selected cards.');
-      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId, userId]);
+      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
     }
   });
 
   const deleteBuylistMutation = useMutation({
     mutationFn: async ({ buylistId }) => {
-      return await api.delete(`/buylists/${buylistId}`, {
-        params: { user_id: parseInt(userId, 10) }
-      });
+      return await api.delete(`/buylists/${buylistId}`);
     },
     onSuccess: (_, { buylistId }) => {
       message.success("Buylist deleted successfully.");
@@ -167,7 +164,7 @@ const BuylistManagement = ({ userId }) => {
       setErrorCards([]);
       setLoading(true);
       try {
-        const response = await api.get('/buylists', { params: { user_id: userId } });
+        const response = await api.get('/buylists');
   
         if (response.data.length === 0) return;
   
@@ -177,9 +174,7 @@ const BuylistManagement = ({ userId }) => {
           ? { buylistId: initialBuylistId, name: initialBuylistName }
           : { buylistId: response.data[0].id, name: response.data[0].name };
   
-        const cardsRes = await api.get(`/buylists/${selected.buylistId}`, {
-          params: { user_id: userId }
-        });
+        const cardsRes = await api.get(`/buylists/${selected.buylistId}`);
   
         const cardsData = Array.isArray(cardsRes.data) ? cardsRes.data : [];
   
@@ -209,7 +204,7 @@ const BuylistManagement = ({ userId }) => {
     };
   
     initializeBuylists();
-  }, [userId, initialBuylistId, initialBuylistName]);
+  }, [initialBuylistId, initialBuylistName]);
   
   // Update effects when cards change - Restored from old version
   useEffect(() => {
@@ -261,7 +256,7 @@ const BuylistManagement = ({ userId }) => {
   ////////////////////////////////////////
   const fetchSavedBuylists = async () => {
     try {
-      const response = await api.get('/buylists', { params: { user_id: userId } });
+      const response = await api.get('/buylists');
       if (response.data) {
         setSavedBuylists(response.data);
         setSelectedBuylist({ buylistId: response.data[0].id, name: response.data[0].name });
@@ -276,9 +271,7 @@ const BuylistManagement = ({ userId }) => {
   const handleLoadBuylist = async (buylist) => {
     setLoading(true);
     try {
-      const response = await api.get(`/buylists/${buylist.id}`, {
-        params: { user_id: userId }
-      });
+      const response = await api.get(`/buylists/${buylist.id}`);
   
       const cardsData = Array.isArray(response.data) ? response.data : [];
   
@@ -311,8 +304,7 @@ const BuylistManagement = ({ userId }) => {
   
     try {
       const response = await api.put(`/buylists/${selectedBuylist?.buylistId}/rename`, {
-        name: selectedBuylist?.name,
-        user_id: userId
+        name: selectedBuylist?.name
       });
   
       const updatedBuylist = response.data;
@@ -342,7 +334,6 @@ const BuylistManagement = ({ userId }) => {
     try {
       const response = await api.post("/buylists", {
           name: trimmedBuylistName,
-          user_id: userId,
           cards: []
       });
 
@@ -370,7 +361,7 @@ const BuylistManagement = ({ userId }) => {
 
   const handleDeleteBuylist = useCallback((buylistId) => {
     deleteBuylistMutation.mutate({ buylistId });
-  }, [deleteBuylistMutation, selectedBuylist?.buylistId, userId]);
+  }, [deleteBuylistMutation, selectedBuylist?.buylistId]);
   
   ////////////////////////////////////////
   // Card Import and Edit Handlers - Restored from old version
@@ -409,9 +400,7 @@ const BuylistManagement = ({ userId }) => {
   const fetchSuggestions = async (query) => {
     if (query.length > 2) {
       try {
-        const response = await api.get(`/card_suggestions?query=${query}`, {
-          params: { user_id: userId } 
-        });
+        const response = await api.get(`/card_suggestions?query=${query}`);
         // console.log('Suggestions received:', response.data);
         setSuggestions(response.data.map(name => ({ value: name })));
       } catch (error) {
@@ -446,7 +435,6 @@ const BuylistManagement = ({ userId }) => {
     try {
       // Save the card to the server
       const response = await api.post(`/buylists/${selectedBuylist?.buylistId}/cards`,  {
-        user_id: userId,
         cards: [{
           name: value,
           quantity: 1,
@@ -478,7 +466,7 @@ const BuylistManagement = ({ userId }) => {
       // Remove the card from UI if the API call fails
       setCards(prevCards => prevCards.filter(card => card.id !== clientSideId));
     }
-  }, [selectedBuylist?.buylistId, userId, setCards]);
+  }, [selectedBuylist?.buylistId, setCards]);
   
   const handleModalClose = () => {
     setIsModalVisible(false);
@@ -496,8 +484,7 @@ const BuylistManagement = ({ userId }) => {
         name: card.name,
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
-        version: card.version || 'Standard',
-        user_id: userId,
+        version: card.version || 'Standard'
       });
       const enrichedCard = {
         ...card,
@@ -520,13 +507,13 @@ const BuylistManagement = ({ userId }) => {
     setSelectedCard(card);
     setModalMode('view');
     GenericFetchCard(card)
-  }, [userId]);
+  });
   
   const handleEditCard = useCallback(async (card) => {
     setSelectedCard(card);
     setModalMode('edit');
     GenericFetchCard(card)
-  }, [userId]);
+  });
   
   const handleSaveEdit = useCallback(async (updatedCard) => {
     setErrorCards([]);
@@ -535,7 +522,6 @@ const BuylistManagement = ({ userId }) => {
     const payload = {
       ...updatedCard,
       buylistid: selectedBuylist?.buylistId,
-      user_id: userId,
       quantity: updatedCard.quantity || 1,
       foil: updatedCard.foil || false,
 
@@ -562,7 +548,7 @@ const BuylistManagement = ({ userId }) => {
     } finally {
       console.groupEnd();
     }
-  }, [userId, setCards, handleModalClose]);
+  }, [setCards, handleModalClose]);
   
   const handleDeleteCard = useCallback((cardId) => {
     const cardToDelete = cards.find(card => card.id === cardId);
@@ -598,7 +584,7 @@ const BuylistManagement = ({ userId }) => {
     setSelectedCardIds(new Set());
 
     bulkDeleteCardsMutation.mutate({ cardsToDelete });
-  }, [selectedCardIds, cards, selectedBuylist?.buylistId, userId]);
+  }, [selectedCardIds, cards, selectedBuylist?.buylistId]);
 
   const debouncedFetchSuggestions = debounce(fetchSuggestions, 300);
   
@@ -626,7 +612,6 @@ const BuylistManagement = ({ userId }) => {
             <ImportCardsToBuylist 
               buylistId={selectedBuylist?.buylistId}
               onCardsAdded={handleCardImport}
-              userId={userId}
               cardText={cardText}
               setCardText={setCardText}
               errorCards={errorCards}

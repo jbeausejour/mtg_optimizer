@@ -22,7 +22,6 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
   const [editingFields, setEditingFields] = useState(() => ({
     id: data?.id,
     buylist_id: data?.buylist_id,
-    user_id: data?.user_id,
     name: data?.name,
     language: resolvedLanguageCode,
     quality: data?.quality || 'NM',

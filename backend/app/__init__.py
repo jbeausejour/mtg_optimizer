@@ -49,9 +49,9 @@ def create_app(config_class=get_config()):
     jwt.init_app(app)
 
     @jwt.expired_token_loader
-    def expired_token_callback(jwt_header, expired_token):
+    async def expired_token_callback(jwt_header, expired_token):
         return (
-            jsonify({"msg": "Token has expired", "token_type": expired_token["type"]}),
+            jsonify({"msg": "Token has expired", "token_type": expired_token["type"], "error": "token_expired"}),
             401,
         )
 

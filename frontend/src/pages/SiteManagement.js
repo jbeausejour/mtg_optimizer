@@ -12,7 +12,7 @@ import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 const { Title } = Typography;
 const { Option } = Select;
 
-const SiteManagement = ({ userId }) => {
+const SiteManagement = () => {
   const { theme } = useTheme();
   const queryClient = useQueryClient();
   const [editingRecord, setEditingRecord] = useState(null);
@@ -42,16 +42,16 @@ const SiteManagement = ({ userId }) => {
   const [addMethodValue, setAddMethodValue] = useState('');
   // React Query to fetch sites
   const { data: sites = [], isLoading: loading } = useQuery({
-    queryKey: ['sites', userId],
-    queryFn: () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['sites'],
+    queryFn: () => api.get('/sites').then(res => res.data),
     staleTime: 300000
   })
   
   // Mutation to add a site
   const addSiteMutation = useMutation({
-    mutationFn: (values) => api.post('/sites', { ...values, user_id: userId }),
+    mutationFn: (values) => api.post('/sites', { ...values }),
     onSuccess: () => {
-      queryClient.invalidateQueries(['sites', userId]);
+      queryClient.invalidateQueries(['sites']);
       message.success('Site added successfully');
       setIsAddModalVisible(false);
       addForm.resetFields();
@@ -64,7 +64,7 @@ const SiteManagement = ({ userId }) => {
   
   // Mutation to update a site
   const updateSiteMutation = useMutation({
-    mutationFn: (values) => api.put(`/sites/${editingRecord.id}`, { ...values, user_id: userId }),
+    mutationFn: (values) => api.put(`/sites/${editingRecord.id}`, { ...values }),
     onSuccess: (response) => {
       if (!response.data) {
         message.error('Failed to update site: No response data');
@@ -73,7 +73,7 @@ const SiteManagement = ({ userId }) => {
       switch (response.data.status) {
         case 'success':
           message.success(response.data.message || 'Site updated successfully');
-          queryClient.invalidateQueries(['sites', userId]);
+          queryClient.invalidateQueries(['sites']);
           setIsEditModalVisible(false);
           break;
         case 'info':
@@ -95,17 +95,17 @@ const SiteManagement = ({ userId }) => {
   
   // Mutation to delete a site
   const deleteSiteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/sites/${id}`, { params: { user_id: userId } }),
+    mutationFn: (id) => api.delete(`/sites/${id}`),
     // Optimistic update - remove the item immediately from UI
     onMutate: async (siteId) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries(['sites', userId]);
+      await queryClient.cancelQueries(['sites']);
       
       // Save the previous value
-      const previousSites = queryClient.getQueryData(['sites', userId]);
+      const previousSites = queryClient.getQueryData(['sites']);
       
       // Optimistically update to the new value
-      queryClient.setQueryData(['sites', userId], old => 
+      queryClient.setQueryData(['sites'], old => 
         old.filter(site => site.id !== siteId)
       );
       
@@ -114,7 +114,7 @@ const SiteManagement = ({ userId }) => {
     },
     onError: (err, siteId, context) => {
       // Roll back to the previous value if there's an error
-      queryClient.setQueryData(['sites', userId], context.previousSites);
+      queryClient.setQueryData(['sites'], context.previousSites);
       message.error('Failed to delete site.');
     },
     onSuccess: () => {
@@ -122,7 +122,7 @@ const SiteManagement = ({ userId }) => {
     },
     onSettled: () => {
       // Always refetch after error or success
-      queryClient.invalidateQueries(['sites', userId]);
+      queryClient.invalidateQueries(['sites']);
     }
   });
   
@@ -194,16 +194,16 @@ const SiteManagement = ({ userId }) => {
           message.success(`Successfully deleted ${count} site(s).`);
           
           // Invalidate after everything is done
-          queryClient.invalidateQueries(['sites', userId]);
+          queryClient.invalidateQueries(['sites']);
         } catch (error) {
           console.error('Bulk deletion error:', error);
           message.error('Failed to delete some or all selected sites.');
           // Invalidate to get back to a consistent state
-          queryClient.invalidateQueries(['sites', userId]);
+          queryClient.invalidateQueries(['sites']);
         }
       }
     });
-  }, [selectedSiteIds, deleteSiteMutation, setSelectedSiteIds, userId]);
+  }, [selectedSiteIds, deleteSiteMutation, setSelectedSiteIds]);
 
   const handleMethodChange = useCallback((value, formType) => {
     if (formType === 'edit') {

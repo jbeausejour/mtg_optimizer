@@ -5,7 +5,7 @@ import api from '../../utils/api';
 
 const { TextArea } = Input;
 
-const ImportCardsToBuylist = ({ buylistId, onCardsAdded, userId, cardText, setCardText, errorCards, setErrorCards }) => {
+const ImportCardsToBuylist = ({ buylistId, onCardsAdded, cardText, setCardText, errorCards, setErrorCards }) => {
   const location = useLocation();
 
   const parseCardList = (text) => {
@@ -58,9 +58,8 @@ const ImportCardsToBuylist = ({ buylistId, onCardsAdded, userId, cardText, setCa
 
     try {
         const response = await api.post("/buylist/cards/import", {
-            buylistid: buylistId,
+            buylistId: buylistId,
             cards,
-            user_id: userId,
         });
 
         const { addedCards = [], notFoundCards = [] } = response.data; // ✅ Default to empty arrays

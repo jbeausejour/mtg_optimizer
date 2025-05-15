@@ -5,7 +5,14 @@ from app.services.admin_service import AdminService
 from app.utils.load_initial_data import load_all_data, truncate_tables
 from app.utils.validators import validate_setting_key, validate_setting_value
 from quart import Blueprint, request, jsonify
-from quart_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from quart_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+    verify_jwt_in_request,
+    get_jwt_claims,
+)
 from sqlalchemy.future import select
 from app.utils.async_context_manager import flask_session_scope
 
@@ -46,36 +53,75 @@ async def update_settings():
 @admin_routes.route("/login", methods=["POST"])
 async def login():
     data = await request.get_json()
-    forwarded_user = request.headers.get("X-Forwarded-User")
 
-    async with flask_session_scope() as session:
-        if forwarded_user:
-            logger.info(f"Login via Authelia for user: {forwarded_user}")
+    # Try Authelia-authenticated session first
+    forwarded_user = request.headers.get("Remote-User")
+    logger.info(f"[login attempt] for: {forwarded_user}")
+    if forwarded_user:
+        async with flask_session_scope() as session:
             stmt = select(User).where(User.username == forwarded_user)
             result = await session.execute(stmt)
             user = result.scalars().first()
 
-            if not user:
-                return jsonify({"msg": "User not found"}), 404
+            if user:
+                logger.info(f"[login] Authelia session login for: {forwarded_user}")
+                access_token = create_access_token(identity=user.id)
+                refresh_token = create_refresh_token(identity=user.id)
+                return jsonify(access_token=access_token, refresh_token=refresh_token), 200
 
-            # No password needed with Authelia
-            access_token = create_access_token(identity=user.id)
-            logger.info(f"Authelia login successful for user: {user.username}")
-            return jsonify(access_token=access_token, userId=user.id), 200
+    # Fallback to password-based login
+    if not data or "username" not in data or "password" not in data:
+        return jsonify({"error": "Missing credentials"}), 400
 
-        # Manual login
-        logger.info(f"Login attempt for user: {data.get('username')}")
-        stmt = select(User).where(User.username == data["username"])
+    username = data["username"]
+    password = data["password"]
+
+    async with flask_session_scope() as session:
+        stmt = select(User).where(User.username == username)
         result = await session.execute(stmt)
         user = result.scalars().first()
 
-        if user and user.check_password(data["password"]):
-            access_token = create_access_token(identity=user.id)
-            logger.info(f"Login successful for user: {user.username}")
-            return jsonify(access_token=access_token, userId=user.id), 200
+        if not user or not user.check_password(password):
+            return jsonify({"error": "Invalid credentials"}), 401
 
-        logger.warning(f"Failed login attempt for user: {data.get('username')}")
-        return jsonify({"message": "Invalid username or password"}), 401
+        logger.info(f"[login] Manual login for: {username}")
+        access_token = create_access_token(identity=user.id)
+        refresh_token = create_refresh_token(identity=user.id)
+        return jsonify(access_token=access_token, refresh_token=refresh_token), 200
+
+
+@admin_routes.route("/refresh-token", methods=["POST"])
+@jwt_required
+async def refresh_token():
+    try:
+        # 1. First try JWT refresh token
+        await verify_jwt_in_request()
+        claims = get_jwt_claims()
+        if claims.get("type") != "refresh":
+            return jsonify({"error": "Only refresh tokens allowed"}), 401
+
+        identity = get_jwt_identity()
+
+    except Exception:
+        # 2. Fallback to Authelia session
+        username = request.headers.get("Remote-User")
+        if not username:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        async with flask_session_scope() as session:
+            stmt = select(User).where(User.username == username)
+            result = await session.execute(stmt)
+            user = result.scalars().first()
+
+            if not user:
+                return jsonify({"error": "Authelia user not found"}), 401
+
+            identity = user.id
+
+    # 3. Issue new tokens
+    access_token = create_access_token(identity=identity)
+    refresh_token = create_refresh_token(identity=identity)
+    return jsonify(access_token=access_token, refresh_token=refresh_token)
 
 
 @admin_routes.route("/create_user", methods=["POST"])

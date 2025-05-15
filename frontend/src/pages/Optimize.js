@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
-import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag, Tooltip } from 'antd';
+import { Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag, Tooltip, Collapse, Slider } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
+import { InfoCircleOutlined} from '@ant-design/icons';
+
+import { Radar } from '@ant-design/plots';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
 import { useBuylistState } from '../hooks/useBuylistState';
 import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
@@ -9,7 +12,9 @@ import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title, Text } = Typography;
 
-const Optimize = ({ userId }) => {
+const { Panel } = Collapse;
+
+const Optimize = () => {
   const [cards, setCards] = useState([]);
   const [selectedCard, setSelectedCard] = useState({});
   const [sites, setSites] = useState([]);
@@ -37,11 +42,82 @@ const Optimize = ({ userId }) => {
   const { selectedBuylist, setSelectedBuylist} = useBuylistState();
   const [minAge, setMinAge] = useState(1800);  // default 30 minutes
   const [strictPreferences, setStrictPreferences] = useState(false);
+  const defaultWeights = { cost: 1.0, quality: 1.0, availability: 100.0, store_count: 0.3 };
+  const [weights, setWeights] = useState(() => {
+    const saved = localStorage.getItem('mtg_weights');
+    return saved ? JSON.parse(saved) : defaultWeights;
+  });
 
   const [cardData, setFetchedCard] = useState(null);
   const {
     mutateAsync: fetchCard,
   } = useFetchScryfallCard();
+  
+  useEffect(() => {
+    const allMaxed = Object.entries(weights).every(([key, val]) => {
+      const max = key === 'availability' ? 200 : 5;
+      return val >= max;
+    });
+    if (allMaxed) {
+      message.warning('All weights are maxed — this may lead to conflicting optimization goals.');
+    }
+    localStorage.setItem('mtg_weights', JSON.stringify(weights));
+  }, [weights]);
+
+  const weightDescriptions = {
+    cost: 'Prioritize cheaper listings.',
+    quality: 'Prioritize higher quality listings.',
+    availability: 'Favor listings with higher availability.',
+    store_count: 'Prefer fewer stores for consolidation.'
+  };
+
+  const safe = (v, divisor) => (typeof v === 'number' && !isNaN(v) ? v / divisor : 0);
+
+  const radarData = [
+    { item: 'Cost', value: safe(weights?.cost, 5) },
+    { item: 'Quality', value: safe(weights?.quality, 5) },
+    { item: 'Availability', value: safe(weights?.availability, 200) },
+    { item: 'Store Count', value: safe(weights?.store_count, 5) },
+  ];
+
+
+  const radarConfig = {
+    data: radarData,
+    xField: 'item',
+    yField: 'value',
+    meta: {
+      item: typeof radarData?.[0]?.item === 'string' ? { alias: 'Attribute' } : {},
+      value: {
+        min: 0,
+        max: 1,
+        alias: 'Score',
+      },
+    },
+    area: {},
+    xAxis: {
+      line: null,
+      tickLine: null,
+      grid: {
+        line: { style: { lineDash: [4, 4] } },
+      },
+    },
+    yAxis: {
+      label: false,
+      grid: {
+        alternateColor: ['#f5f5f5', '#ffffff'],
+      },
+    },
+    point: { size: 4 },
+    height: 360,
+  };
+  
+
+  const findMinStoretooltipContent = (
+    <div>
+      <p><strong>When enabled:</strong> The algorithm tries to minimize the number of stores needed to fulfill the wishlist, starting from one and going up, prioritizing feasibility and cost efficiency.</p>
+      <p><strong>When disabled:</strong> It uses the fixed <code>min_store</code> value from the config, without trying to reduce store count further—useful when the user prefers a specific number of stores.</p>
+    </div>
+  );
 
 
   const filteredSites = sites.filter(site => {
@@ -59,11 +135,10 @@ const Optimize = ({ userId }) => {
   });
 
   useEffect(() => {
-    if (userId) {
-      fetchSites();
-      fetchBuylists(); 
-    }
-  }, [userId]);
+    fetchSites();
+    fetchBuylists();
+  }, []);
+
 
   useEffect(() => {
     if (taskId) {
@@ -78,7 +153,7 @@ const Optimize = ({ userId }) => {
   useEffect(() => {
     if (buylists.length > 0 && !selectedBuylist) {
       const first = buylists[0];
-      setSelectedBuylist({ id: first.id, name: first.name }); 
+      setSelectedBuylist({ buylistId: first.id, name: first.name }); 
     }
   }, [buylists]);
   
@@ -92,6 +167,7 @@ const Optimize = ({ userId }) => {
   useEffect(() => {
     setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
   }, [filteredSites, selectedSites]);
+
 
   const checkTaskStatus = async (id) => {
     try {
@@ -120,9 +196,7 @@ const Optimize = ({ userId }) => {
 
   const fetchSites = async () => {
     try {
-      const response = await api.get('/sites', {
-        params: { user_id: userId } 
-      });
+      const response = await api.get('/sites');
       const sitesWithTypes = response.data.map(site => ({
         ...site,
         type: site.type || 'primary'
@@ -141,7 +215,7 @@ const Optimize = ({ userId }) => {
 
   const fetchBuylists = async () => {
     try {
-      const response = await api.get('/buylists', { params: { user_id: userId } });
+      const response = await api.get('/buylists');
       setBuylists(response.data);
     } catch (error) {
       console.error('Error fetching buylists:', error);
@@ -151,7 +225,6 @@ const Optimize = ({ userId }) => {
 
   const handleOptimize = async () => {
     try {
-      // console.log("Sending userId:", userId);
       const sitesToOptimize = filteredSites
         .filter(site => selectedSites[site.id])
         .map(site => site.id.toString());
@@ -166,7 +239,6 @@ const Optimize = ({ userId }) => {
         min_store: minStore,
         find_min_store: findMinStore,
         min_age_seconds: minAge,
-        user_id: userId,
         buylist_id: selectedBuylist?.buylistId,
         strict_preferences: strictPreferences,
         user_preferences: Object.fromEntries(
@@ -186,7 +258,8 @@ const Optimize = ({ userId }) => {
           language: card.language,
           quality: card.quality,
           quantity: card.quantity
-        }))
+        })),
+        weights: weights,
       });
       setTaskId(response.data.task_id);
       message.success(`Optimization task started with ${sitesToOptimize.length} sites!`);
@@ -198,9 +271,7 @@ const Optimize = ({ userId }) => {
 
   const handleSelectBuylist = async (buylistId) => {
     try {
-      const response = await api.get(`/buylists/${buylistId}`, {
-        params: { user_id: userId }
-      });
+      const response = await api.get(`/buylists/${buylistId}`);
       setCards(response.data);
       message.success('Buylist selected successfully');
     } catch (error) {
@@ -219,8 +290,7 @@ const Optimize = ({ userId }) => {
         name: card.name,
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
-        version: card.version || 'Standard',
-        user_id: userId,
+        version: card.version || 'Standard'
       });
       const enrichedCard = {
         ...card,
@@ -300,13 +370,6 @@ const Optimize = ({ userId }) => {
     }));
   };
 
-  const findMinStoretooltipContent = (
-    <div>
-      <p><strong>When enabled:</strong> The algorithm tries to minimize the number of stores needed to fulfill the wishlist, starting from one and going up, prioritizing feasibility and cost efficiency.</p>
-      <p><strong>When disabled:</strong> It uses the fixed <code>min_store</code> value from the config, without trying to reduce store count further—useful when the user prefers a specific number of stores.</p>
-    </div>
-  );
-
   return (
     <div className={`optimize section ${theme}`}>
       <h1>Optimize</h1>
@@ -327,56 +390,73 @@ const Optimize = ({ userId }) => {
             {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
           </Button>
         </Col>
-        <Col span={6}>
-          <InputNumber
-            min={1}
-            value={minStore}
-            onChange={setMinStore}
-            className="w-full"
-            addonBefore="Min Store"
-          />
-        </Col>
-        <Col span={6}>
-          <Tooltip title="Specify how old the cached data can be (in seconds) before it’s considered stale.">
-            <InputNumber
-              min={60}
-              step={60}
-              value={minAge}
-              onChange={setMinAge}
-              addonAfter="sec"
-              addonBefore="Refresh if data is older than"
-              placeholder="1800"
-            />
-          </Tooltip>
-        </Col>      
-        <Col span={6}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-            <Tooltip title={findMinStoretooltipContent}>
-              <div style={{ width: 180 }}>
-                <Switch
-                  size="small"
-                  checked={findMinStore}
-                  onChange={setFindMinStore}
-                  checkedChildren="Find Min Store"
-                  unCheckedChildren="Don't Find Min Store"
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </Tooltip>
-
-            <Tooltip title="Strict Preferences: If enabled, only exact matches for language, set, quality, and version will be considered.">
-              <div style={{ width: 180 }}>
-                <Switch
-                  size="small"
-                  checked={strictPreferences}
-                  onChange={setStrictPreferences}
-                  checkedChildren="Strict Preferences"
-                  unCheckedChildren="Flexible Preferences"
-                  style={{ width: '100%', marginBottom: 8  }}
-                />
-              </div>
-            </Tooltip>
-          </div>
+        <Col span={24}>
+          <Collapse defaultActiveKey={['1']}>
+              <Panel header="Optimization Weights and Config" key="1">
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      {['cost', 'quality', 'availability', 'store_count'].map(key => (
+                        <div key={key}>
+                          <Text>
+                            {key.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())} Weight
+                            <Tooltip title={weightDescriptions[key]}>
+                              <InfoCircleOutlined style={{ marginLeft: 8 }} />
+                            </Tooltip>
+                          </Text>
+                          <Slider
+                            min={0}
+                            max={key === 'availability' ? 200 : 5}
+                            step={key === 'availability' ? 10 : 0.1}
+                            value={weights[key]}
+                            onChange={(value) => setWeights(prev => ({ ...prev, [key]: value }))}
+                          />
+                        </div>
+                      ))}
+                      {!findMinStore && (
+                        <InputNumber
+                          min={1}
+                          value={minStore}
+                          onChange={setMinStore}
+                          addonBefore="Min Store"
+                          className="w-full"
+                        />
+                      )}
+                      <InputNumber
+                        min={60}
+                        step={60}
+                        value={minAge}
+                        onChange={setMinAge}
+                        addonBefore="Refresh Age"
+                        addonAfter="sec"
+                        className="w-full"
+                      />
+                      <Tooltip title={findMinStoretooltipContent}>
+                        <Switch
+                          checked={findMinStore}
+                          onChange={setFindMinStore}
+                          checkedChildren="Find Min Store"
+                          unCheckedChildren="Use Min Store"
+                        />
+                      </Tooltip>
+                      <Switch
+                        checked={strictPreferences}
+                        onChange={setStrictPreferences}
+                        checkedChildren="Strict Preferences"
+                        unCheckedChildren="Flexible Preferences"
+                      />
+                    </Space>
+                  </Col>
+                  <Col span={12}>
+                    {radarData.every(d => typeof d.value === 'number' && !isNaN(d.value)) ? (
+                      <Radar {...radarConfig} />
+                    ) : (
+                      <Text type="danger">Chart data invalid</Text>
+                    )}
+                  </Col>
+                </Row>
+              </Panel>
+          </Collapse>
         </Col>
       </Row>
 
@@ -426,7 +506,7 @@ const Optimize = ({ userId }) => {
                   placeholder="Select Buylist"
                   value={selectedBuylist ? { value: selectedBuylist.buylistId, label: selectedBuylist.name } : null}
                   onChange={(option) => {
-                    setSelectedBuylist({ id: option.value, name: option.label });
+                    setSelectedBuylist({ buylistId: option.value, name: option.label });
                   }}
                 >
                   {buylists.map(buylist => (

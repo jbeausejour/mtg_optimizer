@@ -12,6 +12,7 @@ from app.services.user_buylist_card_service import UserBuylistCardService
 from app.tasks.optimization_tasks import celery_app, start_scraping_task
 from celery.result import AsyncResult
 from app.utils.async_context_manager import flask_session_scope
+from quart_jwt_extended import jwt_required, get_jwt_identity
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,11 @@ card_routes = Blueprint("card_routes", __name__)
 # Buylist Operations
 ############################################################################################################
 @card_routes.route("/buylists", methods=["GET"])
+@jwt_required
 async def get_buylists():
-    user_id = int(request.args.get("user_id", 0))
+
+    user_id = get_jwt_identity()
+    logger.info(f"Got user: {user_id}")
     async with flask_session_scope() as session:
         try:
             buylists = await BuylistService.get_all_buylists(session=session, user_id=user_id)
@@ -36,11 +40,13 @@ async def get_buylists():
 
 
 @card_routes.route("/buylists", methods=["POST"])
+@jwt_required
 async def create_buylist():
     try:
         data = await request.get_json()
         name = data.get("name", "Untitled Buylist")
-        user_id = int(data.get("user_id", 0))
+        user_id = get_jwt_identity()
+        logger.info(f"got user {user_id}")
 
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
@@ -56,19 +62,21 @@ async def create_buylist():
         return jsonify({"error": "Failed to create buylist"}), 500
 
 
-@card_routes.route("/buylists/<int:id>", methods=["GET"])
-async def load_buylist(id=None):
+@card_routes.route("/buylists/<int:buylistId>", methods=["GET"])
+@jwt_required
+async def load_buylist(buylistId=None):
     """Load a saved buylist by ID or all buylists' cards if ID is None."""
     try:
-        user_id = int(request.args.get("user_id"))
+        user_id = get_jwt_identity()
+        logger.info(f"got user {user_id}")
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
 
         async with flask_session_scope() as session:
-            if id:
-                logger.info(f"Loading buylist {id} for user {user_id}")
-                buylist_cards = await UserBuylistCardService.get_buylist_cards_by_id(session, id)
-                logger.info(f"Loaded {len(buylist_cards)} cards for buylist {id}")
+            if buylistId:
+                logger.info(f"Loading buylist {buylistId} for user {user_id}")
+                buylist_cards = await UserBuylistCardService.get_buylist_cards_by_id(session, buylistId)
+                logger.info(f"Loaded {len(buylist_cards)} cards for buylist {buylistId}")
             else:
                 logger.info(f"Loading all buylist cards for user {user_id}")
                 buylist_cards = await UserBuylistCardService.get_all_user_buylist_cards(session, user_id)
@@ -81,14 +89,15 @@ async def load_buylist(id=None):
         return jsonify({"error": "Failed to load buylist"}), 500
 
 
-@card_routes.route("/buylists/<int:id>", methods=["DELETE"])
+@card_routes.route("/buylists/<int:buylistId>", methods=["DELETE"])
+@jwt_required
 async def delete_buylist(buylistId):
     """
     Delete a buylist by its ID.
     """
     try:
         logger.info("Trying to delete")
-        user_id = int(request.args.get("user_id"))
+        user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
 
@@ -107,13 +116,14 @@ async def delete_buylist(buylistId):
 
 
 @card_routes.route("/buylists/<int:buylistId>/cards", methods=["POST"])
+@jwt_required
 async def add_cards_to_buylist(buylistId):
     """
     Add cards to an existing buylist.
     """
     try:
         data = await request.get_json()
-        user_id = int(data.get("user_id", 0))
+        user_id = get_jwt_identity()
         cards = data.get("cards", [])
 
         if not user_id:
@@ -134,6 +144,7 @@ async def add_cards_to_buylist(buylistId):
 
 
 @card_routes.route("/buylists/<int:buylistId>/rename", methods=["PUT"])
+@jwt_required
 async def rename_buylist(buylistId):
     """
     Rename an existing buylist without affecting its cards.
@@ -141,7 +152,7 @@ async def rename_buylist(buylistId):
     try:
         data = await request.get_json()
         new_name = data.get("name")
-        user_id = int(data.get("user_id", 0))
+        user_id = get_jwt_identity()
 
         if not user_id or not new_name:
             return jsonify({"error": "User ID and new buylist name are required"}), 400
@@ -157,8 +168,10 @@ async def rename_buylist(buylistId):
 
 
 @card_routes.route("/buylists/top", methods=["GET"])
+@jwt_required
 async def get_top_buylists():
-    user_id = int(request.args.get("user_id", 0))
+    user_id = get_jwt_identity()
+    logger.info(f"got user {user_id}")
     async with flask_session_scope() as session:
         try:
             top_buylists = await BuylistService.get_top_buylists(session=session, user_id=user_id)
@@ -171,7 +184,10 @@ async def get_top_buylists():
 ############################################################################################################
 # Buylist Card Operations
 ############################################################################################################
+
+
 @card_routes.route("/buylist/cards", methods=["DELETE"])
+@jwt_required
 async def delete_cards():
     """
     Delete specific cards from a buylist.
@@ -183,7 +199,7 @@ async def delete_cards():
     """
     data = await request.get_json()
     buylistId = data.get("buylistId")
-    user_id = int(data.get("user_id", 0))
+    user_id = get_jwt_identity()
     cards = data.get("cards")
 
     if not buylistId or not user_id or not cards:
@@ -213,18 +229,14 @@ async def delete_cards():
 
 
 @card_routes.route("/buylist/cards/import", methods=["POST"])
+@jwt_required
 async def import_cards_to_buylist():
     """Import cards into a buylist from a text input."""
     try:
         data = await request.get_json()
         buylistId = data.get("buylistId")
         cards = data.get("cards", [])
-        user_id = int(data.get("user_id", 0))
-        set_name = data.get("set_name", None)
-        language = data.get("language", "English")
-        quality = data.get("quality", "NM")
-        version = data.get("version", "Standard")
-        foil = data.get("foil", False)
+        user_id = get_jwt_identity()
 
         if not user_id:
             logger.error("User ID is missing in the request")
@@ -240,6 +252,11 @@ async def import_cards_to_buylist():
             for card in cards:
                 card_name = card.get("name")
                 quantity = card.get("quantity", 1)
+                set_name = card.get("set_name", None)
+                language = card.get("language", "English")
+                quality = card.get("quality", "NM")
+                version = card.get("version", "Standard")
+                foil = card.get("foil", False)
 
                 # Validate card existence (e.g., via Scryfall API)
                 if await CardService.is_valid_card_name(card_name):
@@ -269,12 +286,13 @@ async def import_cards_to_buylist():
 
 
 @card_routes.route("/buylist/cards/<int:card_id>", methods=["PUT"])
+@jwt_required
 async def update_user_buylist_card(card_id):
     """Update a specific card in the user's buylist."""
     try:
         data = await request.get_json()
-        user_id = int(data.get("user_id", 0))
-        buylistid = data.get("buylistid")  # Ensure buylist id is provided
+        user_id = get_jwt_identity()
+        buylistid = data.get("buylistId")  # Ensure buylist id is provided
 
         if not user_id or not buylistid:
             return jsonify({"error": "User ID and Buylist ID are required"}), 400
@@ -299,7 +317,10 @@ async def update_user_buylist_card(card_id):
 ############################################################################################################
 # Card Operations
 ############################################################################################################
+
+
 @card_routes.route("/fetch_card", methods=["GET"])
+@jwt_required
 async def fetch_scryfall_card():
 
     card_name = request.args.get("name")
@@ -370,6 +391,7 @@ async def fetch_scryfall_card():
 
 
 @card_routes.route("/card_suggestions", methods=["GET"])
+@jwt_required
 async def get_card_suggestions():
     query = request.args.get("query", "")
     suggestions = await CardService.get_card_suggestions(query)
@@ -377,6 +399,7 @@ async def get_card_suggestions():
 
 
 @card_routes.route("/scryfall/card/<string:card_id>", methods=["GET"])
+@jwt_required
 async def get_card_by_scryfall_id(card_id):
     """
     Fetch a card from Scryfall using its unique ID (UUID).
@@ -400,7 +423,10 @@ async def get_card_by_scryfall_id(card_id):
 ############################################################################################################
 # Task Operations
 ############################################################################################################
+
+
 @card_routes.route("/task_status/<task_id>", methods=["GET"])
+@jwt_required
 async def task_status(task_id):
     try:
         task = AsyncResult(task_id, app=celery_app)
@@ -431,13 +457,17 @@ async def task_status(task_id):
 ############################################################################################################
 # Optimization Operations
 ############################################################################################################
+
+
 @card_routes.route("/start_scraping", methods=["POST"])
+@jwt_required
 async def start_scraping():
     """Starts the scraping task."""
     data = await request.get_json()
     # logger.info("Received data: %s", data)
 
-    user_id = int(data.get("user_id", 0))
+    user_id = get_jwt_identity()
+    logger.info(f"got user {user_id}")
 
     buylist_id = int(data.get("buylist_id", None))
     site_ids = data.get("sites", [])
@@ -448,6 +478,7 @@ async def start_scraping():
     min_age_seconds = data.get("min_age_seconds", 1800)
     strict_preferences = data.get("strict_preferences", False)
     user_preferences = data.get("user_preferences", {})
+    weights = data.get("weights", {})
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
@@ -464,12 +495,14 @@ async def start_scraping():
             user_id,
             strict_preferences,
             user_preferences,
+            weights,
         ]
     )
     return jsonify({"task_id": task.id}), 202
 
 
 @card_routes.route("/purchase_order", methods=["POST"])
+@jwt_required
 async def generate_purchase_links():
     try:
         data = await request.get_json()
@@ -489,7 +522,10 @@ async def generate_purchase_links():
 ############################################################################################################
 # Set Operations
 ############################################################################################################
+
+
 @card_routes.route("/sets", methods=["GET"])
+@jwt_required
 async def get_sets():
     try:
         sets = await CardService.fetch_all_sets()
@@ -499,29 +535,13 @@ async def get_sets():
         return jsonify({"error": "Failed to fetch sets"}), 500
 
 
-# @card_routes.route("/save_set_selection", methods=["POST"])
-# async def save_set_selection():
-#     """Save the selected set for a card"""
-#     try:
-#         data = await request.get_json()
-#         set_code = data.get("set_code")
-#         if not set_code:
-#             return jsonify({"error": "Set code is required"}), 400
-
-#         # Store the selected set (you might want to save this to your database)
-#         async with flask_session_scope() as session:
-#             # For now, just return success
-#             # TODO
-#             return jsonify({"message": f"Set {set_code} selected successfully"}), 200
-#     except Exception as e:
-#         logger.error(f"Error saving set selection: {str(e)}")
-#         return jsonify({"error": "Failed to save set selection"}), 500
-
-
 ############################################################################################################
 # Scan Operations
 ############################################################################################################
+
+
 @card_routes.route("/scans/<int:scan_id>", methods=["GET"])
+@jwt_required
 async def get_scan_by_id(scan_id):
     async with flask_session_scope() as session:
         try:
@@ -535,6 +555,7 @@ async def get_scan_by_id(scan_id):
 
 
 @card_routes.route("/scans", methods=["GET"])
+@jwt_required
 async def get_all_scans():
     async with flask_session_scope() as session:
         try:
@@ -556,6 +577,7 @@ async def get_all_scans():
 
 
 @card_routes.route("/scans/", methods=["GET"])
+@jwt_required
 async def get_scan_history():
     """Get scan history without optimization results"""
     async with flask_session_scope() as session:
@@ -575,6 +597,7 @@ async def get_scan_history():
 
 
 @card_routes.route("/scans", methods=["DELETE"])
+@jwt_required
 async def delete_scans():
     """
     Delete one or more scans.
@@ -585,7 +608,7 @@ async def delete_scans():
     """
     try:
         data = await request.get_json()
-        user_id = int(data.get("user_id", 0))
+        user_id = get_jwt_identity()
         scan_ids = data.get("scan_ids")
 
         if not user_id or not scan_ids:
@@ -604,7 +627,10 @@ async def delete_scans():
 ############################################################################################################
 # Site Operations
 ############################################################################################################
+
+
 @card_routes.route("/sites", methods=["GET"])
+@jwt_required
 async def get_sites():
     async with flask_session_scope() as session:
         try:
@@ -617,6 +643,7 @@ async def get_sites():
 
 
 @card_routes.route("/sites", methods=["POST"])
+@jwt_required
 async def add_site():
     try:
         data = await request.get_json()
@@ -630,6 +657,7 @@ async def add_site():
 
 
 @card_routes.route("/sites/<int:site_id>", methods=["PUT"])
+@jwt_required
 async def update_site(site_id):
     try:
         data = await request.get_json()
@@ -662,6 +690,7 @@ async def update_site(site_id):
 
 
 @card_routes.route("/sites/<int:site_id>", methods=["DELETE"])
+@jwt_required
 async def delete_site(site_id):
     try:
         async with flask_session_scope() as session:
@@ -678,7 +707,10 @@ async def delete_site(site_id):
 ############################################################################################################
 # Results Operations
 ############################################################################################################
+
+
 @card_routes.route("/results", methods=["GET"])
+@jwt_required
 async def get_optimization_results():
     """Get recent optimization results"""
     async with flask_session_scope() as session:
@@ -705,6 +737,7 @@ async def get_optimization_results():
 
 
 @card_routes.route("/results/<int:scan_id>", methods=["GET"])
+@jwt_required
 async def get_scan_optimization_result(scan_id):
     """Get optimization results for a specific scan"""
     async with flask_session_scope() as session:
@@ -729,6 +762,7 @@ async def get_scan_optimization_result(scan_id):
 
 
 @card_routes.route("/results/latest", methods=["GET"])
+@jwt_required
 async def get_latest_optimization_results():
     async with flask_session_scope() as session:
         opt_result = await OptimizationService.get_latest_optimization(session)

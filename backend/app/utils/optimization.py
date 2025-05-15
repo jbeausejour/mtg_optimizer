@@ -13,22 +13,9 @@ from deap import algorithms, base, creator, tools
 
 logger = logging.getLogger(__name__)
 
-# DEAP Setup
-creator.create(
-    "FitnessMulti",
-    base.Fitness,
-    weights=(
-        -1.0,  # Minimize cost
-        1.0,  # Maximize quality
-        100.0,  # Heavily prioritize availability
-        -0.1,  # Slightly penalize store count
-    ),
-)
-creator.create("Individual", list, fitness=creator.FitnessMulti)
-
 
 class PurchaseOptimizer:
-    def __init__(self, filtered_listings_df, user_wishlist_df, config):
+    def __init__(self, filtered_listings_df, user_wishlist_df, optimizationConfig):
         # Update column mapping to match actual DataFrame columns
         self.column_mapping = {
             "name": "name",
@@ -37,6 +24,7 @@ class PurchaseOptimizer:
             "quality": "quality",
             "quantity": "quantity",
         }
+
         if filtered_listings_df.empty or user_wishlist_df.empty:
             raise ValueError("Empty input dataframes")
 
@@ -46,8 +34,9 @@ class PurchaseOptimizer:
         # Convert input data to DataFrames with standardized column names
         self.filtered_listings_df = self._standardize_dataframe(filtered_listings_df)
         self.user_wishlist_df = pd.DataFrame(user_wishlist_df)
-        self.config = config
-        # Parse card-level preferences
+        self.optimizationConfig = optimizationConfig
+        self.init_fitness_creator(self.optimizationConfig.weights)
+
         self.card_preferences = {
             row["name"]: {
                 "language": row.get("language", "English"),
@@ -58,20 +47,37 @@ class PurchaseOptimizer:
             }
             for _, row in self.user_wishlist_df.iterrows()
         }
-        self.strict_preferences = config.get("strict_preferences", False)
 
-        logger.info("PurchaseOptimizer initialized with config: %s", self.config)
+        logger.info("PurchaseOptimizer initialized with config: %s", self.optimizationConfig)
 
         self._validate_input_data()
 
         # Add validation for sites
         unique_sites = filtered_listings_df["site_name"].nunique()
-        if unique_sites < config.get("min_store", 1):
-            logger.warning(f"Found only {unique_sites} sites, but minimum {config.get('min_store')} required")
+        if unique_sites < self.optimizationConfig.min_store:
+            logger.warning(f"Found only {unique_sites} sites, but minimum {self.optimizationConfig.min_store} required")
             # Adjust min_store if needed
-            config["min_store"] = min(unique_sites, config.get("min_store", 1))
+            self.optimizationConfig.min_store = min(unique_sites, self.optimizationConfig.min_store)
 
+        logger.info(f"[Weights] Cost: {self.optimizationConfig.weights.get('cost', 1.0)}")
+        logger.info(f"[Weights] Quality: {self.optimizationConfig.weights.get('quality', 1.0)}")
+        logger.info(f"[Weights] Availability: {self.optimizationConfig.weights.get('availability', 100.0)}")
+        logger.info(f"[Weights] Store Count: {self.optimizationConfig.weights.get('store_count', 0.3)}")
         logger.info(f"Initializing optimizer with {unique_sites} unique sites")
+
+    def init_fitness_creator(self, weights):
+        if not hasattr(creator, "FitnessMulti"):
+            creator.create(
+                "FitnessMulti",
+                base.Fitness,
+                weights=(
+                    -weights.get("cost", 1.0),
+                    weights.get("quality", 1.0),
+                    weights.get("availability", 100.0),
+                    -weights.get("store_count", 0.3),
+                ),
+            )
+            creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     def _standardize_dataframe(self, df):
         """Standardize DataFrame column names and validate quality values"""
@@ -135,7 +141,7 @@ class PurchaseOptimizer:
                 if not pd.to_numeric(df["quantity"], errors="coerce").notnull().all():
                     raise ValueError("Quantity column contains non-numeric values")
 
-    def run_optimization(self, card_names, config, celery_task=None):
+    def run_optimization(self, card_names, optimizationConfig, celery_task=None):
         try:
             error_collector = ErrorCollector.get_instance()  # Initialize error_collector
             milp_result = None
@@ -154,12 +160,14 @@ class PurchaseOptimizer:
             # logger.info(f"Available cards ({len(available_cards)}): {available_cards}")
 
             logger.info(f"Starting optimization with {len(card_names)} cards")
-            logger.info(f"Found {self.filtered_listings_df['site_name'].nunique()}/{config['max_store']} unique sites")
+            logger.info(
+                f"Found {self.filtered_listings_df['site_name'].nunique()}/{optimizationConfig.max_store} unique sites"
+            )
             # logger.info(f"Unique sites: {self.filtered_listings_df['site_name'].unique().tolist()}")
 
             final_result = None
             best_solution_records = None
-            if config["milp_strat"] or config["hybrid_strat"]:
+            if optimizationConfig.milp_strat or optimizationConfig.hybrid_strat:
                 logger.info("Running MILP optimization...")
 
                 if celery_task:
@@ -198,14 +206,14 @@ class PurchaseOptimizer:
                         "type": "milp",
                     }
                     final_result = milp_result
-                    if not config["hybrid_strat"]:
+                    if not optimizationConfig.hybrid_strat:
                         formatted_summary = self.format_optimization_summary(milp_result)
                         logger.info(f"Summary of Milp optimization:")
                         logger.info(f"{formatted_summary}")
                 else:
                     logger.warning("MILP optimization returned no results")
 
-            if config["nsga_strat"] or config["hybrid_strat"]:
+            if optimizationConfig.nsga_strat or optimizationConfig.hybrid_strat:
                 logger.info("Running NSGA-II optimization...")
                 milp_solution = None
 
@@ -221,7 +229,7 @@ class PurchaseOptimizer:
                         },
                     )
 
-                if config["hybrid_strat"] and milp_result and milp_result.get("best_solution"):
+                if optimizationConfig.hybrid_strat and milp_result and milp_result.get("best_solution"):
                     milp_solution = best_solution_records
                     # milp_solution = final_result["best_solution"]
 
@@ -242,7 +250,7 @@ class PurchaseOptimizer:
                     }
 
                     # For hybrid strategy, compare and select the better solution
-                    if config["hybrid_strat"] and milp_result:
+                    if optimizationConfig.hybrid_strat and milp_result:
                         logger.info("Comparing Solutions:")
                         logger.info("=" * 80)
                         logger.info("MILP Solution:")
@@ -700,7 +708,7 @@ class PurchaseOptimizer:
                 actual_quality = row.get("quality", "NM")
                 actual_version = row.get("version", "Standard")
 
-                if self.strict_preferences:
+                if self.optimizationConfig.strict_preferences:
                     if (
                         actual_language != preferred_language
                         or actual_quality != preferred_quality
@@ -714,7 +722,7 @@ class PurchaseOptimizer:
                 if actual_language != preferred_language:
                     penalty *= 1.2
                 if actual_quality != preferred_quality:
-                    penalty *= 1.2
+                    penalty *= 2
                 if actual_version != preferred_version:
                     penalty *= 1.3
 
@@ -722,12 +730,11 @@ class PurchaseOptimizer:
 
             # Calculate weighted prices
             filtered_listings_df["weighted_price"] = filtered_listings_df.apply(compute_weighted_price, axis=1)
-
-            filtered_listings_df["weighted_price"] = filtered_listings_df.apply(
-                lambda row: row["price"]
-                * CardQuality.get_weight(row["quality"])
-                * CardLanguage.get_weight(row.get("language", "Unknown")),
-                axis=1,
+            logger.info("[Weight Impact] Sample weighted prices after applying penalties:")
+            logger.info(
+                filtered_listings_df[["name", "site_name", "price", "quality", "language", "version", "weighted_price"]]
+                .head(10)
+                .to_string(index=False)
             )
 
             # Create costs dictionary
@@ -748,7 +755,7 @@ class PurchaseOptimizer:
 
     @staticmethod
     def _compute_pulp_optimization(
-        filtered_listings_df, user_wishlist_df, unique_cards, unique_stores, costs, total_qty, min_store, find_min_store
+        filtered_listings_df, user_wishlist_df, unique_cards, unique_stores, costs, total_qty, optimizationConfig
     ):
         """Run the MILP optimization with the setup data."""
         try:
@@ -758,12 +765,17 @@ class PurchaseOptimizer:
             logger.info("=" * 50)
             logger.info(f"Total cards to find: {total_qty}")
             logger.info(f"Available stores: {len(unique_stores)}")
-            logger.info(f"Strategy: {'Minimize store count' if find_min_store else f'Minimum {min_store} stores'}")
+            strategy_msg = (
+                "Minimize store count"
+                if optimizationConfig.find_min_store
+                else f"Minimum {optimizationConfig.min_store} stores"
+            )
+            logger.info(f"Strategy: {strategy_msg}")
 
             # --- Shared evaluation helper ---
             def evaluate_solution(store_count):
                 prob, buy_vars = PurchaseOptimizer._setup_prob(
-                    costs, unique_cards, unique_stores, user_wishlist_df, store_count
+                    costs, unique_cards, unique_stores, user_wishlist_df, optimizationConfig
                 )
 
                 if pulp.LpStatus[prob.status] != "Optimal":
@@ -793,7 +805,7 @@ class PurchaseOptimizer:
                     logger.info(f"  {store_info}")
 
             # --- Strategy 1: Minimize store count ---
-            if find_min_store:
+            if optimizationConfig.find_min_store:
                 complete_solutions = []
 
                 for store_count in range(1, len(unique_stores) + 1):
@@ -835,7 +847,7 @@ class PurchaseOptimizer:
 
             # --- Strategy 2: Optimize with fixed min_store ---
             else:
-                result = evaluate_solution(min_store)
+                result = evaluate_solution(optimizationConfig.min_store)
                 if result:
                     best_solution = result
                     logger.info(">>> Optimization with fixed min_store succeeded.")
@@ -853,12 +865,10 @@ class PurchaseOptimizer:
         return self._run_pulp(
             self.filtered_listings_df,
             self.user_wishlist_df,
-            self.config["min_store"],
-            self.config["find_min_store"],
         )
 
     # Modified _run_pulp to use the split functions
-    def _run_pulp(self, filtered_listings_df, user_wishlist_df, min_store, find_min_store):
+    def _run_pulp(self, filtered_listings_df, user_wishlist_df):
         """Main MILP optimization function."""
         try:
             # Setup phase
@@ -870,7 +880,7 @@ class PurchaseOptimizer:
             filtered_listings_df, unique_cards, unique_stores, costs, total_qty = setup_results
 
             # Validate minimum store requirement
-            if len(unique_stores) < min_store:
+            if len(unique_stores) < self.optimizationConfig.min_store:
                 logger.warning(
                     f"Adjusting min_store from {min_store} to {len(unique_stores)} " f"due to available stores"
                 )
@@ -884,8 +894,7 @@ class PurchaseOptimizer:
                 unique_stores,
                 costs,
                 total_qty,
-                min_store,
-                find_min_store,
+                self.optimizationConfig,
             )
 
         except Exception as e:
@@ -894,9 +903,10 @@ class PurchaseOptimizer:
             raise
 
     @staticmethod
-    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, min_store):
+    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, optimizationConfig):
         """Setup MILP problem with proper store constraints"""
         # Add validation for store count
+        min_store = optimizationConfig.min_store
         if len(unique_stores) < min_store:
             logger.warning(f"Adjusting min_store from {min_store} to {len(unique_stores)} due to available stores")
             min_store = len(unique_stores)
@@ -911,8 +921,9 @@ class PurchaseOptimizer:
         total_possible_cost = sum(min(costs[card].values()) for card in unique_cards)
 
         # Calculate weights for multi-objective
-        cost_weight = 0.7  # 70% weight on cost
-        store_weight = 0.3  # 30% weight on number of stores
+        weights = optimizationConfig.weights
+        cost_weight = weights.get("cost", 1.0)
+        store_weight = weights.get("store_count", 0.3)
 
         # Objective function combining normalized cost and store count
         prob += cost_weight * pulp.lpSum(
@@ -948,14 +959,16 @@ class PurchaseOptimizer:
 
         # 3. Store count constraints
         # Minimum store constraint
-        if min_store > 0:
-            prob += (pulp.lpSum(store_vars[store] for store in unique_stores) >= min_store, "Min_stores")
-
-        # Maximum store constraint (using current store count)
-        prob += (
-            pulp.lpSum(store_vars[store] for store in unique_stores) == min_store,
-            "Exact_stores",  # Force exactly min_store stores
-        )
+        if optimizationConfig.find_min_store is False:
+            prob += (
+                pulp.lpSum(store_vars[store] for store in unique_stores) == min_store,
+                "Exact_stores",
+            )
+        else:
+            prob += (
+                pulp.lpSum(store_vars[store] for store in unique_stores) >= min_store,
+                "Min_stores",
+            )
 
         # Solve the problem
         prob.solve(pulp.PULP_CBC_CMD(msg=False))
@@ -1065,9 +1078,11 @@ class PurchaseOptimizer:
         }
 
     def run_nsga_ii_optimization(self, milp_solution=None):
-        return self._run_nsga_ii(self.filtered_listings_df, self.user_wishlist_df, self.config, milp_solution)
+        return self._run_nsga_ii(
+            self.filtered_listings_df, self.user_wishlist_df, self.optimizationConfig, milp_solution
+        )
 
-    def _run_nsga_ii(self, filtered_listings_df, user_wishlist_df, config, milp_solution=None):
+    def _run_nsga_ii(self, filtered_listings_df, user_wishlist_df, optimizationConfig, milp_solution=None):
         """Enhanced NSGA-II implementation with better solution tracking"""
 
         # Initialize parameters
@@ -1078,7 +1093,7 @@ class PurchaseOptimizer:
         MUTPB = 0.15
         ELITE_SIZE = 30
 
-        toolbox = self._initialize_toolbox(filtered_listings_df, user_wishlist_df, config)
+        toolbox = self._initialize_toolbox(filtered_listings_df, user_wishlist_df, optimizationConfig)
 
         # Initialize population
         if milp_solution:
@@ -1225,7 +1240,7 @@ class PurchaseOptimizer:
         logger.warning("No complete solutions found in NSGA-II")
         return None, None
 
-    def _initialize_toolbox(self, filtered_listings_df, user_wishlist_df, config):
+    def _initialize_toolbox(self, filtered_listings_df, user_wishlist_df, optimizationConfig):
         toolbox = base.Toolbox()
         toolbox.register("attr_idx", random.randint, 0, len(filtered_listings_df) - 1)
         toolbox.register(
@@ -1238,7 +1253,7 @@ class PurchaseOptimizer:
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
         toolbox.register(
             "evaluate",
-            self._evaluate_solution_wrapper(filtered_listings_df, user_wishlist_df, config),
+            self._evaluate_solution_wrapper(filtered_listings_df, user_wishlist_df, optimizationConfig),
         )
         toolbox.register("mate", PurchaseOptimizer._custom_crossover)
         toolbox.register(
@@ -1458,7 +1473,7 @@ class PurchaseOptimizer:
                     individual[i] = random.choices(available_options.index, weights=weights, k=1)[0]
         return (individual,)
 
-    def _evaluate_solution_wrapper(self, filtered_listings_df, user_wishlist_df, config):
+    def _evaluate_solution_wrapper(self, filtered_listings_df, user_wishlist_df, optimizationConfig):
         """Revised evaluation function with better handling of incomplete solutions."""
 
         def evaluate_solution(individual):
@@ -1493,7 +1508,7 @@ class PurchaseOptimizer:
                 version = CardVersion.normalize(card["version"] if "version" in card else "standard")
 
                 # Strict filtering
-                if self.strict_preferences:
+                if self.optimizationConfig.strict_preferences:
                     if language != preferred_language or quality != preferred_quality or version != preferred_version:
                         continue
                 else:
@@ -1504,7 +1519,7 @@ class PurchaseOptimizer:
 
                 # Price adjustment
                 adjusted_price = float(card["price"])
-                if not self.strict_preferences:
+                if not self.optimizationConfig.strict_preferences:
                     adjusted_price *= language_penalty * quality_penalty * version_penalty
 
                 total_cost += adjusted_price
@@ -1525,8 +1540,8 @@ class PurchaseOptimizer:
             store_count = len(stores_used)
 
             # Apply store count constraints
-            if store_count > config.get("max_store", float("inf")):
-                store_penalty = (store_count - config["max_store"]) * 1000
+            if store_count > optimizationConfig.max_store:
+                store_penalty = (store_count - optimizationConfig.max_store) * 1000
             else:
                 store_penalty = 0
 

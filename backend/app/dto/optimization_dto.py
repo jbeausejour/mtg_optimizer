@@ -142,9 +142,13 @@ class CardPreference(BaseModel):
 class OptimizationConfigDTO(BaseModel):
     strategy: str = Field(..., pattern="^(milp|nsga-ii|hybrid)$")
     min_store: int = Field(..., gt=0)
+    max_store: int = 0
     find_min_store: bool
     buylist_id: int
     user_id: int
+    weights: Optional[Dict[str, float]] = Field(
+        default_factory=lambda: {"cost": 1.0, "quality": 1.0, "availability": 100.0, "store_count": 0.3}
+    )
     strict_preferences: bool = False
     user_preferences: Optional[Dict[str, CardPreference]] = None
 

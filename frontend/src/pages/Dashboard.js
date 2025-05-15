@@ -9,35 +9,35 @@ import { useTheme } from '../utils/ThemeContext';
 const { Title } = Typography; 
 
 
-const Dashboard = ({ userId }) => {
+const Dashboard = () => {
   const navigate = useNavigate();
   const { theme } = useTheme();
 
   // Use React Query for caching and automatic refetching
   const { data: sitesData } = useQuery({
-    queryKey: ['sites', userId],
-    queryFn: () => api.get('/sites', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['sites'],
+    queryFn: () => api.get('/sites').then(res => res.data),
     staleTime: 300000
   });
   
   
   const { data: buylistsData } = useQuery({
-    queryKey: ['buylists', userId],
-    queryFn: () => api.get('/buylists', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['buylists'],
+    queryFn: () => api.get('/buylists').then(res => res.data),
     staleTime: 300000
   });
   
   
   const { data: scansData, isLoading: scansLoading } = useQuery({
-    queryKey: ['scans', userId],
-    queryFn: () => api.get('/scans', { params: { user_id: userId, limit: 3 } }).then(res => res.data),
+    queryKey: ['scans'],
+    queryFn: () => api.get('/scans', { params: { limit: 3 } }).then(res => res.data),
     staleTime: 300000
   });
   
   
   const { data: optimizationsData, isLoading: optimizationsLoading } = useQuery({
-    queryKey: ['optimizations', userId],
-    queryFn: () => api.get('/results', { params: { user_id: userId, limit: 3 } }).then(res => {
+    queryKey: ['optimizations'],
+    queryFn: () => api.get('/results', { params: { limit: 3 } }).then(res => {
       const validOptimizations = res.data.filter(opt => opt.solutions?.length > 0);
       return validOptimizations;
     }),
@@ -46,8 +46,8 @@ const Dashboard = ({ userId }) => {
   
   
   const { data: topBuylistsData } = useQuery({
-    queryKey: ['topBuylists', userId],
-    queryFn: () => api.get('/buylists/top', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['topBuylists'],
+    queryFn: () => api.get('/buylists/top').then(res => res.data),
     staleTime: 300000
   });
   
@@ -277,7 +277,7 @@ const Dashboard = ({ userId }) => {
           >
             {scansData && scansData.length > 0 ? (
               <List
-                dataSource={scansData}
+                dataSource={scansData.slice(0, 10)}
                 renderItem={renderScanItem}
                 split={false}
               />

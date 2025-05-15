@@ -18,7 +18,7 @@ import { ExportOptions } from '../utils/exportUtils';
 
 const { Title, Text } = Typography;
 
-const PriceTracker = ({ userId }) => {
+const PriceTracker = () => {
   const { theme } = useTheme();
   const [selectedScan, setSelectedScan] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
@@ -67,32 +67,32 @@ const PriceTracker = ({ userId }) => {
   
   // React Query to fetch scans
   const { data: scans = [], isLoading: scansLoading } = useQuery({
-    queryKey: ['scans', userId],
-    queryFn: () => api.get('/scans', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['scans'],
+    queryFn: () => api.get('/scans').then(res => res.data),
     staleTime: 300000
   })
   
   // React Query to fetch scan details (when a scan is selected)
   const { data: selectedScanDetails, isLoading: detailsLoading } = useQuery({
-    queryKey: ['scanDetails', userId, selectedScan?.id],
-    queryFn: () => api.get(`/scans/${selectedScan.id}`, { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['scanDetails', selectedScan?.id],
+    queryFn: () => api.get(`/scans/${selectedScan.id}`).then(res => res.data),
     enabled: !!selectedScan?.id,
     staleTime: 300000
   })
   
   // Mutation to delete a scan
   const deleteScanMutation = useMutation({
-    mutationFn: (scanId) => api.delete(`/scans/${scanId}`, { params: { user_id: userId } }),
+    mutationFn: (scanId) => api.delete(`/scans/${scanId}`),
       // Optimistic update - remove the item immediately from UI
     onMutate: async (scanId) => {
       // Cancel any outgoing refetches so they don't overwrite our optimistic update
-      await queryClient.cancelQueries(['scans', userId]);
+      await queryClient.cancelQueries(['scans']);
       
       // Save the previous value
-      const previousScans = queryClient.getQueryData(['scans', userId]);
+      const previousScans = queryClient.getQueryData(['scans']);
       
       // Optimistically update to the new value
-      queryClient.setQueryData(['scans', userId], old => 
+      queryClient.setQueryData(['scans'], old => 
         old.filter(scan => scan.id !== scanId)
       );
       
@@ -101,13 +101,13 @@ const PriceTracker = ({ userId }) => {
     },
     onError: (err, scanId, context) => {
       // Roll back to the previous value if there's an error
-      queryClient.setQueryData(['scans', userId], context.previousScans);
+      queryClient.setQueryData(['scans'], context.previousScans);
       message.error('Failed to delete scan.');
     },
     onSettled: () => {
       // Always refetch after error or success to make sure the server state
       // and client state are in sync
-      queryClient.invalidateQueries(['scans', userId]);
+      queryClient.invalidateQueries(['scans']);
     }
   });
   
@@ -127,8 +127,7 @@ const PriceTracker = ({ userId }) => {
         name: card.name,
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
-        version: card.version || 'Standard',
-        user_id: userId,
+        version: card.version || 'Standard'
       });
       const enrichedCard = {
         ...card,
@@ -194,20 +193,19 @@ const PriceTracker = ({ userId }) => {
       // console.log("🔥 Sending bulk delete payload:", scanIdList);
       await api.delete('/scans', {
         data: {
-          user_id: userId,
           scan_ids: scanIdList
         }
       });
   
       setSelectedScanIds(new Set());
       message.success(`Successfully deleted ${scanIdList.length} scan(s).`);
-      queryClient.invalidateQueries(['scans', userId]);
+      queryClient.invalidateQueries(['scans']);
     } catch (error) {
       console.error('Bulk deletion error:', error);
       message.error('Failed to delete some or all of the selected scans.');
-      queryClient.invalidateQueries(['scans', userId]);
+      queryClient.invalidateQueries(['scans']);
     }
-  }, [selectedScanIds, setSelectedScanIds, queryClient, userId]);
+  }, [selectedScanIds, setSelectedScanIds, queryClient]);
   
   // Define columns for the scans table using the new utility functions
   const scanColumns = useMemo(() => {

@@ -15,7 +15,7 @@ import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title, Text } = Typography;
 
-const Results = ({ userId }) => {
+const Results = () => {
   const { theme } = useTheme();
   const [selectedResult, setSelectedResult] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
@@ -52,8 +52,8 @@ const Results = ({ userId }) => {
     data: optimizationResults = [], 
     isLoading: loading 
   } = useQuery({
-    queryKey: ['optimizations', userId],
-    queryFn: () => api.get('/results', { params: { user_id: userId } }).then(res => res.data),
+    queryKey: ['optimizations'],
+    queryFn: () => api.get('/results').then(res => res.data),
     staleTime: 300000
   })
   
@@ -74,7 +74,6 @@ const Results = ({ userId }) => {
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
         version: card.version || 'Standard',
-        user_id: userId,
       });
       const enrichedCard = {
         ...card,
@@ -120,17 +119,17 @@ const Results = ({ userId }) => {
   
   // Delete mutation for optimization results
   const deleteOptimizationMutation = useMutation({
-    mutationFn: (resultId) => api.delete(`/results/${resultId}`, { params: { user_id: userId } }),
+    mutationFn: (resultId) => api.delete(`/results/${resultId}`),
     // Optimistic update - remove the item immediately from UI
     onMutate: async (resultId) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries(['optimizations', userId]);
+      await queryClient.cancelQueries(['optimizations']);
       
       // Save the previous value
-      const previousResults = queryClient.getQueryData(['optimizations', userId]);
+      const previousResults = queryClient.getQueryData(['optimizations']);
       
       // Optimistically update to the new value
-      queryClient.setQueryData(['optimizations', userId], old => 
+      queryClient.setQueryData(['optimizations'], old => 
         old.filter(result => result.id !== resultId)
       );
       
@@ -139,7 +138,7 @@ const Results = ({ userId }) => {
     },
     onError: (err, resultId, context) => {
       // Roll back to the previous value if there's an error
-      queryClient.setQueryData(['optimizations', userId], context.previousResults);
+      queryClient.setQueryData(['optimizations'], context.previousResults);
       message.error('Failed to delete optimization.');
     },
     onSuccess: (_, resultId) => {
@@ -151,7 +150,7 @@ const Results = ({ userId }) => {
     },
     onSettled: () => {
       // Always refetch after error or success
-      queryClient.invalidateQueries(['optimizations', userId]);
+      queryClient.invalidateQueries(['optimizations']);
     }
   });
   
@@ -170,13 +169,13 @@ const Results = ({ userId }) => {
       await Promise.all(deletionPromises);
       setSelectedResultIds(new Set());
       message.success(`Successfully deleted ${count} result(s).`);
-      queryClient.invalidateQueries(['results', userId]);
+      queryClient.invalidateQueries(['results']);
     } catch (error) {
       console.error('Bulk deletion error:', error);
       message.error('Failed to delete some or all of the selected results.');
-      queryClient.invalidateQueries(['results', userId]);
+      queryClient.invalidateQueries(['results']);
     }
-  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, queryClient, userId]);
+  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, queryClient]);
   
   // Define columns for the results table
   const columns = useMemo(() => [

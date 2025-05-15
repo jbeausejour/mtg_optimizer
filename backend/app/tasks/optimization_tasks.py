@@ -39,12 +39,10 @@ def get_fresh_scan_results(fresh_cards, site_ids):
 
 
 class OptimizationTaskManager:
-    def __init__(self, site_ids, sites, card_list_from_frontend, strategy, min_store, find_min_store):
+    def __init__(self, site_ids, sites, card_list_from_frontend, optimizationConfig):
         self.site_ids = site_ids
         self.card_list_from_frontend = card_list_from_frontend
-        self.strategy = strategy
-        self.min_store = min_store
-        self.find_min_store = find_min_store
+        self.optimizationConfig = optimizationConfig
         self.sites = sites
         self.site_data = {site.id: {"name": site.name, "url": site.url} for site in self.sites}
         self.card_names = [card["name"] for card in card_list_from_frontend if "name" in card]
@@ -157,22 +155,21 @@ class OptimizationTaskManager:
         return scan_results
 
     def _process_listings_dataframe(self, df):
-        """Process and filter the card listings DataFrame"""
+        """Normalize and filter card listings"""
         if df.empty:
             return None
 
-        # Step 1: Define the quality weights once at the top (if not already)
-        quality_weights = {"NM": 1.0, "LP": 0.9, "MP": 0.8, "HP": 0.3, "DMG": 0.1}
-        mapping = CardQuality.get_upper_mapping()
-        # Step 2: Normalize quality efficiently (fully vectorized, no apply)
-        df["quality"] = df["quality"].str.strip().str.upper().map(mapping).fillna("NM")
+        # Step 1: Normalize all quality values
+        df["quality"] = df["quality"].astype(str)
+        df = CardQuality.validate_and_update_qualities(df, quality_column="quality")
 
-        # Step 3: Calculate weighted_price (fully vectorized)
-        df["weighted_price"] = df["price"] * df["quality"].map(quality_weights).fillna(1.0)
+        # Step 2: Compute weighted price using CardQuality.get_weight
+        df["weighted_price"] = df.apply(lambda row: row["price"] * CardQuality.get_weight(row["quality"]), axis=1)
 
-        # Filter and sort
-        filtered_df = df[df["quantity"] > 0].copy()
-        return filtered_df.sort_values(["name", "weighted_price"])
+        # Step 3: Filter cards with quantity > 0
+        df = df[df["quantity"] > 0].copy()
+
+        return df.sort_values(["name", "weighted_price"])
 
     @staticmethod
     def display_statistics(filtered_listings_df):
@@ -234,7 +231,7 @@ class OptimizationTaskManager:
 
         return len(sites_stats)
 
-    async def run_optimization(self, filtered_listings_df, user_wishlist_df, celery_task=None):
+    async def run_optimization(self, filtered_listings_df, user_wishlist_df, optimizationConfig, celery_task=None):
         """Run optimization with the prepared data"""
 
         logger.info("=== Starting Optimization Process ===")
@@ -243,7 +240,7 @@ class OptimizationTaskManager:
         if not filtered_listings_df.empty:
             logger.info(f"Total filtered listings: {len(filtered_listings_df)}")
 
-            max_store = self.display_statistics(filtered_listings_df)
+            optimizationConfig.max_store = self.display_statistics(filtered_listings_df)
 
         try:
             if filtered_listings_df is None or user_wishlist_df is None:
@@ -253,18 +250,9 @@ class OptimizationTaskManager:
             # Add site information to the DataFrame
             filtered_listings_df["site_info"] = filtered_listings_df["site_id"].map(lambda x: self.site_data.get(x, {}))
 
-            config = {
-                "milp_strat": self.strategy == "milp",
-                "nsga_strat": self.strategy == "nsga-ii",
-                "hybrid_strat": self.strategy == "hybrid",
-                "min_store": self.min_store,
-                "find_min_store": self.find_min_store,
-                "max_store": max_store,  # Introduce a maximum number of stores to use
-            }
+            optimizer = PurchaseOptimizer(filtered_listings_df, user_wishlist_df, optimizationConfig)
 
-            optimizer = PurchaseOptimizer(filtered_listings_df, user_wishlist_df, config=config)
-
-            optimization_results = optimizer.run_optimization(self.card_names, config, celery_task)
+            optimization_results = optimizer.run_optimization(self.card_names, optimizationConfig, celery_task)
 
             # Collect errors from ErrorCollector
             error_collector = ErrorCollector.get_instance()
@@ -464,6 +452,7 @@ async def _async_start_scraping_task(
     user_id,
     strict_preferences,
     user_preferences,
+    weights,
 ) -> Dict:
     """Async implementation of the start_scraping_task"""
 
@@ -477,14 +466,16 @@ async def _async_start_scraping_task(
     try:
         logger.info("_async_start_scraping_task started")
         total_start_time = time.time()
-        config = OptimizationConfigDTO(
+        optimizationConfig = OptimizationConfigDTO(
             strategy=strategy,
             min_store=min_store,
+            max_store=0,  # to be set later on
             find_min_store=find_min_store,
             buylist_id=buylist_id,
             user_id=user_id,
             strict_preferences=strict_preferences,
             user_preferences=user_preferences,
+            weights=weights or {},
         )
 
         # Initialize scan
@@ -492,7 +483,7 @@ async def _async_start_scraping_task(
 
         # Evaluate freshness
         card_names = [card["name"] for card in card_list_from_frontend]
-        fresh_cards, outdated_cards = await _evaluate_card_freshness(card_names, min_age_seconds)
+        fresh_cards, outdated_cards = await _evaluate_card_freshness(card_names, min_age_seconds, site_ids)
 
         logger.info(f"Found {len(fresh_cards)} fresh, {len(outdated_cards)} outdated cards")
         celery_task.progress = 10
@@ -519,7 +510,7 @@ async def _async_start_scraping_task(
 
         # Run optimization
         result = await _optimize_and_return_result(
-            celery_task, config, card_list_from_frontend, all_results, site_ids, scan_id, total_start_time
+            celery_task, optimizationConfig, card_list_from_frontend, all_results, site_ids, scan_id, total_start_time
         )
         return result
     except Exception as e:
@@ -537,14 +528,27 @@ async def _initialize_scan(buylist_id, celery_task):
     return scan.id
 
 
-async def _evaluate_card_freshness(card_names, min_age_seconds):
+async def _evaluate_card_freshness(card_names: List[str], min_age_seconds: int, expected_site_ids: List[int]):
     fresh, outdated = [], []
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
     async with celery_session_scope() as session:
         for name in card_names:
-            updated_at = await ScanService.get_latest_scan_updated_at_by_card_name(session, name)
-            if updated_at and (now - updated_at).total_seconds() < min_age_seconds:
+            scan_info = await ScanService.get_latest_scans_by_card_and_sites(session, name, expected_site_ids)
+
+            if not scan_info:
+                outdated.append(name)
+                continue
+
+            # Ensure all required sites are present and recent
+            is_fresh = True
+            for site_id in expected_site_ids:
+                updated_at = scan_info.get(site_id)
+                if not updated_at or (now - updated_at).total_seconds() > min_age_seconds:
+                    is_fresh = False
+                    break
+
+            if is_fresh:
                 fresh.append(name)
             else:
                 outdated.append(name)
@@ -631,40 +635,46 @@ async def _log_scrape_statistics(scan_id):
         SiteScrapeStats.from_db(stats).log_summary(logger)
 
 
-async def _optimize_and_return_result(celery_task, config, cards, all_results, site_ids, scan_id, start_time):
+async def _optimize_and_return_result(
+    celery_task, optimizationConfig, cards, all_results, site_ids, scan_id, start_time
+):
 
     async with celery_session_scope() as session:
         celery_task.progress = 60
         sites = (await session.execute(select(Site).filter(Site.id.in_(site_ids)))).scalars().all()
-        task_mgr = OptimizationTaskManager(
-            site_ids, sites, cards, config.strategy, config.min_store, config.find_min_store
-        )
+        task_mgr = OptimizationTaskManager(site_ids, sites, cards, optimizationConfig)
         await task_mgr.initialize(session)
         listings_df, wishlist_df = await task_mgr.prepare_optimization_data(all_results)
 
         if listings_df is None or listings_df.empty:
-            result = await handle_failure(session, "No valid card listings found", task_mgr, scan_id, config)
-            session.commit()
-            return result
+            fail_result = await handle_failure(
+                session, "No valid card listings found", task_mgr, scan_id, None, optimizationConfig
+            )
+            await session.commit()
+            return fail_result
 
         celery_task.progress = 70
-        result = await task_mgr.run_optimization(listings_df, wishlist_df, celery_task)
+        optimization_result = await task_mgr.run_optimization(listings_df, wishlist_df, optimizationConfig, celery_task)
 
-        if not result or result.get("status") != "success":
-            result = await handle_failure(session, "Optimization failed", task_mgr, scan_id, result, config)
-            session.commit()
-            return result
+        if not optimization_result or optimization_result.get("status") != "success":
+            fail_result = await handle_failure(
+                session, "Optimization failed", task_mgr, scan_id, optimization_result, optimizationConfig
+            )
+            await session.commit()
+            return fail_result
 
         celery_task.progress = 100
         elapsed = round(time.time() - start_time, 2)
         logger.info(f"Task completed in {elapsed} seconds")
-        result = await handle_success(session, result, task_mgr, scan_id, config)
+        good_result = await handle_success(
+            session, "Optimization completed successfully", task_mgr, scan_id, optimization_result, optimizationConfig
+        )
 
         await session.commit()
-    return result
+    return good_result
 
 
-async def handle_success(session, optimization_result, task_manager, scan_id, config):
+async def handle_success(session, message, task_manager, scan_id, optimization_result, optimizationConfig):
     """Handle successful optimization with async operations"""
     best_solution = optimization_result.get("best_solution", {})
     iterations = optimization_result.get("iterations", [])
@@ -742,9 +752,9 @@ async def handle_success(session, optimization_result, task_manager, scan_id, co
 
     result_dto = OptimizationResultDTO(
         status="Completed",
-        message="Optimization completed successfully",
-        buylist_id=config.buylist_id,
-        user_id=config.user_id,
+        message=message,
+        buylist_id=optimizationConfig.buylist_id,
+        user_id=optimizationConfig.user_id,
         sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=solutions,
@@ -758,13 +768,13 @@ async def handle_success(session, optimization_result, task_manager, scan_id, co
     return result_dto.model_dump()
 
 
-async def handle_failure(session, message, task_manager, scan_id, config, optimization_result=None):
+async def handle_failure(session, message, task_manager, scan_id, optimization_result, optimizationConfig):
     """Handle optimization failure with async operations"""
     result_dto = OptimizationResultDTO(
         status="Failed",
         message=message,
-        buylist_id=config.buylist_id,
-        user_id=config.user_id,
+        buylist_id=optimizationConfig.buylist_id,
+        user_id=optimizationConfig.user_id,
         sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=[],

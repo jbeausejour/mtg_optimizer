@@ -69,6 +69,13 @@ class ExternalDataSynchronizer:
         "shopify": SCRAPPING_METHOD_SHOPIFY,
         "other": SCRAPPING_METHOD_OTHER,
     }
+    scrapping_method_name = {
+        SCRAPPING_METHOD_CRYSTAL: "crystal",
+        SCRAPPING_METHOD_SCRAPPER: "scrapper",
+        SCRAPPING_METHOD_F2F: "f2f",
+        SCRAPPING_METHOD_SHOPIFY: "shopify",
+        SCRAPPING_METHOD_OTHER: "other",
+    }
 
     def __init__(self):
         self.error_collector = ErrorCollector.get_instance()
@@ -217,8 +224,10 @@ class ExternalDataSynchronizer:
                             if scrapping_method == ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
                             else ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
                         )
-                        logger.info(f"Strategy {old_strategy} failed, attempting with {scrapping_method}")
-
+                        logger.info(
+                            f"Strategy {ExternalDataSynchronizer.scrapping_method_name[old_strategy]} failed, "
+                            f"attempting with {ExternalDataSynchronizer.scrapping_method_name[scrapping_method]}"
+                        )
                         start_time_extract = time.time()  # Start timing
                         cards_df = await self.extract_info_crystal(soup, site_data, card_names, scrapping_method)
                         elapsed_time_extract = round(time.time() - start_time_extract, 2)  # Compute elapsed time
@@ -226,7 +235,7 @@ class ExternalDataSynchronizer:
                 if cards_df is None or cards_df.empty:
                     self.log_site_error(
                         site_name,
-                        "No Data Found",
+                        f"No Data Found {site_method}",
                         f"Strategy '{site_method}' failed to extract any valid card data",
                     )
                     return None

@@ -205,7 +205,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                       key={card}
                       color="red"
                       className="cursor-pointer"
-                      onClick={() => onCardClick({ name: card, set: card.set_code })}
+                      onClick={() => onCardClick(card)}
                     >
                       {card}
                     </Tag>
@@ -258,7 +258,7 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                           key={card} 
                           color="red"
                           className="cursor-pointer"
-                          onClick={() => onCardClick({ name: card, set: card.set_code })}
+                          onClick={() => onCardClick(card)}
                         >
                           {card}
                         </Tag>

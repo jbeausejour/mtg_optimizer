@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { jwtDecode }from 'jwt-decode';
 import api from './api';
 import SetupAxiosInterceptors from './AxiosConfig';
@@ -7,8 +7,8 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true); 
 
-  // Helper function to check if token is expiring soon
   const isTokenExpiringSoon = (decodedToken) => {
     const currentTime = Date.now();
     const tokenExpiryTime = decodedToken.exp * 1000;
@@ -16,57 +16,26 @@ export const AuthProvider = ({ children }) => {
     return tokenExpiryTime - currentTime < gracePeriod;
   };
 
-  // Function to check token and refresh it if necessary
-  const checkToken = async () => {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-      try {
-        const decodedToken = jwtDecode(token);
 
-        if (isTokenExpiringSoon(decodedToken)) {
-          try {
-            await refreshToken();  // Refresh the token if it's expiring soon
-          } catch (error) {
-            console.error('Token refresh failed:', error);
-            logout();  // Log out if the token refresh fails
-          }
-        } else if (decodedToken.exp * 1000 > Date.now()) {
-          console.info('Token is valid, set user');
-          setUser(decodedToken);  // Token is valid, set user
-        } else {
-          console.info('Token expired, log out user');
-          localStorage.removeItem('accessToken');
-          logout();  // Token expired, log out user
-        }
-      } catch (error) {
-        console.error('Invalid token:', error);
-        localStorage.removeItem('accessToken');
-        logout();
-      }
-    }
-  };
+  const logout = useCallback(() => {
+    localStorage.removeItem('accessToken');
+    setUser(null);
+  }, []);
 
-  const login = async (credentials) => {
-    try {
-      const response = await api.post('/login', credentials);
-      const { access_token, userId } = response.data; // Assume the response contains userId
-      localStorage.setItem('accessToken', access_token);
-      const decodedToken = jwtDecode(access_token);
-      setUser({ ...decodedToken, userId }); // Set user with userId
-      return userId; // Return userId
-    } catch (error) {
-      console.error('Login error:', error);
-      throw error;
-    }
-  };
 
-  const refreshToken = async () => {
+  const refreshToken = useCallback(async () => {
     try {
       const response = await api.post('/refresh-token', {}, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
+        withCredentials: true,
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('refreshToken')}`
+        }
       });
-      const { accessToken } = response.data;
-      localStorage.setItem('accessToken', accessToken);
+      const { access_token, refresh_token } = response.data;
+      localStorage.setItem('accessToken', access_token);
+      if (refresh_token) {
+          localStorage.setItem('refreshToken', refresh_token);
+      }
       const decodedToken = jwtDecode(accessToken);
       setUser(decodedToken);
       return decodedToken;
@@ -75,17 +44,57 @@ export const AuthProvider = ({ children }) => {
       logout();
       throw error;
     }
-  };
+  }, [logout]);
 
-  const logout = () => {
-    localStorage.removeItem('accessToken');
-    setUser(null);
-  };
 
-  // Call SetupAxiosInterceptors inside useEffect
+  const checkToken = useCallback(async () => {
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      try {
+        const decodedToken = jwtDecode(token);
+
+        if (isTokenExpiringSoon(decodedToken)) {
+          await refreshToken(); 
+        } else if (decodedToken.exp * 1000 > Date.now()) {
+          setUser(decodedToken); 
+        } else {
+          localStorage.removeItem('accessToken');
+          logout(); 
+        }
+      } catch (error) {
+        console.error('Invalid token:', error);
+        localStorage.removeItem('accessToken');
+        logout();
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      setLoading(false);
+    }
+  }, [refreshToken, logout]);
+
+  useEffect(() => {
+    checkToken();
+  }, [checkToken]);
+
   useEffect(() => {
     SetupAxiosInterceptors(checkToken, refreshToken, logout);
   }, [checkToken, refreshToken, logout]);
+
+  const login = async (credentials) => {
+    try {
+      const response = await api.post('/login', credentials);
+      const { access_token, refresh_token } = response.data;
+      localStorage.setItem('accessToken', access_token);
+      localStorage.setItem('refreshToken', refresh_token);
+      
+      const decodedToken = jwtDecode(access_token);
+      setUser(decodedToken);
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
+  };
 
   const value = {
     user,
@@ -93,6 +102,7 @@ export const AuthProvider = ({ children }) => {
     logout,
     refreshToken,
     isAuthenticated: !!user,
+    loading,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

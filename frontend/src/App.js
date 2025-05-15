@@ -35,22 +35,6 @@ const Layout = ({ children }) => {
 };
 
 function App() {
-  const [userId, setUserId] = useState(null);
-
-  useEffect(() => {
-    // Check if user is already logged in
-    const storedUserId = localStorage.getItem('userId');
-    if (storedUserId) {
-      // console.log('User is :', storedUserId);
-      setUserId(storedUserId);
-    }
-  }, []);
-
-  const handleLogin = (userId) => {
-    setUserId(userId);
-    // console.log('Setting User to :', userId); // Corrected variable name
-    localStorage.setItem('userId', userId);
-  };
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -58,17 +42,17 @@ function App() {
         <Router>
           <Layout>
             <Routes>
-              <Route path="/login" element={<Login onLogin={handleLogin} />} />
+              <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               <Route element={<ProtectedRoute />}>
-                <Route path="/" element={<Dashboard  userId={userId} />} />
-                <Route path="/buylist-management" element={<BuylistManagement userId={userId} />} />
-                <Route path="/site-management" element={<SiteManagement  userId={userId} />} />
-                <Route path="/optimize" element={<Optimize  userId={userId} />} />
-                <Route path="/results" element={<Results  userId={userId} />} />
-                <Route path="/results/:scanId" element={<Results  userId={userId} />} /> {/* Update this line */}
-                <Route path="/price-tracker" element={<PriceTracker  userId={userId} />} />
-                <Route path="/settings" element={<Settings  userId={userId} />} />
+                <Route path="/" element={<Dashboard/>} />
+                <Route path="/buylist-management" element={<BuylistManagement/>} />
+                <Route path="/site-management" element={<SiteManagement/>} />
+                <Route path="/optimize" element={<Optimize/>} />
+                <Route path="/results" element={<Results/>} />
+                <Route path="/results/:scanId" element={<Results/>} /> {/* Update this line */}
+                <Route path="/price-tracker" element={<PriceTracker/>} />
+                <Route path="/settings" element={<Settings/>} />
               </Route>
             </Routes>
           </Layout>

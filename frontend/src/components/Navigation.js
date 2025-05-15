@@ -27,16 +27,19 @@ const Navigation = () => {
     navigate('/login');
   };
 
-  const userMenu = (
-    <Menu>
-      <Menu.Item key="settings" icon={<SettingOutlined />}>
-        <Link to="/settings">Settings</Link>
-      </Menu.Item>
-      <Menu.Item key="logout" icon={<LogoutOutlined />} onClick={handleLogout}>
-        Logout
-      </Menu.Item>
-    </Menu>
-  );
+  const userMenuItems = [
+    {
+      key: 'settings',
+      icon: <SettingOutlined />,
+      label: <Link to="/settings">Settings</Link>,
+    },
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: 'Logout',
+      onClick: handleLogout,
+    },
+  ];
 
   const menuItems = [
     { key: "/", label: <Link to="/">Dashboard</Link> },
@@ -61,7 +64,7 @@ const Navigation = () => {
     {
       key: "user",
       label: (
-        <Dropdown menu={{ items: userMenu }}  trigger={['click']}>
+        <Dropdown menu={{ items: userMenuItems }} trigger={['click']}>
           <Avatar icon={<UserOutlined />} style={{ cursor: 'pointer' }} />
         </Dropdown>
       )
