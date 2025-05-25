@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship, validates
 
 from app import Base
@@ -34,6 +34,26 @@ class Scan(Base):
             "optimization_result": self.optimization_result.to_dict() if self.optimization_result else None,
         }
         return result
+
+
+class ScanAttempt(Base):
+    """Track all scan attempts, including when cards are not found"""
+
+    __tablename__ = "scan_attempt"
+
+    id = Column(Integer, primary_key=True)
+    scan_id = Column(Integer, ForeignKey("scan.id"), nullable=False)
+    site_id = Column(Integer, ForeignKey("site.id"), nullable=False)
+    card_name = Column(String, nullable=False)  # Normalized name
+    found = Column(Boolean, default=False)  # True if card was found, False if not
+    attempted_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    scan = relationship("Scan", backref="scan_attempts")
+    site = relationship("Site", backref="scan_attempts")
+
+    # Ensure we don't have duplicate entries for the same scan
+    __table_args__ = (UniqueConstraint("scan_id", "site_id", "card_name", name="_scan_site_card_uc"),)
 
 
 class ScanResult(BaseCard):

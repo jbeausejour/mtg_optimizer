@@ -6,9 +6,10 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.scan import Scan, ScanResult
+from app.models.scan import Scan, ScanResult, ScanAttempt
 from app.models.site import Site
 from app.services.async_base_service import AsyncBaseService
+from app.utils.helpers import normalize_string
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ class ScanService(AsyncBaseService[Scan]):
 
             scan_result = ScanResult(
                 scan_id=scan_id,
-                name=card_result["name"],
+                name=normalize_string(card_result["name"]),
                 price=card_result["price"],
                 site_id=card_result["site_id"],
                 set_name=card_result["set_name"],
@@ -174,14 +175,17 @@ class ScanService(AsyncBaseService[Scan]):
         Uses window functions to efficiently get the most recent entry per card.
         """
         try:
+            normalized_cards = [normalize_string(n) for n in fresh_cards]
             # This approach uses a CTE (Common Table Expression) for better performance with async SQLAlchemy
+            # Step 1: Find latest scan_id per (card, site)
             latest_scans_cte = (
-                select(ScanResult.name, ScanResult.site_id, func.max(ScanResult.updated_at).label("max_updated_at"))
-                .filter(and_(ScanResult.name.in_(fresh_cards), ScanResult.site_id.in_(site_ids)))
+                select(ScanResult.name, ScanResult.site_id, func.max(ScanResult.scan_id).label("latest_scan_id"))
+                .filter(and_(ScanResult.name.in_(normalized_cards), ScanResult.site_id.in_(site_ids)))
                 .group_by(ScanResult.name, ScanResult.site_id)
                 .cte("latest_scans")
             )
 
+            # Step 2: Join back to get all variants from that scan
             result = await session.execute(
                 select(ScanResult)
                 .join(
@@ -189,20 +193,44 @@ class ScanService(AsyncBaseService[Scan]):
                     and_(
                         ScanResult.name == latest_scans_cte.c.name,
                         ScanResult.site_id == latest_scans_cte.c.site_id,
-                        ScanResult.updated_at == latest_scans_cte.c.max_updated_at,
+                        ScanResult.scan_id == latest_scans_cte.c.latest_scan_id,  # match on scan_id instead
                     ),
                 )
-                .options(selectinload(ScanResult.site))  # <== this line ensures site is fetched eagerly
+                .options(selectinload(ScanResult.site))
             )
-
             return result.scalars().all()
         except Exception as e:
             logger.error(f"Error getting latest scan results by site and cards: {str(e)}")
             return []
 
+    @staticmethod
+    async def get_latest_scans_by_card_and_sites(
+        session: AsyncSession, card_name: str, site_ids: list[int]
+    ) -> dict[int, datetime]:
+        """
+        Returns a dict mapping site_id → latest updated_at for the given card.
+        """
+        card_name = normalize_string(card_name)
+
+        try:
+            stmt = (
+                select(ScanResult.site_id, func.max(ScanResult.updated_at).label("latest_updated_at"))
+                .where(ScanResult.name == card_name)
+                .where(ScanResult.site_id.in_(site_ids))
+                .group_by(ScanResult.site_id)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+
+            return {int(site_id): updated_at for site_id, updated_at in rows}
+        except Exception as e:
+            logger.error(f"Error getting updated_at for {card_name}: {str(e)}")
+            return {}
+
     @classmethod
     async def get_latest_scan_updated_at_by_card_name(cls, session: AsyncSession, card_name: str) -> Optional[datetime]:
         """Get only the updated_at timestamp for a specific card, safely detached from session"""
+        card_name = normalize_string(card_name)
         try:
             result = await session.execute(
                 select(ScanResult.updated_at)
@@ -232,3 +260,74 @@ class ScanService(AsyncBaseService[Scan]):
         except Exception as e:
             logger.error(f"Error fetching full scan by ID: {str(e)}")
             return None
+
+    @staticmethod
+    async def get_latest_scan_by_buylist(session, buylist_id: int):
+        return await session.scalar(
+            select(Scan).where(Scan.buylist_id == buylist_id).order_by(Scan.created_at.desc()).limit(1)
+        )
+
+    @staticmethod
+    async def get_scan_freshness_map_by_scan_id(session: AsyncSession, scan_id: int) -> dict[tuple[str, int], datetime]:
+        """
+        Returns a map: (card_name, site_id) → updated_at for a specific scan.
+        Used for evaluating freshness.
+        """
+        try:
+            result = await session.execute(
+                select(ScanResult.name, ScanResult.site_id, ScanResult.updated_at).where(ScanResult.scan_id == scan_id)
+            )
+            rows = result.all()
+            logger.info(f"[_evaluate_card_freshness] Loaded {len(rows)} scan result rows")
+
+            return {(normalize_string(name), site_id): updated_at for name, site_id, updated_at in rows}
+        except Exception as e:
+            logger.error(f"Error in get_scan_freshness_map_by_scan_id: {str(e)}")
+            return {}
+
+    @classmethod
+    async def create_scan_attempt(
+        cls, session: AsyncSession, scan_id: int, site_id: int, card_name: str, found: bool
+    ) -> ScanAttempt:
+        """Record that we attempted to scan a card on a site"""
+        attempt = ScanAttempt(
+            scan_id=scan_id,
+            site_id=site_id,
+            card_name=normalize_string(card_name),
+            found=found,
+            attempted_at=datetime.now(timezone.utc),
+        )
+        session.add(attempt)
+        return attempt
+
+    @classmethod
+    async def get_latest_scan_attempts(
+        cls, session: AsyncSession, card_names: List[str], site_ids: List[int]
+    ) -> Dict[Tuple[str, int], datetime]:
+        """Get the latest scan attempt time for each card-site combination"""
+        normalized_names = [normalize_string(name) for name in card_names]
+
+        # Subquery to get the latest attempt for each card-site combination
+        latest_attempts = (
+            select(
+                ScanAttempt.card_name, ScanAttempt.site_id, func.max(ScanAttempt.attempted_at).label("latest_attempt")
+            )
+            .filter(and_(ScanAttempt.card_name.in_(normalized_names), ScanAttempt.site_id.in_(site_ids)))
+            .group_by(ScanAttempt.card_name, ScanAttempt.site_id)
+            .cte("latest_attempts")
+        )
+
+        # Get the full records for the latest attempts
+        result = await session.execute(
+            select(ScanAttempt).join(
+                latest_attempts,
+                and_(
+                    ScanAttempt.card_name == latest_attempts.c.card_name,
+                    ScanAttempt.site_id == latest_attempts.c.site_id,
+                    ScanAttempt.attempted_at == latest_attempts.c.latest_attempt,
+                ),
+            )
+        )
+
+        attempts = result.scalars().all()
+        return {(attempt.card_name, attempt.site_id): attempt.attempted_at for attempt in attempts}

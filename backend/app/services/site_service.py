@@ -246,6 +246,6 @@ class SiteService(AsyncBaseService[Site]):
             logger.info(f"Using cached details for site {site_name}")
             return cls.site_details_cache[site_id]
 
-        logger.warning(f"[CACHE MISS] Site details cache miss for {site_name} (ID: {site_id}), initializing now.")
-        logger.info(f"[CACHE DEBUG] Current keys in site_details_cache: {list(cls.site_details_cache.keys())}")
+        # logger.warning(f"[CACHE MISS] Site details cache miss for {site_name} (ID: {site_id}), initializing now.")
+        # logger.info(f"[CACHE DEBUG] Current keys in site_details_cache: {list(cls.site_details_cache.keys())}")
         return await cls.init_site_details_cache(site_data)

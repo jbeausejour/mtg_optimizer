@@ -107,72 +107,70 @@ class NetworkDriver:
         max_retries = 3
         retry_count = 0
         backoff_factor = 1
-        wait_time = 1
-        semaphore = asyncio.Semaphore(5)
+        # wait_time = 1
+        # semaphore = asyncio.Semaphore(5)
 
-        async with semaphore:
-            while retry_count < max_retries:
-                connection_info = {
-                    "attempt": retry_count + 1,
-                    "max_retries": max_retries,
-                }  # Initialize with basic info
+        # async with semaphore:
+        while retry_count < max_retries:
+            connection_info = {
+                "attempt": retry_count + 1,
+                "max_retries": max_retries,
+            }  # Initialize with basic info
 
-                start_time = time.time()  # Start timing
+            start_time = time.time()  # Start timing
+            retry_count += 1
+            try:
                 retry_count += 1
-                try:
-                    retry_count += 1
 
-                    # Enhanced timeout configuration
-                    timeout = aiohttp.ClientTimeout(total=100, connect=30, sock_read=60, sock_connect=15)
-                    connection_info["timeout"] = str(timeout)
+                # Enhanced timeout configuration
+                timeout = aiohttp.ClientTimeout(total=100, connect=30, sock_read=60, sock_connect=15)
+                connection_info["timeout"] = str(timeout)
 
-                    # Create session factory function for the context manager
-                    def create_session():
-                        return aiohttp.ClientSession(
-                            connector=TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True),
-                            timeout=timeout,
-                            headers=headers,
-                        )
-
-                    # Use the managed_aiohttp_session context manager
-                    async with managed_aiohttp_session(create_session, name=f"{site['name']}-request") as session:
-                        # Make the request
-                        if use_json:
-                            async with session.post(url, json=payload, headers=headers, timeout=timeout) as response:
-                                return await self._handle_response(
-                                    response, retry_count, connection_info, url, site, start_time
-                                )
-                        else:
-                            async with session.post(url, data=payload, headers=headers, timeout=timeout) as response:
-                                return await self._handle_response(
-                                    response, retry_count, connection_info, url, site, start_time
-                                )
-
-                except asyncio.TimeoutError:
-                    elapsed_time = round(time.time() - start_time, 2)
-                    logger.error(
-                        f"Timeout after {elapsed_time:.2f}s posting to {site['name']} (Attempt {retry_count}/{max_retries})"
+                # Create session factory function for the context manager
+                def create_session():
+                    return aiohttp.ClientSession(
+                        connector=TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True),
+                        timeout=timeout,
+                        headers=headers,
                     )
-                    await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
-                    continue
 
-                except aiohttp.ClientError as e:
-                    elapsed_time = round(time.time() - start_time, 2)
-                    connection_info["error"] = f"Client error: {str(e)}"
-                    logger.error(
-                        f"Connection failed to {site['name']} (Took {elapsed_time} seconds): {connection_info}"
-                    )
-                    await asyncio.sleep(backoff_factor)
-                    continue
+                # Use the managed_aiohttp_session context manager
+                async with managed_aiohttp_session(create_session, name=f"{site['name']}-request") as session:
+                    # Make the request
+                    if use_json:
+                        async with session.post(url, json=payload, headers=headers, timeout=timeout) as response:
+                            return await self._handle_response(
+                                response, retry_count, connection_info, url, site, start_time
+                            )
+                    else:
+                        async with session.post(url, data=payload, headers=headers, timeout=timeout) as response:
+                            return await self._handle_response(
+                                response, retry_count, connection_info, url, site, start_time
+                            )
 
-                except Exception as e:
-                    elapsed_time = round(time.time() - start_time, 2)
-                    connection_info["error"] = f"Unexpected error: {str(e)}"
-                    logger.error(f"Request failed to {site['name']} (Took {elapsed_time} seconds): {connection_info}")
-                    await asyncio.sleep(backoff_factor)
-                    continue
+            except asyncio.TimeoutError:
+                elapsed_time = round(time.time() - start_time, 2)
+                logger.error(
+                    f"Timeout after {elapsed_time:.2f}s posting to {site['name']} (Attempt {retry_count}/{max_retries})"
+                )
+                await asyncio.sleep(backoff_factor * (2 ** (retry_count - 1)))
+                continue
 
-                backoff_factor *= 2
+            except aiohttp.ClientError as e:
+                elapsed_time = round(time.time() - start_time, 2)
+                connection_info["error"] = f"Client error: {str(e)}"
+                logger.error(f"Connection failed to {site['name']} (Took {elapsed_time} seconds): {connection_info}")
+                await asyncio.sleep(backoff_factor)
+                continue
+
+            except Exception as e:
+                elapsed_time = round(time.time() - start_time, 2)
+                connection_info["error"] = f"Unexpected error: {str(e)}"
+                logger.error(f"Request failed to {site['name']} (Took {elapsed_time} seconds): {connection_info}")
+                await asyncio.sleep(backoff_factor)
+                continue
+
+            backoff_factor *= 2
 
         return None
 
@@ -201,10 +199,10 @@ class NetworkDriver:
         logger.debug(f"Connection details for {site['name']}: {connection_info}")
 
         if response.status == 200:
-            if retry_count > 1:
-                logger.info(f"Success posting to {site['name']} after {retry_count} attempts in {elapsed_time} seconds")
-            else:
-                logger.info(f"Success posting to {site['name']} in {elapsed_time} seconds")
+            # if retry_count > 1:
+            #     logger.info(f"Success posting to {site['name']} after {retry_count} attempts in {elapsed_time} seconds")
+            # else:
+            #     logger.info(f"Success posting to {site['name']} in {elapsed_time} seconds")
 
             return await response.text()
 

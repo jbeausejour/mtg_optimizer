@@ -88,3 +88,21 @@ class OptimizationService(AsyncBaseService[OptimizationResult]):
         except Exception as e:
             logger.error(f"Error fetching latest optimization: {str(e)}")
             return None
+
+    @classmethod
+    async def delete_optimization_by_scan_id(cls, session: AsyncSession, scan_id: int) -> bool:
+        """Delete optimization result(s) associated with a scan ID"""
+        try:
+            stmt = select(cls.model_class).where(cls.model_class.scan_id == scan_id)
+            results = (await session.execute(stmt)).scalars().all()
+
+            if not results:
+                return False
+
+            for result in results:
+                await session.delete(result)
+            return True
+
+        except Exception as e:
+            logger.error(f"Error deleting optimization result for scan {scan_id}: {e}")
+            return False

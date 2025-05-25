@@ -152,6 +152,18 @@ class OptimizationConfigDTO(BaseModel):
     strict_preferences: bool = False
     user_preferences: Optional[Dict[str, CardPreference]] = None
 
+    @property
+    def milp_strat(self) -> bool:
+        return self.strategy == "milp"
+
+    @property
+    def nsga_strat(self) -> bool:
+        return self.strategy == "nsga-ii"
+
+    @property
+    def hybrid_strat(self) -> bool:
+        return self.strategy == "hybrid"
+
     @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v: str) -> str:

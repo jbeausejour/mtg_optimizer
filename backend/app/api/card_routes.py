@@ -292,9 +292,9 @@ async def update_user_buylist_card(card_id):
     try:
         data = await request.get_json()
         user_id = get_jwt_identity()
-        buylistid = data.get("buylistId")  # Ensure buylist id is provided
+        buylistId = data.get("buylistId")  # Ensure buylist id is provided
 
-        if not user_id or not buylistid:
+        if not user_id or not buylistId:
             return jsonify({"error": "User ID and Buylist ID are required"}), 400
 
         logger.info(f"Received update request for card {card_id}: {data}")
@@ -429,29 +429,55 @@ async def get_card_by_scryfall_id(card_id):
 @jwt_required
 async def task_status(task_id):
     try:
-        task = AsyncResult(task_id, app=celery_app)
-        if task.state == "PENDING":
-            response = {"state": task.state, "status": "Task is pending..."}
-        elif task.state == "FAILURE":
-            response = {"state": task.state, "status": "Task failed", "error": str(task.info)}  # Get error info
-        elif task.state == "SUCCESS":
-            response = {"state": task.state, "result": task.get()}
-        else:
-            # Handle PROGRESS or other states
-            response = {
-                "state": task.state,
-                "status": task.info.get("status", ""),
-                "progress": task.info.get("progress", 0),
-            }
+        result = AsyncResult(task_id)
 
-        # logger.info(
-        #     f"Task {task_id} state: {task.state}, status: {task.info.get('status', '')}, progress: {task.info.get('progress', 0)}"
-        # )
+        response = {
+            "task_id": task_id,
+            "state": result.state,
+            "current": result.info if isinstance(result.info, dict) else str(result.info),
+            "result": None,
+        }
+
+        if result.state == "PENDING":
+            response["current"] = {"status": "Task pending...", "progress": 0}
+        elif result.state == "PROCESSING":
+            # Include subtask information if available
+            if isinstance(result.info, dict) and "subtasks" in result.info:
+                response["subtasks"] = result.info["subtasks"]
+        elif result.state == "SUCCESS":
+            response["result"] = result.result
+        elif result.state == "FAILURE":
+            response["error"] = str(result.info)
+
         return jsonify(response), 200
 
     except Exception as e:
-        logger.exception(f"Error checking task status: {str(e)}")
-        return jsonify({"state": "ERROR", "status": "Error checking task status", "error": str(e)}), 500
+        logger.error(f"Error getting task status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@card_routes.route("/cancel_task/<task_id>", methods=["POST"])
+@jwt_required
+async def cancel_task(task_id):
+    main_result = AsyncResult(task_id)
+
+    # Try to find subtasks from state or result
+    subtasks = []
+    if isinstance(main_result.result, dict) and "subtask_ids" in main_result.result:
+        subtasks = main_result.result["subtask_ids"]
+
+    elif isinstance(main_result.info, dict) and "subtask_ids" in main_result.info:
+        subtasks = main_result.info["subtask_ids"]
+
+    # Revoke subtasks
+    for sid in subtasks:
+        celery_app.control.revoke(sid, terminate=True, signal="SIGTERM")
+
+    # Revoke main task
+    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+
+    logger.info(f"Canceled task {task_id} and subtasks {subtasks}")
+    return jsonify({"status": "REVOKED", "task_id": task_id, "subtasks": subtasks})
 
 
 ############################################################################################################
@@ -474,21 +500,36 @@ async def start_scraping():
     card_list_from_frontend = data.get("card_list", [])
     strategy = data.get("strategy", "milp")
     min_store = data.get("min_store", 1)
+    max_store = data.get("max_store", 0)
     find_min_store = data.get("find_min_store", False)
-    min_age_seconds = data.get("min_age_seconds", 1800)
+    min_age_seconds = data.get("min_age_seconds", 3600)
     strict_preferences = data.get("strict_preferences", False)
     user_preferences = data.get("user_preferences", {})
     weights = data.get("weights", {})
+    logger.info(f"Task start_scraping received:")
+    logger.info(f"buylist_id: {buylist_id}")
+    logger.info(f"strategy: {strategy}")
+    logger.info(f"min_store: {min_store}")
+    logger.info(f"max_store: {max_store}")
+    logger.info(f"find_min_store: {find_min_store}")
+    logger.info(f"strict_preferences: {strict_preferences}")
+    DEFAULT_PREFS = {"set_name": None, "language": "English", "quality": "NM", "version": "Standard"}
+
+    filtered_user_preferences = {card: prefs for card, prefs in user_preferences.items() if prefs != DEFAULT_PREFS}
+
+    logger.info(f"Non-default user_preferences: {filtered_user_preferences}")
+    logger.info(f"weights: {weights}")
 
     if not site_ids or not card_list_from_frontend:
         return jsonify({"error": "Missing site_ids or card_list"}), 400
-    logger.info(f"Task start_scraping about to start")
+    # logger.info(f"Task start_scraping about to start")
     task = start_scraping_task.apply_async(
         args=[
             site_ids,
             card_list_from_frontend,
             strategy,
             min_store,
+            max_store,
             find_min_store,
             min_age_seconds,
             buylist_id,
@@ -776,3 +817,20 @@ async def get_latest_optimization_results():
         }
 
         return jsonify(response)
+
+
+@card_routes.route("/results/<int:scan_id>", methods=["DELETE"])
+@jwt_required
+async def delete_optimization_result(scan_id):
+    """Delete optimization result for a specific scan ID"""
+    user_id = get_jwt_identity()
+    logger.info(f"User {user_id} requested deletion of optimization result for scan {scan_id}")
+
+    async with flask_session_scope() as session:
+        success = await OptimizationService.delete_optimization_by_scan_id(session, scan_id)
+        await session.commit()
+
+        if success:
+            return jsonify({"message": f"Optimization result for scan {scan_id} deleted"}), 200
+        else:
+            return jsonify({"error": f"No result found for scan {scan_id}"}), 404

@@ -23,7 +23,8 @@ async def start_worker():
         logger.info(f"Celery result backend: {celery_app.conf.result_backend}")
 
         # Start celery (synchronously)
-        celery_app.start(["worker", "--loglevel=info", "--pool=solo"])
+        celery_app.start(["worker", "--loglevel=info"])
+        # celery_app.start(["worker", "--loglevel=info", "--pool=solo"])
 
 
 if __name__ == "__main__":

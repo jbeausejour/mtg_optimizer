@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
-    "@ant-design/plots": "^2.4.0",
+    "chart.js": "^4.4.1",
+    "react-chartjs-2": "^5.2.0",
     "@tanstack/react-query": "^5.17.19",
     "antd": "^5.24.9",
     "axios": "^1.8.4",

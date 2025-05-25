@@ -6,7 +6,6 @@ import { useTheme } from '../utils/ThemeContext';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
 import api from '../utils/api';
 import ColumnSelector from '../components/ColumnSelector';
-import { ExportOptions } from '../utils/exportUtils';
 import { getColumnSearchProps, getStandardPagination } from '../utils/tableConfig';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
@@ -409,11 +408,6 @@ const Results = () => {
                 onColumnToggle={handleColumnVisibilityChange}
                 persistKey="results_columns"
               />
-              <ExportOptions 
-                dataSource={optimizationResults} 
-                columns={columns} 
-                filename="optimization_results_export"
-              />
               <Button
                 onClick={handleResetAllFilters}
                 icon={<ClearOutlined />}
@@ -439,6 +433,8 @@ const Results = () => {
           <EnhancedTable
             dataSource={optimizationResults}
             columns={columns.filter(col => visibleColumns.includes(col.key))}
+            exportFilename="optimization_results_export"
+            exportCopyFormat={null} 
             rowKey="id"
             onChange={handleTableChange}
             pagination={pagination}

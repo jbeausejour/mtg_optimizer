@@ -14,7 +14,6 @@ import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 import ColumnSelector from '../components/ColumnSelector';
-import { ExportOptions } from '../utils/exportUtils';
 
 const { Title, Text } = Typography;
 
@@ -464,6 +463,7 @@ const PriceTracker = () => {
                       ...getColumnSearchProps('updated_at', detailSearchInput, detailFilteredInfo, 'Search date', handleDetailSearch, handleDetailReset),
                     }
                   ])}
+                  exportFilename="Price-Tracker"
                   rowKey="id"
                   loading={detailsLoading}
                   persistStateKey="price_tracker_detail_table"
@@ -483,11 +483,6 @@ const PriceTracker = () => {
                 visibleColumns={visibleColumns}
                 onColumnToggle={handleColumnVisibilityChange}
                 persistKey="price_tracker_columns"
-              />
-              <ExportOptions 
-                dataSource={scans}
-                columns={scanColumns}
-                filename="price_scans_export"
               />
               <Button onClick={handleResetAllFilters} icon={<ClearOutlined />}>
                 Reset All Filters
@@ -511,6 +506,8 @@ const PriceTracker = () => {
           <EnhancedTable
             dataSource={scans}
             columns={scanColumns}
+            exportFilename="price_scans_export"
+            exportCopyFormat={null} 
             rowKey="id"
             loading={scansLoading}
             persistStateKey="price_tracker_table"

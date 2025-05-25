@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Row, Col, Card, Table, Collapse, Typography, Tag, Space, Button, message } from 'antd';
 import { WarningOutlined, ShoppingCartOutlined } from '@ant-design/icons';
 import { getStandardTableColumns } from '../utils/tableConfig';
+import EnhancedTable from './EnhancedTable';
 import PurchaseHandler from './PurchaseUrls';
 import api from '../utils/api';
 
@@ -316,15 +317,16 @@ const SolutionDetails = ({ solution, onCardClick }) => {
   ];
 
   return (
-    <Table
+    <EnhancedTable
       dataSource={dataSource}
       columns={columns}
-      pagination={false}
+      exportFilename={`optimization_solution_${solution.id || 'export'}`}
+      persistKey={`optimization_solution_${solution.id || 'default'}`}
       scroll={{ y: 400 }}
+      pagination={false}
       size="small"
       onRow={(record) => ({
         onClick: () => {
-          // console.log("Clicked card:", record);
           onCardClick?.(record);
         }
       })}

@@ -187,6 +187,32 @@ class CardQuality(str, Enum):
         return QUALITY_MAPPING_UPPER
 
     @classmethod
+    def calculate_quality_preference_penalty(cls, actual_quality: str, preferred_quality: str) -> float:
+        """
+        Calculate penalty based on quality preference vs actual quality.
+        Better quality = no penalty, worse quality = graduated penalty
+        """
+        quality_order = {"NM": 0, "LP": 1, "MP": 2, "HP": 3, "DMG": 4}
+
+        actual_rank = quality_order.get(actual_quality, 4)  # Default to DMG if unknown
+        preferred_rank = quality_order.get(preferred_quality, 0)  # Default to NM if unknown
+
+        if actual_rank <= preferred_rank:
+            # Equal or better quality = no penalty
+            return 1.0
+
+        # Worse quality = graduated penalty based on steps down
+        steps_worse = actual_rank - preferred_rank
+        penalties = {
+            1: 1.3,  # One step worse (NM->LP, LP->MP, etc.)
+            2: 1.8,  # Two steps worse (NM->MP, LP->HP, etc.)
+            3: 3.0,  # Three steps worse (NM->HP, LP->DMG, etc.)
+            4: 5.0,  # Four steps worse (NM->DMG)
+        }
+
+        return penalties.get(steps_worse, 5.0)  # Cap at 5x penalty
+
+    @classmethod
     def normalize(cls, quality: str) -> str:
         if not quality:
             logger.debug("Empty quality value, defaulting to NM")
@@ -293,6 +319,27 @@ class CardLanguage(str, Enum):
     def get_weight(cls, language: str) -> float:
         return LANGUAGE_WEIGHTS.get(language, LANGUAGE_WEIGHTS["default"])
 
+    @classmethod
+    def calculate_language_preference_penalty(cls, actual_language: str, preferred_language: str) -> float:
+        """
+        Calculate penalty for language preference mismatch.
+        English is generally preferred, other languages get penalties when not requested.
+        """
+        # If they match, no penalty
+        if actual_language == preferred_language:
+            return 1.0
+
+        # If user wants any language and gets English, no penalty (upgrade)
+        if actual_language == "English":
+            return 1.0
+
+        # If user wants English but gets other language, apply standard language weight
+        if preferred_language == "English":
+            return cls.get_weight(actual_language)
+
+        # If user wants specific non-English and gets different non-English, moderate penalty
+        return 1.5
+
 
 class CardVersion(str, Enum):
     """Enumeration of possible card version values"""
@@ -318,3 +365,31 @@ class CardVersion(str, Enum):
             return cls.STANDARD.value
 
         return normalized
+
+    @classmethod
+    def calculate_version_preference_penalty(cls, actual_version: str, preferred_version: str) -> float:
+        """
+        Calculate penalty for version preference mismatch.
+        Premium versions (foil, etc.) when not requested get moderate penalties.
+        Standard when premium requested gets higher penalty.
+        """
+        # If they match, no penalty
+        if actual_version == preferred_version:
+            return 1.0
+
+        # Define version desirability (higher = more premium)
+        version_ranks = {"Standard": 0, "Foil": 1, "Etched": 1, "Showcase": 2, "Extended Art": 2, "Borderless": 3}
+
+        actual_rank = version_ranks.get(actual_version, 0)
+        preferred_rank = version_ranks.get(preferred_version, 0)
+
+        # Getting higher rank than requested = small penalty (might not want premium)
+        if actual_rank > preferred_rank:
+            return 1.2
+
+        # Getting lower rank than requested = higher penalty
+        if actual_rank < preferred_rank:
+            steps_down = preferred_rank - actual_rank
+            return 1.5 + (steps_down * 0.3)  # 1.5x, 1.8x, 2.1x penalties
+
+        return 1.0

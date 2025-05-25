@@ -1,3 +1,6 @@
+import React from 'react';
+import { Button, Dropdown, message } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 /**
@@ -95,35 +98,43 @@ export const exportToExcel = (dataSource, columns, filename = 'export.xlsx') => 
   saveAs(blob, filename);
 };
 
-/**
- * Component for export options dropdown
- */
-import React from 'react';
-import { Button, Dropdown } from 'antd';
-import { DownloadOutlined } from '@ant-design/icons';
-
-export const ExportOptions = ({ dataSource, columns, filename = 'export' }) => {
+export const ExportOptions = ({ dataSource, columns, filename = 'export', copyFormat = 'cardlist' }) => {
   const handleExportCSV = () => {
     exportToCSV(dataSource, columns, `${filename}.csv`);
   };
-  
+
   const handleExportExcel = () => {
     exportToExcel(dataSource, columns, `${filename}.xlsx`);
   };
-  
-  const menuItems = [
-    {
-      key: 'csv',
-      label: 'Export as CSV',
-      onClick: handleExportCSV,
-    },
-    {
-      key: 'excel',
-      label: 'Export as Excel',
-      onClick: handleExportExcel,
-    },
-  ];
 
+  const handleCopyToClipboard = () => {
+    let text = '';
+
+    if (copyFormat === 'cardlist') {
+      text = dataSource
+        .filter(row => row.name)
+        .map(row => `${row.quantity || 1} ${row.name}`)
+        .join('\n');
+    }
+
+    if (!text) {
+      message.warning('Nothing to copy or unsupported format.');
+      return;
+    }
+
+    navigator.clipboard.writeText(text)
+      .then(() => message.success('Copied to clipboard!'))
+      .catch(() => message.error('Failed to copy.'));
+  };
+
+  const menuItems = [
+    { key: 'csv', label: 'Export as CSV', onClick: handleExportCSV },
+    { key: 'excel', label: 'Export as Excel', onClick: handleExportExcel },
+  ];
+  
+  if (copyFormat === 'cardlist') {
+    menuItems.push({ key: 'clipboard', label: 'Copy to Clipboard (qty name)', onClick: handleCopyToClipboard });
+  }
   
   return (
     <Dropdown menu={{ items: menuItems }} trigger={['click']}>

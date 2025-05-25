@@ -56,6 +56,32 @@ class ErrorCollector:
         return cls()
 
 
+class CardSkipTracker:
+    def __init__(self):
+        self.skipped_cards = []
+
+    def add(self, site_name, card_name, reason, raw_data=None):
+        self.skipped_cards.append(
+            {
+                "site": site_name,
+                "card": card_name,
+                "reason": reason,
+                "raw": raw_data,
+            }
+        )
+
+    def log_all(self):
+        if not self.skipped_cards:
+            return
+        logger.warning("=" * 100)
+        logger.warning("Skipped Cards Summary:")
+        for entry in self.skipped_cards:
+            logger.warning(
+                f"[{entry['site']}] '{entry['card']}' skipped due to: {entry['reason']}\n" f"↪ Raw: {entry['raw']}"
+            )
+        logger.warning("=" * 100)
+
+
 class ExternalDataSynchronizer:
     SCRAPPING_METHOD_CRYSTAL = 1
     SCRAPPING_METHOD_SCRAPPER = 2
@@ -83,6 +109,7 @@ class ExternalDataSynchronizer:
         # Create a thread pool for CPU-intensive operations
         self.thread_pool = ThreadPoolExecutor(max_workers=8)
         self._initialized_site_cache = set()
+        self.skip_tracker = CardSkipTracker()
 
     async def __aenter__(self):
         return self
@@ -124,7 +151,13 @@ class ExternalDataSynchronizer:
         return "unknown", None
 
     async def process_site(
-        self, site_data, card_names, scrape_stats: SiteScrapeStats, progress_increment, celery_task=None
+        self,
+        site_data,
+        card_names,
+        scrape_stats: SiteScrapeStats,
+        progress_increment,
+        celery_task=None,
+        progress_callback=None,
     ):
         """Process a single site and return results without saving to DB
 
@@ -138,6 +171,7 @@ class ExternalDataSynchronizer:
         Returns:
             List of card results or None if no results
         """
+        self.skip_tracker = CardSkipTracker()
         # Create a dedicated network driver for this site's processing
         async with managed_network_driver(get_network_driver) as network:
             start_time = time.time()  # Start timing
@@ -155,7 +189,7 @@ class ExternalDataSynchronizer:
                 site_method, ExternalDataSynchronizer.SCRAPPING_METHOD_CRYSTAL
             )
 
-            logger.info(f"Processing site: {site_name} [{site_method}]")
+            logger.info(f"Processing site: {site_name} [{site_method}] ({len(card_names)} cards)")
             # logger.info(f"\t o Strategy: {site_method}")
             # logger.info(f"\t o URL: {site_url}")
             # if site_api_url:
@@ -294,35 +328,14 @@ class ExternalDataSynchronizer:
                         r["site_id"] = site_id
                         r["site_name"] = site_name
 
-                    # Only update progress if celery_task has progress attribute and progress_increment > 0
-                    if celery_task and progress_increment > 0:
-                        try:
-                            if not hasattr(celery_task, "progress"):
-                                celery_task.progress = 0
+                    logger.info(
+                        f"Updating progress for {site_name} from {celery_task.progress} to {celery_task.progress + progress_increment}"
+                    )
 
-                            logger.info(
-                                f"Updating progress for {site_name} from {celery_task.progress} to {celery_task.progress + progress_increment}"
-                            )
-
-                            celery_task.progress += progress_increment
-                            celery_task.update_state(
-                                state="PROCESSING",
-                                meta={
-                                    "status": f"Completed scraping {site_name}",
-                                    "progress": f"{celery_task.progress:.2f}",
-                                    "details": {
-                                        "site_progress": {
-                                            site_id: {
-                                                "status": "Completed",
-                                                "card_count": len(results),
-                                                "error": None,
-                                            }
-                                        }
-                                    },
-                                },
-                            )
-                        except Exception as e:
-                            logger.warning(f"Error updating progress for {site_name}: {str(e)}")
+                    progress_fraction = found_cards / total_cards if total_cards > 0 else 0
+                    increment = progress_fraction * 100  # Scale to percentage
+                    if progress_callback:
+                        progress_callback(increment, total_cards)
 
                     return results
                 else:
@@ -333,24 +346,6 @@ class ExternalDataSynchronizer:
                 elapsed_time = round(time.time() - start_time, 2)
                 self.log_site_error(site_name, f"Processing Error (after {elapsed_time} seconds)", str(e))
                 return None
-
-    async def process_dataframe_OLD(self, func, *args, **kwargs):
-        """Run DataFrame operations in thread pool to avoid blocking the event loop"""
-        try:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(self.thread_pool, lambda: func(*args, **kwargs))
-        except Exception as e:
-            logger.error(f"Error in thread pool execution: {str(e)}")
-            return pd.DataFrame()
-
-    async def extract_info_crystal_OLD(self, soup, site, card_names, scrapping_method):
-        """Extract card information with non-blocking execution"""
-
-        # Run the CPU-intensive operations in a thread pool
-        # return await self.process_dataframe(
-        #     self._extract_info_crystal_sync_vectorized, soup, site, card_names, scrapping_method
-        # )
-        return await self.process_dataframe_OLD(self.extract_info_crystal, soup, site, card_names, scrapping_method)
 
     async def extract_info_crystal(self, soup, site, card_names, scrapping_method):
         """
@@ -398,6 +393,7 @@ class ExternalDataSynchronizer:
 
         cards = []
         seen_variants = set()
+        total_variant = 0
 
         if scrapping_method == self.SCRAPPING_METHOD_CRYSTAL:
             # Form-based extraction focusing on add-to-cart forms
@@ -405,17 +401,21 @@ class ExternalDataSynchronizer:
             if not forms:
                 logger.warning(f"No add-to-cart forms found for site {site.get('name')}")
                 forms = soup.find_all("form", {"class": "add-to-cart-form"})
-
+            total_variant = len(forms)
             for form in forms:
                 try:
                     product = form.find_parent("li", {"class": "product"})
                     if not product:
-                        logger.info(f"Could not find parent product container for form {form}")
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Product could not be found", data
+                        # )
                         continue
 
                     # Check if it's a Magic card
                     if not self.is_magic_card(product):
-                        logger.debug(f"Skipping non-Magic card product")
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Non Magic card", data
+                        # )
                         continue
                     # Extract data from form attributes
                     data = form.attrs
@@ -428,17 +428,32 @@ class ExternalDataSynchronizer:
                         "data-variant",
                     ]
                     if not all(attr in data for attr in required_attrs):
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Attributes could not be found", data
+                        # )
                         continue
 
                     current_card = parse_card_string(data["data-name"])
                     if not current_card:
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "current_card could not be found", data
+                        # )
                         continue
 
                     # Clean and validate card name
                     name = clean_card_name(current_card["Name"], card_names)
+                    name_variants = [name, name.split(" // ")[0].strip()]
                     # logger.info(f"after clean_card_name form: {name} ")
-                    if not name or (name not in card_names and name.split(" // ")[0].strip() not in card_names):
-                        continue
+                    # Check if any variant is in card_names directly
+                    if not any(variant in card_names for variant in name_variants):
+                        # If not, check case-insensitive match
+                        lower_card_names = [c.lower() for c in card_names]
+                        if not any(variant.lower() in lower_card_names for variant in name_variants):
+                            # self.skip_tracker.add(
+                            #     site.get("name"), locals().get("name", "<unknown>"), "Card not in requested list", data
+                            # )
+                            # logger.info(f"[CRYSTAL][SKIP] No match for: '{name}' → variants: {name_variants}")
+                            continue
 
                     category = data.get("data-category")
                     set_name = category
@@ -459,7 +474,9 @@ class ExternalDataSynchronizer:
                             promo_suffix = name_parts[-1] if len(name_parts) > 1 else None
                             if promo_suffix and promo_suffix in promo_set_mappings:
                                 set_name = promo_set_mappings[promo_suffix]
-
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), f"Excluded category: {category}", data
+                        # )
                         continue
 
                     # Try to match with closest set name using CardService
@@ -478,13 +495,19 @@ class ExternalDataSynchronizer:
                                     f"[SET CODE] Fallback used for set '{original_set_name}' -> '{set_name}' using URL: {product_url}"
                                 )
                             else:
-                                logger.warning(
-                                    f"[SET CODE] No valid fallback set found in URL for '{original_set_name}': {product_url}"
-                                )
+                                # self.skip_tracker.add(
+                                #     site.get("name"), name, f"Fallback used for set for: {set_name}", data
+                                # )
                                 continue  # Skip if still no valid set found
                         else:
                             logger.warning(f"No product URL found for '{original_set_name}'")
-                            continue  # Skip if no URL found
+                            # self.skip_tracker.add(
+                            #     site.get("name"),
+                            #     locals().get("name", "<unknown>"),
+                            #     f"No product URL found for: {set_name}",
+                            #     data,
+                            # )
+                            continue
 
                     # logger.info(f"after get_closest_set_name form: {set_name} ")
                     set_code = await CardService.get_clean_set_code_from_set_name(set_name)
@@ -502,19 +525,28 @@ class ExternalDataSynchronizer:
                                 set_name = fallback_set_name
                                 break
                         if not set_code:
-                            logger.info(
-                                f"[SET CODE] Skipping card after fallback {name} unknown set: {set_code} for site: {site.get('name')}\n {data}"
-                            )
+                            # logger.info(
+                            #     f"[SET CODE] Skipping card after fallback {name} unknown set: {set_code} for site: {site.get('name')}\n {data}"
+                            # )
+                            # self.skip_tracker.add(
+                            #     site.get("name"), name, f"Failed to resolve set code for: {set_name}", data
+                            # )
                             continue
                     if set_code.lower() == "pbook":
-                        logger.info(
-                            f"after pbook: {set_code} name:{set_name} for site: {site.get('name')}\n data: {data}\n {data}"
-                        )
+                        # logger.info(
+                        #     f"after pbook: {set_code} name:{set_name} for site: {site.get('name')}\n data: {data}\n {data}"
+                        # )
+                        # self.skip_tracker.add(
+                        #     site.get("name"), name, f"Failed to resolve set code for: {set_name}", data
+                        # )
                         continue
                     # logger.info(f"after get_clean_set_code form: {set_code} ")
 
                     test = data.get("data-variant", "").strip()
                     if not test:
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Missing variant ID", data
+                        # )
                         continue
 
                     quality, language = extract_quality_language(test)
@@ -532,6 +564,9 @@ class ExternalDataSynchronizer:
 
                     variant_id = data.get("data-vid")
                     if not variant_id:
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Missing variant ID", data
+                        # )
                         continue
                     # Create card info dictionary
                     card_info = {
@@ -586,14 +621,22 @@ class ExternalDataSynchronizer:
                 products = container.find_all("li", {"class": "product"})
                 for product in products:
                     if not self.is_magic_card(product):
-                        logger.debug(f"Skipping non-Magic card product")
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "Non Magic card", data
+                        # )
                         continue
                     variants_section = product.find("div", {"class": "variants"})
                     if not variants_section:
+                        # self.skip_tracker.add(
+                        #     site.get("name"), locals().get("name", "<unknown>"), "No variant could be found", data
+                        # )
                         continue
 
                     for variant in variants_section.find_all("div", {"class": "variant-row"}):
                         if "no-stock" in variant.get("class", []):
+                            # self.skip_tracker.add(
+                            #     site.get("name"), locals().get("name", "<unknown>"), "No stocks found", data
+                            # )
                             continue
                         try:
                             # Extract and validate quality and language
@@ -603,37 +646,71 @@ class ExternalDataSynchronizer:
                             ) or variant.find("span", {"class": "variant-short-info"})
 
                             if not variant_data:
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "No variant_data could be found",
+                                #     data,
+                                # )
                                 continue
                             form_tag = variant.find("form", {"class": "add-to-cart-form"})
                             if not form_tag:
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "No form_Tag could be found",
+                                #     data,
+                                # )
                                 continue
                             variant_id = form_tag.get("data-vid")
                             if not variant_id:
-                                logger.warning(f"variant_id not found for variant")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "No variant_id could be found",
+                                #     data,
+                                # )
                                 continue
 
                             # Get set name
                             meta_div = product.find("div", {"class": "meta"})
                             if not meta_div:
-                                logger.warning(f"Meta div not found for variant")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "No meta_div could be found",
+                                #     data,
+                                # )
                                 continue
 
                             # Get and validate name
                             name_header = meta_div.find("h4", {"class": "name"}) if meta_div else None
                             if not name_header:
-                                logger.warning(f"Name header not found for variant")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "No name header could be found",
+                                #     data,
+                                # )
                                 continue
 
                             parsed_card = parse_card_string(name_header.text)
                             if not parsed_card:
-                                logger.warning(f"Failed to parse card name: {name_header.text}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "Failed to parse card name",
+                                #     data,
+                                # )
                                 continue
 
                             clean_name = clean_card_name(parsed_card.get("Name", name_header.text), card_names)
                             if not clean_name or (
                                 clean_name not in card_names and clean_name.split(" // ")[0].strip() not in card_names
                             ):
-                                logger.debug(f"Invalid card name: {clean_name}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"), locals().get("name", "<unknown>"), "Invalid card name", data
+                                # )
                                 continue
 
                             # Extract and validate quality and language
@@ -642,33 +719,54 @@ class ExternalDataSynchronizer:
                             quality, language = extract_quality_language(quality_language)
 
                             if not quality or not language:
-                                logger.warning(f"Quality or language not found for variant{quality_language}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"), name, "Quality or language not found for variant", data
+                                # )
                                 continue
 
                             # Extract and validate quantity
                             quantity = extract_quantity(variant)
                             if quantity is None or quantity <= 0:
-                                logger.warning(f"Invalid quantity for variant: {quantity}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "Invalid quantity for variant",
+                                #     data,
+                                # )
                                 continue
 
                             # Extract and validate price
                             price = extract_price(variant)
                             if price is None or price <= 0:
-                                logger.warning(f"Invalid price for variant: {price}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "Invalid price for variant",
+                                #     data,
+                                # )
                                 continue
 
                             set_elem = meta_div.find("span", {"class": "category"}) if meta_div else None
                             if not set_elem:
-                                logger.warning(f"Set element not found for variant")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "Set element not found for variant",
+                                #     data,
+                                # )
                                 continue
 
                             if any(cat in set_elem.text.lower() for cat in excluded_categories):
-                                logger.warning(f"Excluded category found: {set_elem.text}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"), locals().get("name", "<unknown>"), "Excluded category found", data
+                                # )
                                 continue
 
                             set_name = await CardService.get_closest_set_name(set_elem.text.lower())
                             if not set_name:
-                                logger.warning(f"Failed to get set name for variant: {set_elem.text}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"), name, "Failed to get set name for variant", data
+                                # )
                                 continue
                             set_code = await CardService.get_clean_set_code_from_set_name(set_name)
                             if not set_code:
@@ -687,16 +785,21 @@ class ExternalDataSynchronizer:
                                         set_name = fallback_set_name
                                         break
                                 if not set_code:
-                                    logger.warning(
-                                        f"[SET CODE] Failed to get set code for variant set name: {set_name}"
-                                    )
+                                    # self.skip_tracker.add(
+                                    #     site.get("name"), name, "Failed to get set code for variant", data
+                                    # )
                                     continue
 
                             # Determine foil status and version
                             is_foil = parsed_card.get("Foil", False)
                             version = CardVersion.normalize(parsed_card.get("Version", "Standard"))
                             if not version:
-                                logger.warning(f"Failed to get version for variant: {parsed_card}")
+                                # self.skip_tracker.add(
+                                #     site.get("name"),
+                                #     locals().get("name", "<unknown>"),
+                                #     "Failed to get version for variant",
+                                #     data,
+                                # )
                                 continue
 
                             card_info = {
@@ -732,8 +835,9 @@ class ExternalDataSynchronizer:
                             logger.error(f"Error processing variant: {str(e)}", exc_info=True)
                             continue
 
+        # self.skip_tracker.log_all()
         if not cards:
-            logger.warning(f"No valid cards found for {site.get('name')}")
+            logger.warning(f"No valid cards found for {site.get('name')} ({total_variant} variants)")
             return pd.DataFrame()
 
         try:
@@ -745,10 +849,6 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error creating DataFrame for {site.get('name')}: {str(e)}", exc_info=True)
             return pd.DataFrame()
-
-    async def extract_info_f2f_json_OLD(self, json_data, site, card_names):
-        """Extract card information from f2f API response with non-blocking execution"""
-        return await self.process_dataframe_OLD(self.extract_info_f2f_json, json_data, site, card_names)
 
     async def extract_info_f2f_json(self, json_data, site, card_names):
         """Extract card information from F2F Shopify API response."""
@@ -809,10 +909,6 @@ class ExternalDataSynchronizer:
         except Exception as e:
             logger.error(f"Error processing F2F JSON for {site.name}: {str(e)}", exc_info=True)
             return pd.DataFrame()
-
-    async def extract_info_shopify_json_OLD(self, json_data, site, card_names):
-        """Extract card information from Shopify API response with non-blocking execution"""
-        return await self.process_dataframe_OLD(self.extract_info_shopify_json, json_data, site, card_names)
 
     async def extract_info_shopify_json(self, json_data, site, card_names):
         """Extract card information from Shopify API response"""
@@ -948,7 +1044,9 @@ class ExternalDataSynchronizer:
         while retry_count < max_retries:
             try:
                 retry_count += 1
-                logger.debug(f"Attempting batch search for {site_name} (attempt {retry_count}/{max_retries})")
+                logger.debug(
+                    f"Attempting batch search ({len(batch_card_names)}) for {site_name} (attempt {retry_count}/{max_retries})"
+                )
 
                 payload, request_headers = await self.generate_search_payload_crystal(site_data, batch_card_names)
 
@@ -1018,7 +1116,7 @@ class ExternalDataSynchronizer:
             # Prepare tasks for all batches
             tasks = [self._search_crystal_batch(site_data, batch, network) for batch in card_batches]
 
-            logger.info(f"Sending {len(card_batches)} batch requests for {site_name}...")
+            logger.info(f"Sending {len(card_batches)} batch of requests for {site_name}...")
 
             # Execute all batch requests concurrently
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1100,18 +1198,18 @@ class ExternalDataSynchronizer:
                 batch_card_count = len(batch_cards_found)
 
                 # Log batch results
-                logger.info(f"[F2F] Batch {batch_index+1} found {batch_card_count} cards")
+                # logger.info(f"[F2F] Batch {batch_index+1} found {batch_card_count} cards")
 
                 if batch_card_count > 0:
                     # Log first few found cards for debugging
-                    found_cards = list(batch_cards_found.keys())
-                    logger.info(f"[F2F] Batch {batch_index+1} cards: {', '.join(found_cards[:5])}")
+                    # found_cards = list(batch_cards_found.keys())
+                    # logger.info(f"[F2F] Batch {batch_index+1} cards: {', '.join(found_cards[:5])}")
 
                     # Merge with overall results
                     all_results["Cards"].update(batch_cards_found)
                 else:
                     # If no cards found, retry once with delay
-                    logger.info(f"[F2F] No cards in batch {batch_index+1}, retrying after delay")
+                    # logger.info(f"[F2F] No cards in batch {batch_index+1}, retrying after delay")
                     await asyncio.sleep(3)
 
                     retry_response = await network.post_request(
@@ -1121,7 +1219,7 @@ class ExternalDataSynchronizer:
                     if retry_response:
                         retry_results = json.loads(retry_response)
                         retry_cards = retry_results.get("Cards", {})
-                        logger.info(f"[F2F] Retry for batch {batch_index+1} found {len(retry_cards)} cards")
+                        # logger.info(f"[F2F] Retry for batch {batch_index+1} found {len(retry_cards)} cards")
                         all_results["Cards"].update(retry_cards)
 
                 # Wait between batches to avoid overwhelming the server
@@ -1136,8 +1234,8 @@ class ExternalDataSynchronizer:
                 continue
 
         # Log final results
-        total_cards_found = len(all_results["Cards"])
-        logger.info(f"[F2F] Total cards found across all batches: {total_cards_found}/{len(card_names)}")
+        # total_cards_found = len(all_results["Cards"])
+        # logger.info(f"[F2F] Total cards found across all batches: {total_cards_found}/{len(card_names)}")
 
         # Check how many requested cards were found
         found_requested = set(all_results["Cards"].keys()).intersection(set(card_names))
@@ -1149,11 +1247,11 @@ class ExternalDataSynchronizer:
                 if key != "Cards":
                     all_results[key] = batch_results[key]
 
-        missing_cards = set(card_names) - set(all_results["Cards"].keys())
-        if missing_cards:
-            logger.warning(f"[F2F] The following {len(missing_cards)} cards were not found:")
-            for missing in sorted(missing_cards):
-                logger.warning(f"[F2F] Missing card: {missing}")
+        # missing_cards = set(card_names) - set(all_results["Cards"].keys())
+        # if missing_cards:
+        #     logger.warning(f"[F2F] The following {len(missing_cards)} cards were not found:")
+        #     for missing in sorted(missing_cards):
+        #         logger.warning(f"[F2F] Missing card: {missing}")
 
         return all_results
 

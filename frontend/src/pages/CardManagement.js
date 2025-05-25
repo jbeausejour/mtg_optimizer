@@ -10,7 +10,6 @@ import { getStandardTableColumns } from '../utils/tableConfig';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import ImportCardsToBuylist from '../components/CardManagement/ImportCardsToBuylist';
 import ColumnSelector from '../components/ColumnSelector';
-import { ExportOptions } from '../utils/exportUtils';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
@@ -78,12 +77,12 @@ const BuylistManagement = () => {
   const deleteCardMutation = useMutation({
     mutationFn: ({ card_id, cardData }) => api.delete('/buylist/cards', {
       data: { 
-        buylistid: selectedBuylist?.buylistId, 
+        buylistId: selectedBuylist?.buylistId, 
         cards: [cardData]
       }
     }),
       // Optimistic update - remove the item immediately from UI
-      onMutate: async (cardId) => {
+      onMutate: async ({ card_id }) => {
         // Cancel any outgoing refetches
         await queryClient.cancelQueries(['buylist', selectedBuylist?.buylistId]);
         
@@ -91,20 +90,19 @@ const BuylistManagement = () => {
         const previousCards = queryClient.getQueryData(['buylist', selectedBuylist?.buylistId]) || [...cards];
         
         // Optimistically update the UI
-        setCards(prev => prev.filter(card => card.id !== cardId));
+        setCards(prev => prev.filter(card => card.id !== card_id));
         
         // Update selection state if necessary
         setSelectedCardIds(prev => {
           const newSet = new Set(prev);
-          newSet.delete(cardId);
+          newSet.delete(card_id);
           return newSet;
         });
         
         // Return the previous value in case of rollback
         return { previousCards };
       },
-      onError: (err, cardId, context) => {
-        // Roll back to the previous value if there's an error
+      onError: (err, variables, context) => {
         setCards(context.previousCards);
         message.error('Failed to delete card.');
       },
@@ -112,18 +110,15 @@ const BuylistManagement = () => {
         message.success('Card deleted successfully.');
       },
       onSettled: () => {
-        // Always refetch after error or success
         queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
       }
-    }
-  );
+    });
 
   const bulkDeleteCardsMutation = useMutation({
     mutationFn: async ({ cardsToDelete }) => {
       return await api.delete('/buylist/cards', {
         data: {
-          buylistid: selectedBuylist?.buylistId,
-
+          buylistId: selectedBuylist?.buylistId,
           cards: cardsToDelete
         }
       });
@@ -242,9 +237,17 @@ const BuylistManagement = () => {
             <Button type="link" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); handleEditCard(record); }}>
               Edit
             </Button>
-            <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => { e.stopPropagation(); handleDeleteCard(record.id); }}>
-              Delete
-            </Button>
+            <Popconfirm
+              title="Are you sure you want to delete this card?"
+              okText="Yes"
+              cancelText="No"
+              onConfirm={() => handleDeleteCard(record.id)}  // ✅ Use the ID here
+              onCancel={(e) => e.stopPropagation()}
+            >
+              <Button danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
+                Delete
+              </Button>
+            </Popconfirm>
           </Space>
         )
       }
@@ -521,7 +524,7 @@ const BuylistManagement = () => {
   
     const payload = {
       ...updatedCard,
-      buylistid: selectedBuylist?.buylistId,
+      buylistId: selectedBuylist?.buylistId,
       quantity: updatedCard.quantity || 1,
       foil: updatedCard.foil || false,
 
@@ -556,8 +559,9 @@ const BuylistManagement = () => {
       message.error('Card not found');
       return;
     }
+  
     deleteCardMutation.mutate({
-      id: cardId,
+      card_id: cardId,
       cardData: {
         name: cardToDelete.name,
         quantity: cardToDelete.quantity || 1
@@ -707,21 +711,17 @@ const BuylistManagement = () => {
           onColumnToggle={handleColumnVisibilityChange}
           persistKey="card_management_columns"
         />
-        <ExportOptions 
-          dataSource={cards} 
-          columns={cardColumns}
-          filename="cards_export"
-        />
+
         <Button icon={<ClearOutlined />} onClick={handleResetAllFilters}>
           Reset All Filters
         </Button>
         {selectedCardIds.size > 0 && (
           <Popconfirm
-          title={`Are you sure you want to delete ${selectedCardIds.size} card(s)?`}
-          okText="Yes"
-          cancelText="No"
-          onConfirm={handleBulkDelete}
-        >
+            title={`Are you sure you want to delete ${selectedCardIds.size} card(s)?`}
+            okText="Yes"
+            cancelText="No"
+            onConfirm={handleBulkDelete}
+          >
           <Button danger icon={<DeleteOutlined />}>
             Delete Selected ({selectedCardIds.size})
           </Button>
@@ -733,6 +733,7 @@ const BuylistManagement = () => {
       <EnhancedTable
         dataSource={cards}
         columns={cardColumns.filter(col => visibleColumns.includes(col.key) || col.key === 'actions')}
+        exportFilename={selectedBuylist?.name}
         rowKey="id"
         loading={loading}
         persistStateKey="card_management_table"

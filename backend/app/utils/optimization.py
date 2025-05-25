@@ -2,11 +2,12 @@ import logging
 import random
 from collections import defaultdict
 from functools import partial
-from typing import Dict
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
 import pulp
+from pulp import PULP_CBC_CMD
 from app.constants import CardLanguage, CardQuality, CardVersion
 from app.utils.data_fetcher import ErrorCollector
 from deap import algorithms, base, creator, tools
@@ -48,7 +49,7 @@ class PurchaseOptimizer:
             for _, row in self.user_wishlist_df.iterrows()
         }
 
-        logger.info("PurchaseOptimizer initialized with config: %s", self.optimizationConfig)
+        # logger.info("PurchaseOptimizer initialized with config: %s", self.optimizationConfig)
 
         self._validate_input_data()
 
@@ -66,17 +67,21 @@ class PurchaseOptimizer:
         logger.info(f"Initializing optimizer with {unique_sites} unique sites")
 
     def init_fitness_creator(self, weights):
+        def safe(w, fallback):
+            return w if isinstance(w, (int, float)) and w > 0 else fallback
+
         if not hasattr(creator, "FitnessMulti"):
             creator.create(
                 "FitnessMulti",
                 base.Fitness,
                 weights=(
-                    -weights.get("cost", 1.0),
-                    weights.get("quality", 1.0),
-                    weights.get("availability", 100.0),
-                    -weights.get("store_count", 0.3),
+                    -safe(weights.get("cost"), 1.0),
+                    safe(weights.get("quality"), 1.0),
+                    safe(weights.get("availability"), 100.0),
+                    -safe(weights.get("store_count"), 0.3),
                 ),
             )
+            logger.info(f"Creating DEAP fitness class with weights: {weights}")
             creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     def _standardize_dataframe(self, df):
@@ -197,6 +202,8 @@ class PurchaseOptimizer:
                     milp_iterations = []
                     if all_milp_solutions:
                         for solution in all_milp_solutions:
+                            solution["source"] = "milp"
+                            solution["strategy"] = "milp"
                             milp_iterations.append(solution)
 
                     milp_result = {
@@ -207,9 +214,10 @@ class PurchaseOptimizer:
                     }
                     final_result = milp_result
                     if not optimizationConfig.hybrid_strat:
-                        formatted_summary = self.format_optimization_summary(milp_result)
-                        logger.info(f"Summary of Milp optimization:")
-                        logger.info(f"{formatted_summary}")
+                        PurchaseOptimizer.print_detailed_solution_summary(milp_result, len(card_names))
+                        # formatted_summary = self.format_optimization_summary(milp_result)
+                        # logger.info(f"Summary of Milp optimization:")
+                        # logger.info(f"{formatted_summary}")
                 else:
                     logger.warning("MILP optimization returned no results")
 
@@ -248,6 +256,9 @@ class PurchaseOptimizer:
                         "iterations": nsga_iterations,
                         "type": "nsga",
                     }
+                    for iteration in nsga_iterations:
+                        iteration["source"] = "nsga"
+                        iteration["strategy"] = "nsga"
 
                     # For hybrid strategy, compare and select the better solution
                     if optimizationConfig.hybrid_strat and milp_result:
@@ -280,10 +291,11 @@ class PurchaseOptimizer:
                     "unknown_languages": list(error_collector.unknown_languages),
                     "unknown_qualities": list(error_collector.unknown_qualities),
                 }
-                formatted_summary = self.format_optimization_summary(final_result)
-                logger.info(f"Summary of optimization:")
-                for item in formatted_summary:
-                    logger.info(item)
+                PurchaseOptimizer.print_detailed_solution_summary(final_result, len(card_names))
+                # formatted_summary = self.format_optimization_summary(final_result)
+                # logger.info(f"Summary of optimization:")
+                # for item in formatted_summary:
+                #     logger.info(item)
                 return final_result
             else:
                 logger.error("Optimization failed to produce valid results")
@@ -307,119 +319,333 @@ class PurchaseOptimizer:
                 "errors": {"unreachable_stores": [], "unknown_languages": [], "unknown_qualities": []},
             }
 
-    def format_optimization_summary(self, final_result):
-        """Format optimization results in a human-readable way"""
-        try:
-            # Extract solution data
-            best_solution = final_result.get("best_solution", {})
-            iterations = final_result.get("iterations", [])
-            opt_type = final_result.get("type", "unknown")
+    # def format_optimization_summary(self, final_result):
+    #     """Format optimization results in a human-readable way"""
+    #     try:
+    #         # Extract solution data
+    #         best_solution = final_result.get("best_solution", {})
+    #         iterations = final_result.get("iterations", [])
+    #         opt_type = final_result.get("type", "unknown")
 
-            # Get the actual card data from the standardized format
-            if isinstance(best_solution, dict):
-                # If it's the standardized format, get the stores data
-                stores = best_solution.get("stores", [])
-                cards_data = []
-                for store in stores:
-                    cards_data.extend(store.get("cards", []))
+    #         # Get the actual card data from the standardized format
+    #         if isinstance(best_solution, dict):
+    #             # If it's the standardized format, get the stores data
+    #             stores = best_solution.get("stores", [])
+    #             cards_data = []
+    #             for store in stores:
+    #                 cards_data.extend(store.get("cards", []))
 
-                # Get pre-calculated statistics
-                total_price = best_solution.get("total_price", 0)
-                cards_found = best_solution.get("nbr_card_in_solution", 0)
-                store_count = best_solution.get("number_store", 0)
-                missing_count = best_solution.get("missing_cards_count", 0)
+    #             # Get pre-calculated statistics
+    #             total_price = best_solution.get("total_price", 0)
+    #             cards_found = best_solution.get("nbr_card_in_solution", 0)
+    #             store_count = best_solution.get("number_store", 0)
+    #             missing_count = best_solution.get("missing_cards_count", 0)
 
-            elif isinstance(best_solution, pd.DataFrame):
-                # Handle DataFrame format
-                cards_data = best_solution.to_dict("records")
-                total_price = sum(float(card["price"]) * int(card["quantity"]) for card in cards_data)
-                cards_found = len(cards_data)
-                store_count = len(set(card["site_name"] for card in cards_data))
-                missing_count = 0  # Would need additional context to calculate
+    #         elif isinstance(best_solution, pd.DataFrame):
+    #             # Handle DataFrame format
+    #             cards_data = best_solution.to_dict("records")
+    #             total_price = sum(float(card["price"]) * int(card["quantity"]) for card in cards_data)
+    #             cards_found = len(cards_data)
+    #             store_count = len(set(card["site_name"] for card in cards_data))
+    #             missing_count = 0  # Would need additional context to calculate
 
+    #         else:
+    #             # Handle direct list format
+    #             cards_data = best_solution if isinstance(best_solution, list) else []
+    #             total_price = sum(float(card["price"]) * int(card["quantity"]) for card in cards_data)
+    #             cards_found = len(cards_data)
+    #             store_count = len(set(card["site_name"] for card in cards_data))
+    #             missing_count = 0
+
+    #         # Calculate quality distribution
+    #         quality_counts = defaultdict(int)
+    #         total_cards = 0
+    #         for card in cards_data:
+    #             quantity = int(card.get("quantity", 1))
+    #             quality = card.get("quality", "Unknown")
+    #             quality_counts[quality] += quantity
+    #             total_cards += quantity
+
+    #         # Format the summary
+    #         summary = [
+    #             "Final Optimization Results:",
+    #             f"{'='*50}",
+    #             f"Optimization Type:  {opt_type}",
+    #             f"Cards Found:        {cards_found} cards",
+    #             f"Missing Cards:      {missing_count} cards",
+    #             f"Total Cost:         ${total_price:.2f}",
+    #             f"Stores Used:        {store_count} stores",
+    #             f"Solutions Tried:    {len(iterations)}",
+    #             "",
+    #             "Quality Distribution:",
+    #             "-" * 50,
+    #         ]
+
+    #         if total_cards > 0:
+    #             for quality, count in sorted(quality_counts.items()):
+    #                 percentage = (count / total_cards) * 100
+    #                 summary.append(f"{quality:<15} {count:>3} cards ({percentage:>5.1f}%)")
+    #         else:
+    #             summary.append("No cards in solution")
+
+    #         # Add store distribution if available
+    #         summary.append("")
+    #         summary.append("Store Distribution")
+    #         summary.append("-" * 50)
+    #         if isinstance(best_solution, dict) and "list_stores" in best_solution:
+    #             for store in best_solution["list_stores"].split(", "):
+    #                 summary.append(store)
+
+    #         return summary
+
+    #     except Exception as e:
+    #         logger.error(f"Error formatting optimization summary: {str(e)}", exc_info=True)
+    #         return (
+    #             f"Optimization completed ({opt_type})\n"
+    #             f"Cards found: {cards_found}\n"
+    #             f"Total cost: ${total_price:.2f}"
+    #         )
+    @staticmethod
+    def _extract_cards_data(result):
+        """Extract card list and metadata from a variety of result formats."""
+        if isinstance(result, dict) and "best_solution" in result:
+            result = result["best_solution"]
+
+        if isinstance(result, dict):
+            if "stores" in result:
+                cards = [card for store in result["stores"] if "cards" in store for card in store["cards"]]
+            elif "sorted_results_df" in result and isinstance(result["sorted_results_df"], pd.DataFrame):
+                cards = result["sorted_results_df"].to_dict("records")
             else:
-                # Handle direct list format
-                cards_data = best_solution if isinstance(best_solution, list) else []
-                total_price = sum(float(card["price"]) * int(card["quantity"]) for card in cards_data)
-                cards_found = len(cards_data)
-                store_count = len(set(card["site_name"] for card in cards_data))
-                missing_count = 0
+                cards = []
+            total = float(result.get("total_price", 0))
+            store_count = int(result.get("number_store", 0))
+            missing = int(result.get("missing_cards_count", 0))
+            store_names = result.get("list_stores", "").split(", ") if result.get("list_stores") else []
+            return cards, total, store_count, missing, store_names
 
-            # Calculate quality distribution
-            quality_counts = defaultdict(int)
-            total_cards = 0
-            for card in cards_data:
-                quantity = int(card.get("quantity", 1))
-                quality = card.get("quality", "Unknown")
-                quality_counts[quality] += quantity
-                total_cards += quantity
+        elif isinstance(result, pd.DataFrame):
+            cards = result.to_dict("records")
+            total = sum(float(c["price"]) * int(c["quantity"]) for c in cards)
+            store_count = len(set(c.get("site_name", "unknown") for c in cards))
+            return cards, total, store_count, 0, []
 
-            # Format the summary
-            summary = [
-                "Final Optimization Results:",
-                f"{'='*50}",
-                f"Optimization Type:  {opt_type}",
-                f"Cards Found:        {cards_found} cards",
-                f"Missing Cards:      {missing_count} cards",
-                f"Total Cost:         ${total_price:.2f}",
-                f"Stores Used:        {store_count} stores",
-                f"Solutions Tried:    {len(iterations)}",
-                "",
-                "Quality Distribution:",
-                "-" * 50,
-            ]
+        elif isinstance(result, list):
+            cards = result
+            total = sum(float(c["price"]) * int(c["quantity"]) for c in cards)
+            store_count = len(set(c.get("site_name", "unknown") for c in cards))
+            return cards, total, store_count, 0, []
 
-            if total_cards > 0:
-                for quality, count in sorted(quality_counts.items()):
-                    percentage = (count / total_cards) * 100
-                    summary.append(f"{quality:<15} {count:>3} cards ({percentage:>5.1f}%)")
-            else:
-                summary.append("No cards in solution")
+        return [], 0.0, 0, 0, []
 
-            # Add store distribution if available
-            summary.append("")
-            summary.append("Store Distribution")
-            summary.append("-" * 50)
-            if isinstance(best_solution, dict) and "list_stores" in best_solution:
-                for store in best_solution["list_stores"].split(", "):
-                    summary.append(store)
+    @staticmethod
+    def print_summary(
+        cards, total, store_count, missing, total_qty, opt_type="unknown", iterations=0, store_names=None
+    ):
+        logger.info("=" * 60)
+        logger.info("🧠 Optimization Summary")
+        logger.info("=" * 60)
 
-            return summary
-
-        except Exception as e:
-            logger.error(f"Error formatting optimization summary: {str(e)}", exc_info=True)
-            return (
-                f"Optimization completed ({opt_type})\n"
-                f"Cards found: {cards_found}\n"
-                f"Total cost: ${total_price:.2f}"
-            )
-
-    def _find_best_solution(self, solutions):
-        """Find the best solution from a list of standardized solutions"""
-        if not solutions:
-            return None
-
-        # First prioritize completeness
-        complete_solutions = [sol for sol in solutions if sol["nbr_card_in_solution"] == len(self.user_wishlist_df)]
-
-        if complete_solutions:
-            # Among complete solutions, choose the one with lowest cost
-            return min(
-                complete_solutions,
-                key=lambda x: (
-                    x["total_price"],  # First priority: minimize cost
-                    x["number_store"],  # Second priority: minimize stores
-                ),
-            )
-
-        # If no complete solutions, choose the one with most cards
-        return max(
-            solutions,
-            key=lambda x: (
-                x["nbr_card_in_solution"],  # First priority: maximize cards found
-                -x["total_price"],  # Second priority: minimize cost
-            ),
+        logger.info(
+            f"Cards Found:     {len(cards)}/{total_qty}" if total_qty else f"Cards Found:     {len(cards)} cards"
         )
+        logger.info(f"Total Cost:      ${total:.2f}")
+        logger.info(f"Stores Used:     {store_count}")
+        logger.info(f"Missing Cards:   {missing}")
+        logger.info(f"Optimization Type: {opt_type}")
+        logger.info(f"Solutions Tried: {iterations}")
+        logger.info("")
+
+        quality_counts = defaultdict(int)
+        language_counts = defaultdict(int)
+        total_card_instances = 0
+
+        for card in cards:
+            try:
+                qty = int(card.get("quantity", 1))
+                quality = card.get("quality", "Unknown")
+                lang = card.get("language", "Unknown")
+                quality_counts[quality] += qty
+                language_counts[lang] += qty
+                total_card_instances += qty
+            except Exception:
+                continue
+
+        if total_card_instances:
+            logger.info("📦 Quality Distribution:")
+            for q, c in sorted(quality_counts.items()):
+                pct = (c / total_card_instances) * 100
+                logger.info(f"  {q:<10}: {c} cards ({pct:.1f}%)")
+
+            logger.info("")
+            logger.info("🌍 Language Distribution:")
+            for l, c in sorted(language_counts.items()):
+                pct = (c / total_card_instances) * 100
+                logger.info(f"  {l:<10}: {c} cards ({pct:.1f}%)")
+
+        logger.info("")
+        logger.info("🏪 Store Distribution:")
+        final_names = store_names or sorted(set(card.get("site_name", "Unknown") for card in cards))
+        for s in final_names:
+            logger.info(f"  {s}")
+        logger.info("=" * 60)
+
+    @staticmethod
+    def print_detailed_solution_summary(result: dict, total_qty: int = 0):
+        try:
+            opt_type = (
+                result.get("type", "unknown") if isinstance(result, dict) and "best_solution" in result else "direct"
+            )
+            iterations = len(result.get("iterations", [])) if isinstance(result, dict) else 0
+            cards, total, store_count, missing, store_names = PurchaseOptimizer._extract_cards_data(result)
+            PurchaseOptimizer.print_summary(
+                cards, total, store_count, missing, total_qty, opt_type, iterations, store_names
+            )
+        except Exception as e:
+            logger.exception(f"[Summary] Failed to print optimization summary: {e}")
+
+    # def print_detailed_solution_summary(self, result: dict, total_qty: int = 0):
+    #     """Log detailed summary of a solution, whether intermediate or final."""
+    #     logger.info("=" * 60)
+    #     logger.info("🧠 Optimization Summary")
+    #     logger.info("=" * 60)
+
+    #     # Normalize input: full result or just a solution
+    #     if isinstance(result, dict) and "best_solution" in result:
+    #         best_solution = result.get("best_solution", {})
+    #         opt_type = result.get("type", "unknown")
+    #         iterations = result.get("iterations", [])
+    #     elif isinstance(result, dict):
+    #         best_solution = result
+    #         opt_type = "direct"
+    #         iterations = []
+    #     else:
+    #         # Handle unexpected types (numpy.int64, etc.)
+    #         logger.error(f"Invalid result type for summary: {type(result)}. Expected dict.")
+    #         logger.error(f"Result value: {result}")
+    #         return
+
+    #     # Handle different solution formats more robustly
+    #     cards_data = []
+    #     total_price = 0.0
+    #     store_count = 0
+    #     missing_count = 0
+
+    #     try:
+    #         # Format 1: Standardized solution with "stores" key
+    #         if isinstance(best_solution, dict) and "stores" in best_solution:
+    #             for store in best_solution["stores"]:
+    #                 if isinstance(store, dict) and "cards" in store:
+    #                     cards_data.extend(store.get("cards", []))
+    #             total_price = float(best_solution.get("total_price", 0.0))
+    #             store_count = int(best_solution.get("number_store", 0))
+    #             missing_count = int(best_solution.get("missing_cards_count", 0))
+
+    #         # Format 2: Solution with DataFrame result
+    #         elif isinstance(best_solution, dict) and "sorted_results_df" in best_solution:
+    #             df = best_solution["sorted_results_df"]
+    #             if isinstance(df, pd.DataFrame) and not df.empty:
+    #                 cards_data = df.to_dict("records")
+    #                 total_price = float(best_solution.get("total_price", 0.0))
+    #                 store_count = int(best_solution.get("number_store", 0))
+    #                 missing_count = int(best_solution.get("missing_cards_count", 0))
+    #             else:
+    #                 # Fallback: extract from dict keys
+    #                 total_price = float(best_solution.get("total_price", 0.0))
+    #                 store_count = int(best_solution.get("number_store", 0))
+    #                 missing_count = int(best_solution.get("missing_cards_count", 0))
+    #                 cards_data = []
+
+    #         # Format 3: DataFrame directly
+    #         elif isinstance(best_solution, pd.DataFrame):
+    #             cards_data = best_solution.to_dict("records")
+    #             total_price = sum(float(card.get("price", 0)) * int(card.get("quantity", 1)) for card in cards_data)
+    #             store_count = len(set(card.get("site_name", "unknown") for card in cards_data))
+    #             missing_count = 0
+
+    #         # Format 4: List of card dictionaries
+    #         elif isinstance(best_solution, list):
+    #             cards_data = best_solution
+    #             total_price = sum(float(card.get("price", 0)) * int(card.get("quantity", 1)) for card in cards_data)
+    #             store_count = len(set(card.get("site_name", "unknown") for card in cards_data))
+    #             missing_count = 0
+
+    #         # Format 5: Empty or unknown format
+    #         else:
+    #             logger.warning(f"Unknown solution format: {type(best_solution)}")
+    #             if hasattr(best_solution, "keys"):
+    #                 logger.warning(f"Available keys: {list(best_solution.keys())}")
+    #             return
+
+    #     except Exception as e:
+    #         logger.error(f"Error processing solution summary: {str(e)}")
+    #         logger.warning(f"Solution type: {type(best_solution)}")
+    #         if isinstance(best_solution, dict):
+    #             logger.warning(f"Solution keys: {list(best_solution.keys())}")
+    #         return
+
+    #     cards_found = len(cards_data)
+
+    #     # Log basic metrics
+    #     if total_qty and total_qty > 0:
+    #         logger.info(f"Cards Found:     {cards_found}/{total_qty}")
+    #     else:
+    #         logger.info(f"Cards Found:     {cards_found} cards")
+    #     logger.info(f"Total Cost:      ${total_price:.2f}")
+    #     logger.info(f"Stores Used:     {store_count}")
+    #     logger.info(f"Missing Cards:   {missing_count}")
+    #     logger.info(f"Optimization Type: {opt_type}")
+    #     logger.info(f"Solutions Tried: {len(iterations)}")
+    #     logger.info("")
+
+    #     # Quality and language distribution
+    #     if cards_data:
+    #         quality_counts = defaultdict(int)
+    #         language_counts = defaultdict(int)
+    #         total_card_instances = 0
+
+    #         for card in cards_data:
+    #             try:
+    #                 qty = int(card.get("quantity", 1))
+    #                 quality = card.get("quality", "Unknown")
+    #                 lang = card.get("language", "Unknown")
+    #                 quality_counts[quality] += qty
+    #                 language_counts[lang] += qty
+    #                 total_card_instances += qty
+    #             except (ValueError, TypeError):
+    #                 continue
+
+    #         if total_card_instances > 0:
+    #             logger.info("📦 Quality Distribution:")
+    #             for quality, count in sorted(quality_counts.items()):
+    #                 pct = (count / total_card_instances) * 100
+    #                 logger.info(f"  {quality:<10}: {count} cards ({pct:.1f}%)")
+
+    #             logger.info("")
+    #             logger.info("🌍 Language Distribution:")
+    #             for lang, count in sorted(language_counts.items()):
+    #                 pct = (count / total_card_instances) * 100
+    #                 logger.info(f"  {lang:<10}: {count} cards ({pct:.1f}%)")
+
+    #     # Store distribution
+    #     logger.info("")
+    #     logger.info("🏪 Store Distribution:")
+
+    #     # Try to get store names from different sources
+    #     store_names = []
+    #     if isinstance(best_solution, dict):
+    #         if "list_stores" in best_solution and best_solution["list_stores"]:
+    #             store_names = best_solution["list_stores"].split(", ")
+    #         elif "stores" in best_solution:
+    #             store_names = [store.get("site_name", "Unknown") for store in best_solution["stores"]]
+
+    #     if not store_names and cards_data:
+    #         store_names = sorted(set(card.get("site_name", "Unknown") for card in cards_data))
+
+    #     for store in store_names:
+    #         logger.info(f"  {store}")
+
+    #     logger.info("=" * 60)
 
     def _select_final_solution(self, milp_result, nsga_result):
         """Select the better solution between MILP and NSGA-II results"""
@@ -615,19 +841,26 @@ class PurchaseOptimizer:
         missing_records = []
 
         # Ensure price columns are rounded to same precision
-        filtered_listings_df["price"] = filtered_listings_df["price"].round(2)
+        if "price" in filtered_listings_df.columns:
+            filtered_listings_df["price"] = filtered_listings_df["price"].round(2)
+        if "weighted_price" in filtered_listings_df.columns:
+            filtered_listings_df["weighted_price"] = filtered_listings_df["weighted_price"].round(2)
 
         for record in solution:
             # Round the price in the record to match DataFrame precision
-            record_price = round(float(record["price"]), 2)
+            record_price = round(float(record.get("price") or record.get("weighted_price", 0.0)), 2)
+            price_column = "price" if "price" in record else "weighted_price"
 
-            # Create mask for matching records
+            if price_column not in filtered_listings_df.columns:
+                logger.error(f"{price_column} not found in filtered_listings_df. Cannot match record.")
+                missing_records.append(record)
+                continue
+            # Match by name, store, and correct price column
             mask = (
                 (filtered_listings_df["name"] == record["name"])
                 & (filtered_listings_df["site_name"] == record["site_name"])
-                & (filtered_listings_df["price"].round(2) == record_price)
+                & (filtered_listings_df[price_column] == record_price)
             )
-
             matching_rows = filtered_listings_df[mask]
 
             if matching_rows.empty:
@@ -639,7 +872,7 @@ class PurchaseOptimizer:
 
                 if not alternate_rows.empty:
                     # Take the closest price match
-                    closest_match = alternate_rows.iloc[(alternate_rows["price"] - record_price).abs().argmin()]
+                    closest_match = alternate_rows.iloc[(alternate_rows[price_column] - record_price).abs().argmin()]
                     indices.append(closest_match.name)  # .name gets the index
                     # logger.info(f"Used closest price match for {record['name']}")
                 else:
@@ -667,95 +900,209 @@ class PurchaseOptimizer:
             logger.error(f"Failed to create individual: {str(e)}")
             return None
 
+    @staticmethod
+    def _compute_penalized_price(
+        row: pd.Series, preferences: dict, strict: bool, high_cost: float = 10_000
+    ) -> Tuple[float, float, str]:
+        """
+        Returns: (final_price, penalty_multiplier, reason)
+        """
+        explanations = []
+        base_price = row.get("price", high_cost)
+
+        # STEP 1: Apply base quality weight (this was missing!)
+        quality = row.get("quality", "DMG")
+        quality_multiplier = CardQuality.get_weight(quality)
+        weighted_price = base_price * quality_multiplier
+
+        # STEP 2: Apply preference penalties on top
+        preference_penalty = 1.0
+
+        for attr in ["language", "version", "quality", "foil"]:
+            expected = preferences.get(attr)
+            actual = row.get(attr)
+
+            if expected:
+                if strict and actual != expected:
+                    explanations.append(f"{attr} mismatch (strict): {actual} != {expected}")
+                    return high_cost, 1.0, "strict_filter"
+
+                if not strict and actual != expected:
+                    if attr == "language":
+                        attr_penalty = CardLanguage.calculate_language_preference_penalty(actual, expected)
+                    elif attr == "version":
+                        attr_penalty = CardVersion.calculate_version_preference_penalty(actual, expected)
+                    elif attr == "quality":
+                        attr_penalty = CardQuality.calculate_quality_preference_penalty(actual, expected)
+                    else:  # foil
+                        attr_penalty = 1.3
+
+                    preference_penalty *= attr_penalty
+                    explanations.append(
+                        f"{attr} preference: {actual} vs wanted {expected} (penalty: {attr_penalty:.1f}x)"
+                    )
+
+        final_price = weighted_price * preference_penalty
+        return final_price, quality_multiplier * preference_penalty, "; ".join(explanations)
+
     def _setup_pulp_optimization(self, filtered_listings_df, user_wishlist_df):
         """Set up the MILP optimization problem with data validation and preprocessing."""
         try:
-            # Validate input data
             if user_wishlist_df is None or user_wishlist_df.empty:
                 logger.error("user_wishlist_df is None or empty")
-                return None, None, None, None, None
+                return None, None, None, None, None, None
 
             if filtered_listings_df is None or filtered_listings_df.empty:
                 logger.error("filtered_listings_df is None or empty")
-                return None, None, None, None, None
+                return None, None, None, None, None, None
 
-            # Clean and prepare data
             filtered_listings_df = filtered_listings_df.copy()
-            filtered_listings_df["site_name"] = filtered_listings_df["site_name"].combine_first(
-                filtered_listings_df["site_name"]
-            )
+            filtered_listings_df["site_name"] = filtered_listings_df["site_name"].astype(str)
             filtered_listings_df = filtered_listings_df.loc[:, ~filtered_listings_df.columns.duplicated()]
 
             unique_cards = user_wishlist_df["name"].unique()
             unique_stores = filtered_listings_df["site_name"].unique()
-
-            logger.info(f"Unique cards: {len(unique_cards)}")
-            logger.info(f"Unique stores: {len(unique_stores)}")
-
-            # total_qty = len(user_wishlist_df)
             total_qty = user_wishlist_df["quantity"].sum()
+            high_cost = 10000
 
-            high_cost = 10000  # High cost for unavailable combinations
+            def compute_weighted(row):
+                prefs = self.card_preferences.get(row["name"], {})
+                price, penalty, explanations = self._compute_penalized_price(
+                    row, prefs, self.optimizationConfig.strict_preferences
+                )
+                row["weighted_price"] = price
+                row["penalty_multiplier"] = penalty
+                row["explanations"] = explanations
+                return price
 
-            def compute_weighted_price(row):
-                card_name = row.get("name")
-                prefs = self.card_preferences.get(card_name, {})
-                preferred_language = prefs.get("language", "English")
-                preferred_quality = prefs.get("quality", "NM")
-                preferred_version = prefs.get("version", "Standard")
+            def compute_weighted_old(row):
+                # TEMPORARY DEBUG: Skip all penalties to test if this is the issue
+                price = row.get("price", 10000)
+                row["weighted_price"] = price
+                row["penalty_multiplier"] = 1.0
+                row["explanations"] = "debug_mode_no_penalties"
+                return price
 
-                actual_language = row.get("language", "English")
-                actual_quality = row.get("quality", "NM")
-                actual_version = row.get("version", "Standard")
+            # Compute penalized price
+            filtered_listings_df["weighted_price"] = filtered_listings_df.apply(compute_weighted, axis=1)
 
-                if self.optimizationConfig.strict_preferences:
-                    if (
-                        actual_language != preferred_language
-                        or actual_quality != preferred_quality
-                        or actual_version != preferred_version
-                    ):
-                        return high_cost  # Filter incompatible listings
-                    return row["price"]
+            # Create cost matrix
+            raw_costs = {}
+            enriched_costs = defaultdict(dict)
 
-                # Flexible mode: apply penalties
-                penalty = 1.0
-                if actual_language != preferred_language:
-                    penalty *= 1.2
-                if actual_quality != preferred_quality:
-                    penalty *= 2
-                if actual_version != preferred_version:
-                    penalty *= 1.3
-
-                return row["price"] * penalty
-
-            # Calculate weighted prices
-            filtered_listings_df["weighted_price"] = filtered_listings_df.apply(compute_weighted_price, axis=1)
-            logger.info("[Weight Impact] Sample weighted prices after applying penalties:")
-            logger.info(
-                filtered_listings_df[["name", "site_name", "price", "quality", "language", "version", "weighted_price"]]
-                .head(10)
-                .to_string(index=False)
-            )
-
-            # Create costs dictionary
-            costs = {}
             for card in unique_cards:
-                costs[card] = {}
                 for store in unique_stores:
-                    price = filtered_listings_df[
+                    rows = filtered_listings_df[
                         (filtered_listings_df["name"] == card) & (filtered_listings_df["site_name"] == store)
-                    ]["weighted_price"].min()
-                    costs[card][store] = price if not pd.isna(price) else high_cost
+                    ]
+                    if rows.empty:
+                        continue
+                    best = rows.sort_values("weighted_price").iloc[0]
+                    weighted_price = best["weighted_price"]
 
-            return filtered_listings_df, unique_cards, unique_stores, costs, total_qty
+                    if card not in raw_costs:
+                        raw_costs[card] = {}  # ✅ Fixes KeyError
+                    raw_costs[card][store] = weighted_price
+
+                    enriched = best.to_dict()
+                    enriched["weighted_price"] = weighted_price
+                    enriched["available_quantity"] = best.get("quantity", 1.0)
+
+                    norm_quality = CardQuality.normalize(best.get("quality", "DMG"))
+                    max_q = max(CardQuality.get_weight(q.value) for q in CardQuality)
+                    enriched["quality_score"] = 1 - (CardQuality.get_weight(norm_quality) - 1) / (max_q - 1)
+
+                    enriched_costs[card][store] = enriched
+
+            for card in unique_cards:
+                if card not in raw_costs:
+                    logger.warning(f"[COSTS] raw_costs missing card: {card}")
+                else:
+                    missing_stores = [store for store in unique_stores if store not in raw_costs[card]]
+                    if len(missing_stores) == len(unique_stores):
+                        logger.warning(f"[COSTS] No stores recorded for card: {card}")
+            # Validate that each card has at least one viable store
+            for card in unique_cards:
+                card_rows = filtered_listings_df[filtered_listings_df["name"] == card]
+                if card_rows.empty:
+                    logger.warning(f"[FILTER] No listings left for card '{card}' after filtering.")
+                else:
+                    logger.info(
+                        f"[FILTER] Listings for '{card}': {len(card_rows)} entries across {card_rows['site_name'].nunique()} stores."
+                    )
+                if all(price >= high_cost for price in raw_costs[card].values()):
+                    logger.warning(f"[CRITICAL] No viable listings for card '{card}' after filtering.")
+
+            return filtered_listings_df, unique_cards, unique_stores, raw_costs, enriched_costs, total_qty
 
         except Exception as e:
             logger.error(f"Error in setup_pulp_optimization: {str(e)}", exc_info=True)
-            return None, None, None, None, None
+            return None, None, None, None, None, None, None
+
+    @staticmethod
+    def _run_feasibility_scan(
+        unique_stores,
+        total_required_cards,
+        evaluate_solution_fn,
+    ):
+        complete_solutions = []
+        best_store_count = None
+        best_solution = None
+
+        for store_count in range(1, len(unique_stores) + 1):
+            logger.info("=" * 30)
+            logger.info(f"[Feasibility] Trying solution with {store_count} store(s):")
+
+            result = evaluate_solution_fn(store_count, zero_weights=True)
+            if not result:
+                continue
+
+            if result.get("nbr_card_in_solution") == total_required_cards:
+                complete_solutions.append(result)
+                if best_store_count is None:
+                    best_store_count = store_count
+                if not best_solution or result["total_price"] < best_solution["total_price"]:
+                    best_solution = result
+                    logger.info(">>> New best complete solution found!")
+
+                if len(complete_solutions) > 1:
+                    prev = complete_solutions[-2]["total_price"]
+                    curr = complete_solutions[-1]["total_price"]
+                    if (prev - curr) < (curr * 0.1):
+                        logger.info("Stopping search — minimal cost improvement")
+                        break
+
+        return complete_solutions, best_store_count, best_solution
+
+    @staticmethod
+    def _reoptimize_with_weights(
+        best_store_count,
+        evaluate_solution_fn,
+        complete_solutions,
+    ):
+        logger.info(f"Re-optimizing with weights at best store count = {best_store_count}")
+        weighted_result = evaluate_solution_fn(best_store_count, zero_weights=False)
+
+        if weighted_result and weighted_result["nbr_card_in_solution"] == weighted_result["total_card_count"]:
+            logger.info(">>> Weighted optimization succeeded after feasibility pass")
+            best_solution = weighted_result
+        else:
+            best_price = min(sol["total_price"] for sol in complete_solutions)
+            near_best = [sol for sol in complete_solutions if sol["total_price"] <= best_price * 1.05]
+            best_solution = min(near_best, key=lambda x: x["number_store"]) if near_best else complete_solutions[0]
+
+        return best_solution
 
     @staticmethod
     def _compute_pulp_optimization(
-        filtered_listings_df, user_wishlist_df, unique_cards, unique_stores, costs, total_qty, optimizationConfig
+        filtered_listings_df,
+        user_wishlist_df,
+        unique_cards,
+        unique_stores,
+        raw_costs,
+        enriched_costs,
+        total_qty,
+        optimizationConfig,
     ):
         """Run the MILP optimization with the setup data."""
         try:
@@ -773,85 +1120,105 @@ class PurchaseOptimizer:
             logger.info(f"Strategy: {strategy_msg}")
 
             # --- Shared evaluation helper ---
-            def evaluate_solution(store_count):
-                prob, buy_vars = PurchaseOptimizer._setup_prob(
-                    costs, unique_cards, unique_stores, user_wishlist_df, optimizationConfig
+            def evaluate_solution(store_count, zero_weights=False):
+                weights = (optimizationConfig.weights or {}).copy()
+                if zero_weights:
+                    weights = {k: 0.0 for k in weights}
+
+                filtered = filtered_listings_df.copy()
+                if zero_weights:
+                    filtered["weighted_price"] = filtered["price"]
+
+                costs_to_use = enriched_costs
+
+                prob, buy_vars, total_possible_cost = PurchaseOptimizer._setup_prob(
+                    costs_to_use,
+                    unique_cards,
+                    unique_stores,
+                    user_wishlist_df,
+                    optimizationConfig,
+                    store_count,
+                    weights=weights,
                 )
+
+                if pulp.LpStatus[prob.status] == "Infeasible":
+                    logger.warning(f"[MILP Debug] Infeasible at {store_count} stores.")
+                    for card in unique_cards:
+                        available_stores = [
+                            s for s in costs_to_use[card] if costs_to_use[card][s].get("weighted_price", 10000) < 10000
+                        ]
+                        if not available_stores:
+                            logger.warning(f"  Card {card} has no valid listings at this store count.")
 
                 if pulp.LpStatus[prob.status] != "Optimal":
                     logger.info(f"No feasible solution found with {store_count} store(s)")
                     return None
 
-                result = PurchaseOptimizer._process_result(buy_vars, costs, filtered_listings_df)
-                all_iterations_results.append(result)
+                result = PurchaseOptimizer._process_result(buy_vars, costs_to_use, filtered)
+                result["total_card_count"] = total_qty
 
-                logger.info(f"Cards Found:   {result['nbr_card_in_solution']}/{total_qty}")
-                logger.info(f"Total Cost:    ${result['total_price']:.2f}")
-                logger.info(f"Stores Used:   {result['number_store']}")
-                logger.info("Store Distribution:")
-                for store_info in result["list_stores"].split(", "):
-                    logger.info(f"  {store_info}")
+                normalized_cost = result.get("total_price", 0) / total_possible_cost
+                normalized_store_count = result.get("number_store", 0) / len(unique_stores)
+                normalized_quality = result.get("normalized_quality")
+                if normalized_quality is None:
+                    logger.warning("Missing normalized_quality in result; defaulting to 0.")
+                    normalized_quality = 0
+
+                weighted_score = (
+                    weights.get("cost", 0.0) * normalized_cost
+                    + weights.get("store_count", 0.0) * normalized_store_count
+                    + weights.get("quality", 0.0) * normalized_quality
+                )
+                result["weighted_score"] = round(weighted_score, 6)
+                logger.info(f"Weighted score: {result['weighted_score']}")
+
+                if result["missing_cards_count"] > 0:
+                    logger.warning(
+                        f"[MILP][{store_count} stores] Infeasible due to missing cards: {result['missing_cards']}"
+                    )
+                else:
+                    logger.info(
+                        f"[MILP][{store_count} stores]  Found complete solution with {len(result['stores'])} stores, "
+                        f"cost ${result['total_price']:.2f}"
+                    )
+                all_iterations_results.append(result)
+                PurchaseOptimizer.print_detailed_solution_summary(
+                    {"best_solution": result, "type": "iterations"}, total_qty
+                )
 
                 return result
 
-            def print_final_solution(best_solution):
-                logger.info("Final Solution Selected:")
-                logger.info("=" * 30)
-                logger.info(f"Total Cost:    ${best_solution['total_price']:.2f}")
-                logger.info(f"Cards Found:   {best_solution['nbr_card_in_solution']}/{total_qty}")
-                logger.info(f"Stores Used:   {best_solution['number_store']}")
-                logger.info("Distribution:")
-                for store_info in best_solution["list_stores"].split(", "):
-                    logger.info(f"  {store_info}")
-
             # --- Strategy 1: Minimize store count ---
             if optimizationConfig.find_min_store:
-                complete_solutions = []
+                logger.info("Starting optimization first pass to find_min_store ")
+                evaluate = lambda store_count, zero_weights=False: evaluate_solution(
+                    store_count, zero_weights=zero_weights
+                )
 
-                for store_count in range(1, len(unique_stores) + 1):
-                    logger.info("=" * 30)
-                    logger.info(f"Trying solution with {store_count} store(s):")
+                logger.info("Running feasibility scan... ")
+                complete_solutions, best_store_count, _ = PurchaseOptimizer._run_feasibility_scan(
+                    unique_stores, total_qty, evaluate
+                )
 
-                    result = evaluate_solution(store_count)
-                    if not result:
-                        continue
+                if not complete_solutions:
+                    logger.warning("No complete solution found during store count minimization")
+                    return None, all_iterations_results
 
-                    if result["nbr_card_in_solution"] == total_qty:
-                        complete_solutions.append(result)
+                logger.info("Re-optimizing with weights... ")
+                best_solution = PurchaseOptimizer._reoptimize_with_weights(
+                    best_store_count, evaluate, complete_solutions
+                )
 
-                        # Best so far?
-                        if not best_solution or result["total_price"] < best_solution["total_price"]:
-                            best_solution = result
-                            logger.info(">>> New best complete solution found!")
-
-                        # Check for diminishing returns
-                        if len(complete_solutions) > 1:
-                            prev = complete_solutions[-2]["total_price"]
-                            curr = complete_solutions[-1]["total_price"]
-                            if (prev - curr) < (curr * 0.01):
-                                logger.info("Stopping search — minimal cost improvement")
-                                break
-
-                if complete_solutions:
-                    best_price = min(sol["total_price"] for sol in complete_solutions)
-                    near_best = [sol for sol in complete_solutions if sol["total_price"] <= best_price * 1.05]
-                    if near_best:
-                        best_solution = min(near_best, key=lambda x: x["number_store"])
-                    else:
-                        best_solution = complete_solutions[0]
-                    print_final_solution(best_solution)
-                    return best_solution["sorted_results_df"], all_iterations_results
-
-                logger.warning("No complete solution found during store count minimization")
-                return None, all_iterations_results
-
+                logger.info("Printing solutions... ")
+                PurchaseOptimizer.print_detailed_solution_summary(best_solution, total_qty)
+                return best_solution["sorted_results_df"], all_iterations_results
             # --- Strategy 2: Optimize with fixed min_store ---
             else:
                 result = evaluate_solution(optimizationConfig.min_store)
                 if result:
                     best_solution = result
                     logger.info(">>> Optimization with fixed min_store succeeded.")
-                    print_final_solution(best_solution)
+                    PurchaseOptimizer.print_detailed_solution_summary(best_solution, total_qty)
                     return best_solution["sorted_results_df"], all_iterations_results
 
                 logger.warning("No feasible solution with the minimum store constraint.")
@@ -877,7 +1244,7 @@ class PurchaseOptimizer:
             if any(result is None for result in setup_results):
                 return None, None
 
-            filtered_listings_df, unique_cards, unique_stores, costs, total_qty = setup_results
+            filtered_listings_df, unique_cards, unique_stores, raw_costs, enriched_costs, total_qty = setup_results
 
             # Validate minimum store requirement
             if len(unique_stores) < self.optimizationConfig.min_store:
@@ -892,7 +1259,8 @@ class PurchaseOptimizer:
                 user_wishlist_df,
                 unique_cards,
                 unique_stores,
-                costs,
+                raw_costs,
+                enriched_costs,  # instead of costs_to_use
                 total_qty,
                 self.optimizationConfig,
             )
@@ -903,81 +1271,350 @@ class PurchaseOptimizer:
             raise
 
     @staticmethod
-    def _setup_prob(costs, unique_cards, unique_stores, user_wishlist, optimizationConfig):
+    def _setup_prob(
+        costs_enriched, unique_cards, unique_stores, user_wishlist, optimizationConfig, store_count=None, weights=None
+    ):
         """Setup MILP problem with proper store constraints"""
-        # Add validation for store count
+
+        prob = pulp.LpProblem("MTGCardOptimization", pulp.LpMinimize)
+
+        if weights is None:
+            weights = optimizationConfig.weights or {}
+
+        # Fallbacks
+        cost_weight = weights.get("cost", 1.0)
+        availability_weight = weights.get("availability", 1.0)
+        quality_weight = weights.get("quality", 1.0)
+        store_weight = weights.get("store_count", 1.0)
+
+        logger.info(
+            f"[MILP] Solving model with weights: cost={cost_weight}, store_count={store_weight}, "
+            f"quality={quality_weight}, availability={availability_weight}"
+        )
+
+        def debug_solver():
+            # DEBUG: Analyze feasibility before creating the problem
+            logger.info("=== FEASIBILITY ANALYSIS ===")
+            logger.info(f"Cards needed: {len(unique_cards)}")
+            logger.info(f"Stores available: {len(unique_stores)}")
+            logger.info(f"Target store count: {store_count}")
+
+            # Check which cards are available in which stores
+            cards_per_store = {}
+            stores_per_card = {}
+
+            for card in unique_cards:
+                available_stores = list(costs_enriched.get(card, {}).keys())
+                stores_per_card[card] = available_stores
+                logger.info(f"Card '{card}': available in {len(available_stores)} stores")
+
+                if len(available_stores) == 0:
+                    logger.error(f"CRITICAL: Card '{card}' has NO available stores!")
+
+                for store in available_stores:
+                    if store not in cards_per_store:
+                        cards_per_store[store] = []
+                    cards_per_store[store].append(card)
+
+            # Analyze store coverage
+            logger.info("=== STORE COVERAGE ===")
+            for store, cards in sorted(cards_per_store.items(), key=lambda x: len(x[1]), reverse=True):
+                logger.info(f"Store '{store}': has {len(cards)}/{len(unique_cards)} cards")
+
+            # Check if any single store has all cards
+            max_coverage = max(len(cards) for cards in cards_per_store.values()) if cards_per_store else 0
+            logger.info(f"Best single store coverage: {max_coverage}/{len(unique_cards)} cards")
+
+            if store_count and store_count == 1 and max_coverage < len(unique_cards):
+                logger.error(f"INFEASIBLE: No single store has all {len(unique_cards)} cards!")
+                logger.error(
+                    f"Best store only has {max_coverage} cards. Need at least {len(unique_cards) - max_coverage} more stores."
+                )
+
+            # Find minimum stores needed (greedy approximation)
+            remaining_cards = set(unique_cards)
+            stores_needed = []
+
+            while remaining_cards and len(stores_needed) < 10:  # Limit to avoid infinite loop
+                # Find store with most remaining cards
+                best_store = None
+                best_coverage = 0
+
+                for store, cards in cards_per_store.items():
+                    if store in stores_needed:
+                        continue
+                    coverage = len(set(cards) & remaining_cards)
+                    if coverage > best_coverage:
+                        best_coverage = coverage
+                        best_store = store
+
+                if best_store:
+                    stores_needed.append(best_store)
+                    remaining_cards -= set(cards_per_store[best_store])
+                    logger.info(
+                        f"Store {len(stores_needed)}: '{best_store}' covers {best_coverage} more cards, {len(remaining_cards)} remaining"
+                    )
+                else:
+                    break
+
+            logger.info(f"MINIMUM STORES NEEDED: {len(stores_needed)} stores for complete coverage")
+            if remaining_cards:
+                logger.error(
+                    f"IMPOSSIBLE: {len(remaining_cards)} cards cannot be found in any store: {list(remaining_cards)}"
+                )
+
+            logger.info("=== END FEASIBILITY ANALYSIS ===")
+
+        # debug_solver()
+        # Continue with the rest of your _setup_prob method...
+        buy_vars = {}
+        for card in unique_cards:
+            buy_vars[card] = {}
+            for store in costs_enriched[card]:
+                buy_vars[card][store] = pulp.LpVariable(f"Buy_{card}_{store}", 0, 1, pulp.LpBinary)
+        store_vars = {}
+        for store in unique_stores:
+            store_vars[store] = pulp.LpVariable(f"Store_{store}", 0, 1, pulp.LpBinary)
+        # Decision variables
+        # buy_vars = pulp.LpVariable.dicts("Buy", (unique_cards, unique_stores), 0, 1, pulp.LpBinary)
+        # store_vars = pulp.LpVariable.dicts("Store", unique_stores, 0, 1, pulp.LpBinary)
+
+        objective_terms = []
+
+        # Cost
+        total_possible_cost = sum(
+            min(costs_enriched[card][store]["weighted_price"] for store in costs_enriched[card])
+            for card in unique_cards
+            if costs_enriched[card]
+        )
+
+        if cost_weight > 0 and total_possible_cost > 0:
+            normalized_cost_term = (
+                pulp.lpSum(
+                    buy_vars[card][store] * costs_enriched[card][store]["weighted_price"]
+                    for card in unique_cards
+                    for store in costs_enriched.get(card, {})  # FIXED: Use costs_enriched structure
+                )
+                / total_possible_cost
+            )
+            objective_terms.append(cost_weight * normalized_cost_term)
+
+        # Store count
+        if store_weight > 0:
+            normalized_store_term = pulp.lpSum(store_vars[store] for store in unique_stores) / len(unique_stores)
+            objective_terms.append(store_weight * normalized_store_term)
+
+        quality_penalties = []
+
+        total_quality_slots = 0
+        max_weight = max(CardQuality.get_weight(q.value) for q in CardQuality)
+
+        for card in unique_cards:
+            for store in unique_stores:
+                listing = costs_enriched.get(card, {}).get(store)
+                if not listing:
+                    continue
+
+                quality_score = listing.get("quality_score")
+                if quality_score is None:
+                    normalized_quality = CardQuality.normalize(listing.get("quality", "DMG"))
+                    quality_score = 1 - (CardQuality.get_weight(normalized_quality) - 1) / (max_weight - 1)
+                q_penalty = 1 - quality_score
+                quality_penalties.append(q_penalty * buy_vars[card][store])
+                total_quality_slots += 1
+
+        if quality_weight > 0 and total_quality_slots > 0:
+            normalized_quality_term = 1 - (pulp.lpSum(quality_penalties) / total_quality_slots)
+            objective_terms.append(quality_weight * normalized_quality_term)
+
+        if objective_terms:
+            prob += pulp.lpSum(objective_terms), "WeightedObjective"
+        else:
+            logger.info("[MILP] Feasibility-only mode activated. Objective is dummy.")
+            prob += pulp.lpSum([]), "FeasibilityObjective"
+
+        # Quantity constraints
+        for card in unique_cards:
+            required_quantity = user_wishlist[user_wishlist["name"] == card]["quantity"].iloc[0]
+            available_stores = list(costs_enriched.get(card, {}).keys())
+
+            if available_stores:
+                prob += (
+                    pulp.lpSum([buy_vars[card][store] for store in available_stores]) == required_quantity,
+                    f"Required_quantity_{card}",
+                )
+            else:
+                logger.warning(
+                    f"Card {card} is not available at any of the considered stores (required qty: {required_quantity})."
+                )
+
+        # Store activation linkage
+        M = len(unique_cards)
+        for store in unique_stores:
+            used_vars = [buy_vars[card][store] for card in unique_cards if store in costs_enriched.get(card, {})]
+
+            if used_vars:
+                prob += (
+                    pulp.lpSum(used_vars) <= M * store_vars[store],
+                    f"Store_usage_{store}",
+                )
+                prob += (
+                    pulp.lpSum(used_vars) >= store_vars[store],
+                    f"Store_usage_min_{store}",
+                )
+            else:
+                # If no card can be bought from this store, deactivate it
+                prob += store_vars[store] == 0, f"Store_unused_{store}"
+
+        # Store constraints
         min_store = optimizationConfig.min_store
+        max_store = optimizationConfig.max_store
         if len(unique_stores) < min_store:
             logger.warning(f"Adjusting min_store from {min_store} to {len(unique_stores)} due to available stores")
             min_store = len(unique_stores)
 
-        prob = pulp.LpProblem("MTGCardOptimization", pulp.LpMinimize)
-
-        # Decision variables
-        buy_vars = pulp.LpVariable.dicts("Buy", (unique_cards, unique_stores), 0, 1, pulp.LpBinary)
-        store_vars = pulp.LpVariable.dicts("Store", unique_stores, 0, 1, pulp.LpBinary)
-
-        # Calculate total possible cost for normalization
-        total_possible_cost = sum(min(costs[card].values()) for card in unique_cards)
-
-        # Calculate weights for multi-objective
-        weights = optimizationConfig.weights
-        cost_weight = weights.get("cost", 1.0)
-        store_weight = weights.get("store_count", 0.3)
-
-        # Objective function combining normalized cost and store count
-        prob += cost_weight * pulp.lpSum(
-            buy_vars[card][store] * costs[card][store] for card in unique_cards for store in unique_stores
-        ) / total_possible_cost + store_weight * pulp.lpSum(store_vars[store] for store in unique_stores) / len(
-            unique_stores
-        )
-
-        # Constraints
-
-        # 1. Required quantity constraint for each card
-        for card in unique_cards:
-            required_quantity = user_wishlist[user_wishlist["name"] == card]["quantity"].iloc[0]
-            prob += (
-                pulp.lpSum([buy_vars[card][store] for store in unique_stores]) == required_quantity,
-                f"Required_quantity_{card}",
-            )
-
-        # 2. Strong store usage constraint
-        # If we buy from a store, its store_var must be 1
-        M = len(unique_cards)  # Big-M value
-        for store in unique_stores:
-            # If we buy any card from a store, that store must be used
-            prob += (
-                pulp.lpSum(buy_vars[card][store] for card in unique_cards) <= M * store_vars[store],
-                f"Store_usage_{store}",
-            )
-            # If we don't buy any cards, store must not be used
-            prob += (
-                pulp.lpSum(buy_vars[card][store] for card in unique_cards) >= store_vars[store],
-                f"Store_usage_min_{store}",
-            )
-
-        # 3. Store count constraints
-        # Minimum store constraint
-        if optimizationConfig.find_min_store is False:
-            prob += (
-                pulp.lpSum(store_vars[store] for store in unique_stores) == min_store,
-                "Exact_stores",
-            )
+        used_store_vars = [store_vars[store] for store in unique_stores if store in store_vars]
+        if optimizationConfig.find_min_store is True:
+            if used_store_vars:
+                prob += (pulp.lpSum(used_store_vars) >= min_store, "Min_stores")
+                if store_count:
+                    prob += (pulp.lpSum(used_store_vars) <= store_count, "Max_store_cap_for_find_min")
         else:
-            prob += (
-                pulp.lpSum(store_vars[store] for store in unique_stores) >= min_store,
-                "Min_stores",
+            # STRATEGY 2: Standard optimization with min/max store bounds
+            if used_store_vars:
+                # Enforce minimum stores constraint
+                prob += (pulp.lpSum(used_store_vars) >= min_store, "Min_stores_required")
+                # Enforce maximum stores constraint
+                prob += (pulp.lpSum(used_store_vars) <= max_store, "Max_stores_allowed")
+
+                logger.info(f"Added store constraints: {min_store} <= stores <= {max_store}")
+
+        # For debugging - get detailed solver output
+        def get_debug_solver():
+            return PULP_CBC_CMD(
+                msg=True,  # Show solver messages
+                threads=4,  # Use multiple threads
+                timeLimit=120,  # Increase time limit
+                gapRel=0.01,  # Stop at 1% optimality gap
+                presolve=True,  # Enable presolving
+                cuts=True,  # Enable cutting planes
+                strong=5,  # Strong branching depth
+                options=[
+                    "preprocess on",  # Enable preprocessing
+                    "cuts on",  # Enable all cuts
+                    "heuristics on",  # Enable heuristics
+                    "printingOptions all",  # Detailed output
+                    "logLevel 2",  # Verbose logging
+                ],
             )
 
-        # Solve the problem
-        prob.solve(pulp.PULP_CBC_CMD(msg=False))
+        # For production - fast and quiet
+        def get_production_solver():
+            return PULP_CBC_CMD(
+                msg=False,  # Quiet
+                threads=4,  # Use multiple threads
+                timeLimit=60,  # Standard time limit
+                gapRel=0.05,  # Stop at 5% optimality gap (faster)
+                presolve=True,  # Enable presolving
+                cuts=True,  # Enable cutting planes
+                strong=10,  # Deeper strong branching
+                options=["preprocess on", "cuts on", "heuristics on"],
+            )
 
-        return prob, buy_vars
+        # For infeasible problems - get detailed infeasibility analysis
+        def get_infeasibility_solver():
+            return PULP_CBC_CMD(
+                msg=True,
+                threads=1,  # Single thread for clearer output
+                timeLimit=30,  # Short time limit
+                options=[
+                    "preprocess off",  # Disable preprocessing to see raw problem
+                    "printingOptions all",  # Maximum detail
+                    "logLevel 3",  # Maximum logging
+                    "feasibilityPump on",  # Try feasibility pump heuristic
+                    "solve",
+                ],
+            )
+
+        # DEBUG: Analyze the constraints that were created
+        logger.info("=== CONSTRAINT DEBUGGING ===")
+        logger.info(f"Total constraints created: {len(prob.constraints)}")
+
+        # Debug quantity constraints
+        quantity_constraints = [name for name in prob.constraints.keys() if name.startswith("Required_quantity_")]
+        # logger.info(f"Quantity constraints: {len(quantity_constraints)}")
+        # for constraint_name in quantity_constraints[:5]:  # Show first 5
+        #     constraint = prob.constraints[constraint_name]
+        #     logger.info(f"  {constraint_name}: {constraint}")
+
+        # Debug store constraints
+        # store_constraints = [name for name in prob.constraints.keys() if "store" in name.lower()]
+        # logger.info(f"Store-related constraints: {len(store_constraints)}")
+        # for constraint_name in store_constraints:
+        #     constraint = prob.constraints[constraint_name]
+        #     logger.info(f"  {constraint_name}: {constraint}")
+
+        # Debug variables
+        logger.info(f"Total variables: {len(prob.variables())}")
+        buy_var_count = len([v for v in prob.variables() if v.name.startswith("Buy_")])
+        store_var_count = len([v for v in prob.variables() if v.name.startswith("Store_")])
+        logger.info(f"Buy variables: {buy_var_count}")
+        logger.info(f"Store variables: {store_var_count}")
+
+        # Debug the specific stores we know should work
+        test_stores = ["facetofacegames", "gamekeeperonline", "mtgjeuxjubes"]
+        logger.info("=== TESTING KNOWN GOOD STORES ===")
+        for store in test_stores:
+            if store in store_vars:
+                logger.info(f"Store '{store}' variable exists: {store_vars[store].name}")
+                # Check which cards can be bought from this store
+                available_cards = [card for card in unique_cards if store in costs_enriched.get(card, {})]
+                logger.info(f"  Can buy {len(available_cards)} cards from {store}")
+                logger.info(f"  Cards: {available_cards[:10]}...")  # Show first 10
+            else:
+                logger.error(f"Store '{store}' variable MISSING!")
+
+        # Test if the 3-store solution should work mathematically
+        logger.info("=== MATHEMATICAL FEASIBILITY TEST ===")
+        test_stores = ["facetofacegames", "gamekeeperonline", "mtgjeuxjubes"]
+        covered_cards = set()
+        for store in test_stores:
+            available_cards = [card for card in unique_cards if store in costs_enriched.get(card, {})]
+            covered_cards.update(available_cards)
+            logger.info(f"After adding {store}: {len(covered_cards)}/{len(unique_cards)} cards covered")
+
+        missing_cards = set(unique_cards) - covered_cards
+        if missing_cards:
+            logger.error(f"Cards still missing after 3 stores: {list(missing_cards)}")
+        else:
+            logger.info("✅ Mathematical verification: All cards can be covered with 3 stores!")
+
+        logger.info("=== END CONSTRAINT DEBUGGING ===")
+        # Solve
+        if pulp.LpStatus[prob.status] == "Infeasible":
+            # If we detect infeasibility, use specialized solver
+            solver = get_infeasibility_solver()
+        else:
+            # For normal operation, use debug solver first
+            # solver = get_debug_solver()
+            solver = get_production_solver()
+
+        prob.solve(solver)
+        logger.info(f"Solver status: {pulp.LpStatus[prob.status]}")
+        logger.info(f"Objective value: {pulp.value(prob.objective) if prob.objective else 'N/A'}")
+        logger.info(f"Variables: {len(prob.variables())}")
+        logger.info(f"Constraints: {len(prob.constraints)}")
+
+        if pulp.LpStatus[prob.status] == "Optimal":
+            logger.info("Feasible solution found.")
+        else:
+            logger.warning("No feasible solution found.")
+
+        return prob, buy_vars, total_possible_cost
 
     @staticmethod
     def _process_result(buy_vars, costs, filtered_listings_df) -> Dict:
-        Total_price = 0.0
+        total_price = 0.0
         results = []
         total_card_nbr = 0
 
@@ -987,15 +1624,19 @@ class PurchaseOptimizer:
 
         for card, store_dict in buy_vars.items():
             for store, var in store_dict.items():
-                quantity = var.value()
+                quantity = int(var.value() or 0)
                 if quantity > 0:
-                    weighted_price = round(costs[card][store], 2)
+                    try:
+                        weighted_price = round(costs[card][store]["weighted_price"], 2)
+                    except KeyError:
+                        logger.error(f"[ERROR] No cost info for {card} at {store}")
+                        continue
                     if weighted_price != 10000:  # Only include cards in solution
                         # Find matching cards using weighted_price instead of price
                         matching_cards = filtered_listings_df[
                             (filtered_listings_df["name"] == card)
                             & (filtered_listings_df["site_name"] == store)
-                            & (filtered_listings_df["weighted_price"].round(2) == weighted_price)
+                            & (abs(filtered_listings_df["weighted_price"] - weighted_price) < 0.01)
                         ]
 
                         if matching_cards.empty:
@@ -1024,12 +1665,15 @@ class PurchaseOptimizer:
 
                         card_store_total_price = quantity * actual_price
                         found_cards.add(card)
-                        Total_price += card_store_total_price
+                        total_price += card_store_total_price
                         total_card_nbr += quantity
                         store_usage[store] += 1
 
                         if "variant_id" not in card_data or card_data.get("variant_id") is None:
                             logger.warning(f"Card missing variant_id during optimization: {card} at {store}")
+                        if store not in costs.get(card, {}):
+                            logger.warning(f"Skipping {card} at {store}, not present in cost matrix.")
+                            continue
 
                         results.append(
                             {
@@ -1067,7 +1711,7 @@ class PurchaseOptimizer:
 
         return {
             "nbr_card_in_solution": int(total_card_nbr),
-            "total_price": float(Total_price),
+            "total_price": float(total_price),
             "number_store": len(stores),
             "list_stores": store_usage_str,
             "stores": stores,
@@ -1481,11 +2125,9 @@ class PurchaseOptimizer:
             total_cost = 0
             quality_scores = []
 
-            # Track cards and quantities found
             required_cards = {row["name"]: row["quantity"] for _, row in user_wishlist_df.iterrows()}
             found_cards = defaultdict(int)
 
-            # Process each card in solution
             for idx in individual:
                 if idx not in filtered_listings_df.index:
                     continue
@@ -1493,44 +2135,33 @@ class PurchaseOptimizer:
                 card = filtered_listings_df.loc[idx]
                 card_name = card["name"]
 
-                # Only count if we still need this card
                 if found_cards[card_name] >= required_cards.get(card_name, 0):
                     continue
 
                 prefs = self.card_preferences.get(card_name, {})
-                preferred_language = prefs.get("language", "English")
-                preferred_quality = prefs.get("quality", "NM")
-                preferred_version = prefs.get("version", "Standard")
+                weighted_price, penalty_multiplier, reason = PurchaseOptimizer._compute_penalized_price(
+                    card,
+                    prefs,
+                    optimizationConfig.strict_preferences,
+                    high_cost=10000,
+                )
 
-                # Normalize language and quality
-                language = CardLanguage.normalize(card["language"] if "language" in card else "Unknown")
-                quality = CardQuality.normalize(card["quality"] if "quality" in card else "DMG")
-                version = CardVersion.normalize(card["version"] if "version" in card else "standard")
+                if reason == "strict_filter":
+                    continue  # Skip listing due to strict preference mismatch
 
-                # Strict filtering
-                if self.optimizationConfig.strict_preferences:
-                    if language != preferred_language or quality != preferred_quality or version != preferred_version:
-                        continue
-                else:
-                    # Penalty logic
-                    language_penalty = 1.0 if language == preferred_language else 1.5
-                    quality_penalty = 1.0 if quality == preferred_quality else 1.5
-                    version_penalty = 1.0 if version == preferred_version else 1.3
-
-                # Price adjustment
-                adjusted_price = float(card["price"])
-                if not self.optimizationConfig.strict_preferences:
-                    adjusted_price *= language_penalty * quality_penalty * version_penalty
-
-                total_cost += adjusted_price
+                total_cost += weighted_price
                 found_cards[card_name] += 1
                 stores_used.add(card["site_name"])
 
-                # Adjusted quality score: 1 = perfect NM English, 0 = worst case (DMG + foreign)
+                # Compute quality score
+                normalized_quality = CardQuality.normalize(card.get("quality", "DMG"))
                 max_weight = max(CardQuality.get_weight(q.value) for q in CardQuality)
-                base_quality_score = 1 - (CardQuality.get_weight(quality) - 1) / (max_weight - 1)
-                adjusted_quality_score = base_quality_score / CardLanguage.get_weight(language)
-                quality_scores.append(adjusted_quality_score)
+                quality_score = 1 - (CardQuality.get_weight(normalized_quality) - 1) / (max_weight - 1)
+
+                language = CardLanguage.normalize(card.get("language", "Unknown"))
+                quality_score /= CardLanguage.get_weight(language)  # Penalize based on language weight
+
+                quality_scores.append(quality_score)
 
             # Calculate core metrics
             total_cards_needed = sum(required_cards.values())
@@ -1539,11 +2170,10 @@ class PurchaseOptimizer:
             avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0
             store_count = len(stores_used)
 
-            # Apply store count constraints
-            if store_count > optimizationConfig.max_store:
-                store_penalty = (store_count - optimizationConfig.max_store) * 1000
-            else:
-                store_penalty = 0
+            # Store penalty
+            store_penalty = (
+                (store_count - optimizationConfig.max_store) * 1000 if store_count > optimizationConfig.max_store else 0
+            )
 
             # Calculate cost with completeness penalty
             if completeness < 1.0:

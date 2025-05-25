@@ -1,6 +1,7 @@
 import logging
 import re
 from app.constants import CardLanguage, CardQuality
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -198,3 +199,7 @@ def normalize_variant_description(variant_description):
     except Exception as e:
         logger.error(f"Error normalizing variant description: {str(e)}")
         return None
+
+
+def normalize_string(name: str) -> str:
+    return unicodedata.normalize("NFKC", name)

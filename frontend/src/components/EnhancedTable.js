@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Table, Checkbox } from 'antd';
+import { Table, Checkbox, Space } from 'antd';
+import { ExportOptions } from '../utils/exportUtils';
 import { getStandardPagination } from '../utils/tableConfig';
 
 /**
@@ -10,6 +11,9 @@ import { getStandardPagination } from '../utils/tableConfig';
 const EnhancedTable = ({
   dataSource = [],
   columns = [],
+  enableExport = true,
+  exportFilename = 'export', 
+  exportCopyFormat = "cardlist", 
   onRowClick,
   rowSelectionEnabled = false,
   persistStateKey = null,
@@ -205,17 +209,29 @@ const EnhancedTable = ({
   };
 
   return (
-    <Table
-      dataSource={dataSource}
-      columns={enhancedColumns}
-      rowKey="id"
-      onChange={handleTableChange}
-      pagination={paginationConfig}
-      onRow={onRowConfig}
-      {...otherProps}
-    />
-  );
-};
+    <>
+      {enableExport && (
+        <div style={{ marginBottom: 12 }}>
+          <ExportOptions
+            dataSource={getFilteredData()}
+            columns={columns}
+            filename={exportFilename}
+            copyFormat={exportCopyFormat}
+          />
+        </div>
+      )}
+      <Table
+        dataSource={dataSource}
+        columns={enhancedColumns}
+        rowKey="id"
+        onChange={handleTableChange}
+        pagination={paginationConfig}
+        onRow={onRowConfig}
+        {...otherProps}
+      />
+      </>
+    );
+  };
 
 // Utility function to save table state to localStorage
 const saveTableState = (tableId, state) => {

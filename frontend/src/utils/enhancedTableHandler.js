@@ -226,6 +226,7 @@ export const useEnhancedTableHandler = (initialConfig = {}, persistKey = null) =
   }, []);
 
   return {
+    
     // State
     filteredInfo,
     sortedInfo,

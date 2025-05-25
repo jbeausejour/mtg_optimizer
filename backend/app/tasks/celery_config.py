@@ -32,9 +32,12 @@ class CeleryConfig:
 
     task_track_started = True
     task_time_limit = 30 * 60  # 30 minutes
-    worker_hijack_root_logger = False  # Don't hijack the root logger
+
+    worker_hijack_root_logger = True  # Changed to True for prefork
     worker_redirect_stdouts = True  # Redirect stdout/stderr to the Celery logger
     worker_redirect_stdouts_level = "INFO"  # Ensure all standard output is logged
+    worker_log_color = False  # Disable color in logs for better file output
+    worker_disable_rate_limits = False
 
     # Logging configuration
     worker_log_format = "%(message)s"
@@ -48,8 +51,18 @@ class CeleryConfig:
     result_expires = 300  # Results expire after 1 hour
 
     worker_concurrency = 20
-    worker_pool = "solo"
+    # worker_pool = "solo"
+    worker_pool = "prefork"
 
+    # Enable detailed logging
+    task_send_sent_event = True
+    task_publish_retry = True
+    task_publish_retry_policy = {
+        "max_retries": 3,
+        "interval_start": 0,
+        "interval_step": 0.2,
+        "interval_max": 0.2,
+    }
     beat_schedule = {
         "refresh_scryfall_cache_daily": {
             "task": "app.tasks.optimization_tasks.refresh_scryfall_cache",

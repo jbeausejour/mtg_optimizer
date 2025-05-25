@@ -323,6 +323,8 @@ const SiteManagement = () => {
       <EnhancedTable
         dataSource={sites}
         columns={siteColumns.filter(col => visibleColumns.includes(col.key))}
+        exportFilename="sites_export"
+        exportCopyFormat={null}
         rowKey="id"
         loading={loading}
         persistStateKey="site_management_table"

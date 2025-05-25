@@ -13,7 +13,7 @@ async_engine_celery = create_async_engine(
     os.environ.get("SQLALCHEMY_DATABASE_URI"),
     pool_pre_ping=True,
     pool_recycle=3600,
-    pool_size=5,  # Or adjust for your concurrency needs
+    pool_size=20,  # Or adjust for your concurrency needs
 )
 
 # SESSIONMAKER IS CREATED ONCE
@@ -26,7 +26,7 @@ async_engine_flask = create_async_engine(
     os.environ.get("SQLALCHEMY_DATABASE_URI"),
     pool_pre_ping=True,
     pool_recycle=3600,
-    pool_size=5,  # Or adjust for your concurrency needs
+    pool_size=20,  # Or adjust for your concurrency needs
 )
 
 # SESSIONMAKER IS CREATED ONCE
