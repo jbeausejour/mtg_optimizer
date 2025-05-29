@@ -191,38 +191,84 @@ class CardService(AsyncBaseService):
                 return SCRYFALL_CACHE[cache_key]
 
         logger.debug(f"[CACHE MISS] Scryfall for: {cache_key}")
+
+        # ISSUE 1: Missing required headers
+        headers = {
+            "User-Agent": "MTGCardService/1.0",  # Required by Scryfall API
+            "Accept": "application/json",  # Required by Scryfall API
+        }
+
         try:
+            # ISSUE 2: Strip and normalize card name to handle edge cases
+            normalized_card_name = card_name.strip()
+
             params = {
-                "exact": card_name,
+                "exact": normalized_card_name,
                 "set": set_code,
                 "lang": language or "en",
             }
             params = {k: v for k, v in params.items() if v is not None}
 
-            async with aiohttp.ClientSession() as http_session:
-                # Fetch main card data
-                async with http_session.get(SCRYFALL_API_NAMED_URL, params=params) as response:
-                    if response.status != 200:
-                        params.pop("exact", None)
-                        params["fuzzy"] = card_name
-                        async with http_session.get(SCRYFALL_API_NAMED_URL, params=params) as fuzzy_response:
-                            if fuzzy_response.status != 200:
-                                return None
-                            card_data = await fuzzy_response.json()
-                    else:
+            async with aiohttp.ClientSession(headers=headers) as http_session:
+                # ISSUE 3: Add timeout and better error handling
+                timeout = aiohttp.ClientTimeout(total=30)
+
+                # Fetch main card data with exact match
+                logger.info(f"Making exact request for: {normalized_card_name} with params: {params}")
+                async with http_session.get(SCRYFALL_API_NAMED_URL, params=params, timeout=timeout) as response:
+                    logger.info(f"Exact search response status: {response.status} for card: {normalized_card_name}")
+
+                    if response.status == 200:
                         card_data = await response.json()
+                        logger.info(f"Successfully fetched exact match for: {normalized_card_name}")
+                    elif response.status == 404:
+                        # Try fuzzy search as fallback
+                        logger.info(f"Exact match failed (404), trying fuzzy search for: {normalized_card_name}")
+                        fuzzy_params = {k: v for k, v in params.items() if k != "exact"}
+                        fuzzy_params["fuzzy"] = normalized_card_name
+
+                        async with http_session.get(
+                            SCRYFALL_API_NAMED_URL, params=fuzzy_params, timeout=timeout
+                        ) as fuzzy_response:
+                            logger.info(
+                                f"Fuzzy search response status: {fuzzy_response.status} for card: {normalized_card_name}"
+                            )
+
+                            if fuzzy_response.status == 200:
+                                card_data = await fuzzy_response.json()
+                                logger.info(f"Successfully fetched fuzzy match for: {normalized_card_name}")
+                            else:
+                                # ISSUE 4: Better error logging
+                                error_text = await fuzzy_response.text()
+                                logger.error(
+                                    f"Fuzzy search failed for '{normalized_card_name}'. Status: {fuzzy_response.status}, Response: {error_text}"
+                                )
+                                return None
+                    else:
+                        # ISSUE 4: Better error logging for non-404 errors
+                        error_text = await response.text()
+                        logger.error(
+                            f"Exact search failed for '{normalized_card_name}'. Status: {response.status}, Response: {error_text}"
+                        )
+                        return None
 
                 oracle_id = card_data.get("oracle_id")
                 if not oracle_id:
-                    logger.warning(f"No oracle_id found for card '{card_name}'")
+                    logger.warning(f"No oracle_id found for card '{normalized_card_name}'")
                     return None
 
                 # Fetch all printings including multilingual
                 print_url = (
                     f"https://api.scryfall.com/cards/search?q=oracleid:{oracle_id}&unique=prints&include_multilingual=1"
                 )
-                async with http_session.get(print_url) as prints_response:
+
+                logger.info(f"Fetching all printings for oracle_id: {oracle_id}")
+                async with http_session.get(print_url, timeout=timeout) as prints_response:
                     if prints_response.status != 200:
+                        error_text = await prints_response.text()
+                        logger.error(
+                            f"Failed to fetch printings for oracle_id {oracle_id}. Status: {prints_response.status}, Response: {error_text}"
+                        )
                         return None
                     prints_data = await prints_response.json()
                     all_printings = prints_data.get("data", [])
