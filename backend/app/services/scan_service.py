@@ -55,7 +55,7 @@ class ScanService(AsyncBaseService[Scan]):
                     errors.append({"scan_id": scan_id, "error": "Not found"})
                     continue
 
-                await cls.delete_object(session, scan)
+                await cls.delete(session, scan)
                 logger.info(f"[delete_scans] Deleted Scan ID {scan_id}.")
                 deleted.append(scan_id)
 

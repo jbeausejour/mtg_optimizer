@@ -104,7 +104,7 @@ async def delete_buylist(buylistId):
 
         # Call the service to delete the buylist
         async with flask_session_scope() as session:
-            deleted = await UserBuylistCardService.delete_buylist(session, buylistId, user_id)
+            deleted = await BuylistService.delete_buylist(session, buylistId, user_id)
             await session.commit()
             if deleted:
 

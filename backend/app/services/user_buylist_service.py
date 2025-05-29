@@ -60,7 +60,7 @@ class BuylistService(AsyncBaseService[UserBuylist]):
             )
 
             # Delete the buylist itself
-            await cls.delete_object(session, buylist)
+            await cls.delete(session, buylist)
 
             logger.info(f"Buylist {id} and all associated cards deleted successfully.")
             return True

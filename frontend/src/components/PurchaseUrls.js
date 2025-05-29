@@ -26,7 +26,7 @@ const generateAutomationURL = (cards, store) => {
   }
 };
 
-const UserscriptBasedAutomation = ({ cards, store, onSearch }) => {
+const UserscriptBasedAutomation = ({ cards, store, onSearch, setStoreStatus }) => {
   const [expanded, setExpanded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [userscriptInstalled, setUserscriptInstalled] = useState(false);
@@ -199,7 +199,9 @@ const UserscriptBasedAutomation = ({ cards, store, onSearch }) => {
   
   const handleDirectAutomation = async () => {
     setIsProcessing(true);
-    
+    if (setStoreStatus) {
+      setStoreStatus(prev => ({...prev, [store.site_name]: 'processing'}));
+    }
     try {
       // For Crystal Commerce, submit form with variant IDs included
       if (['crystal', 'scrapper'].includes(store.method?.toLowerCase())) {
@@ -256,7 +258,9 @@ const UserscriptBasedAutomation = ({ cards, store, onSearch }) => {
         document.body.appendChild(form);
         form.submit();
         document.body.removeChild(form);
-        
+        if (setStoreStatus) {
+          setStoreStatus(prev => ({...prev, [store.site_name]: 'success'}));
+        }
         message.success(`Form submitted to ${storeName}! Userscript will add ${variantIds.length} specific cards automatically.`);
       } 
       // For other sites, use existing logic
@@ -487,6 +491,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
   // Form-based store submission for Crystal Commerce
   const submitStoreForm = async (store) => {
     try {
+      setStoreStatus(prev => ({...prev, [store.site_name]: 'processing'}));
       console.info(`Submitting form for ${store.site_name} with method ${store.method}`);
       
       if (store.method === 'crystal' || store.method === 'scrapper') {
@@ -536,6 +541,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         document.body.appendChild(form);
         form.submit();
         document.body.removeChild(form);
+        setStoreStatus(prev => ({...prev, [store.site_name]: 'success'}));
         
       } else if (store.method === 'f2f') {
         // F2F stores don't need variant IDs
@@ -669,8 +675,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         )}
         
         <Alert
-          message="SOLUTION: Browser Userscript (No Console!)"
-          description="Install a one-time userscript to enable automatic cart addition without using developer console."
+          message="Ready to perform automatic cart generation."
           type="success"
           showIcon
           style={{ marginBottom: '16px' }}
@@ -733,6 +738,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
                         cards={store.cards}
                         store={store}
                         onSearch={() => submitStoreForm(store)}
+                        setStoreStatus={setStoreStatus}
                       />
                     ) : (
                       <div style={{ padding: '16px' }}>
@@ -774,8 +780,7 @@ const PurchaseHandler = ({ purchaseData, isOpen, onClose }) => {
         </div>
         
         <Alert
-          message="Userscript automation: One-time setup enables automatic cart addition without developer console."
-          type="info"
+          message="Userscript automation: One-time setup enables automatic cart addition."
           showIcon
           icon={<InfoCircleOutlined />}
         />
