@@ -1,6 +1,9 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
 import { Spin, Card, Tag, Typography, Space, Button, Modal, message, Popconfirm, Input } from 'antd';
+
+import { useLocation } from 'react-router-dom';
+
 import { CheckCircleOutlined, WarningOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
@@ -16,6 +19,7 @@ const { Title, Text } = Typography;
 
 const Results = () => {
   const { theme } = useTheme();
+  const location = useLocation();
   const [selectedResult, setSelectedResult] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
   const [modalMode, setModalMode] = useState('view');
@@ -23,6 +27,7 @@ const Results = () => {
   const [isModalLoading, setIsModalLoading] = useState(false);
   const queryClient = useQueryClient();
   const [cardData, setFetchedCard] = useState(null);
+  const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
   const {
     mutateAsync: fetchCard,
   } = useFetchScryfallCard();
@@ -55,6 +60,26 @@ const Results = () => {
     queryFn: () => api.get('/results').then(res => res.data),
     staleTime: 300000
   })
+  
+// Improved useEffect - add this to your Results.js component
+useEffect(() => {
+  // Only proceed if we came from optimization page and haven't shown message yet
+  if (location.state?.fromOptimization && !hasShownSuccessMessage) {
+    // Wait for data to be loaded and not empty
+    if (!loading && optimizationResults && optimizationResults.length > 0) {
+      const latestResult = optimizationResults[0]; // Assuming results are sorted by date desc
+      setSelectedResult(latestResult);
+      
+      // Show success message only once
+      message.success('🎉 Your latest optimization is ready! Results shown below.');
+      setHasShownSuccessMessage(true);
+      
+      // Optional: Clear the location state to prevent re-triggering on subsequent visits
+      window.history.replaceState({}, document.title);
+    }
+  }
+}, [optimizationResults, location.state, loading, hasShownSuccessMessage]);
+
   
   const handleModalClose = () => {
     setIsModalVisible(false);

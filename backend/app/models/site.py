@@ -13,6 +13,7 @@ class Site(Base):
     active = Column(Boolean, default=True)
     type = Column(String(50), nullable=False)
     country = Column(String(50), nullable=False)
+    currency = Column(String(3), nullable=False, default="CAD")
 
     # No need to define relationship here as it's defined in ScanResult
 
@@ -26,4 +27,5 @@ class Site(Base):
             "active": self.active,
             "type": self.type,
             "country": self.country,
+            "currency": self.currency,
         }

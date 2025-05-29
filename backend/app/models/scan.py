@@ -52,9 +52,6 @@ class ScanAttempt(Base):
     scan = relationship("Scan", backref="scan_attempts")
     site = relationship("Site", backref="scan_attempts")
 
-    # Ensure we don't have duplicate entries for the same scan
-    __table_args__ = (UniqueConstraint("scan_id", "site_id", "card_name", name="_scan_site_card_uc"),)
-
 
 class ScanResult(BaseCard):
     __tablename__ = "scan_result"

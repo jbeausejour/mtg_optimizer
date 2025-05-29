@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from app.utils.async_context_manager import celery_session_scope
 from app.constants.card_mappings import CardQuality
+from app.constants.currency_constants import apply_currency_conversion_to_listings
 from app.dto.optimization_dto import (
     CardInSolution,
     OptimizationConfigDTO,
@@ -31,7 +32,9 @@ from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer, Sit
 from app.utils.optimization import PurchaseOptimizer
 from app.utils.helpers import normalize_string
 from celery.result import AsyncResult
+import nest_asyncio
 
+nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +58,7 @@ class OptimizationTaskManager:
             "unknown_languages": set(),
             "unknown_qualities": set(),
         }
+        self.site_currency_map = {site.id: getattr(site, "currency", "CAD") for site in self.sites}
 
     async def initialize(self, session: AsyncSession):
         """
@@ -91,7 +95,8 @@ class OptimizationTaskManager:
                 return None, None
 
             card_listings_df = pd.DataFrame(card_listings)
-            filtered_listings_df = self._process_listings_dataframe(card_listings_df)
+            card_listings_df = apply_currency_conversion_to_listings(card_listings_df, self.site_currency_map)
+            filtered_listings_df = self._Normalize_and_filter_dataframe(card_listings_df)
             logger.info(f"[FILTER] Listings after processing: {len(filtered_listings_df)}")
             logger.info(f"[FILTER] Unique cards after filtering: {filtered_listings_df['name'].nunique()}")
             logger.info(f"[FILTER] Unique sites after filtering: {filtered_listings_df['site_name'].nunique()}")
@@ -160,7 +165,7 @@ class OptimizationTaskManager:
         scan_results = ScanService.get_scan_results_by_id_and_sites(scan_id, site_ids=self.site_ids)
         return scan_results
 
-    def _process_listings_dataframe(self, df):
+    def _Normalize_and_filter_dataframe(self, df):
         """Normalize and filter card listings"""
         if df.empty:
             return None
@@ -169,13 +174,11 @@ class OptimizationTaskManager:
         df["quality"] = df["quality"].astype(str)
         df = CardQuality.validate_and_update_qualities(df, quality_column="quality")
 
-        # Step 2: Compute weighted price using CardQuality.get_weight
-        df["weighted_price"] = df.apply(lambda row: row["price"] * CardQuality.get_weight(row["quality"]), axis=1)
-
-        # Step 3: Filter cards with quantity > 0
+        # Step 2: Filter cards with quantity > 0
         df = df[df["quantity"] > 0].copy()
 
-        return df.sort_values(["name", "weighted_price"])
+        # Step 3: Sort by name and original price (simple fallback sorting)
+        return df.sort_values(["name", "price"])
 
     @staticmethod
     def display_statistics(filtered_listings_df):
@@ -246,7 +249,7 @@ class OptimizationTaskManager:
         if not filtered_listings_df.empty:
             logger.info(f"Total filtered listings: {len(filtered_listings_df)}")
 
-            optimizationConfig.max_store = self.display_statistics(filtered_listings_df)
+            optimizationConfig.max_unique_store = self.display_statistics(filtered_listings_df)
 
         try:
             if filtered_listings_df is None or user_wishlist_df is None:
@@ -372,7 +375,7 @@ def scrape_site_task(self, site_id, card_names, scan_id):
 
         try:
             self.update_state(
-                state="FAILURE",
+                state="PROCESSING",  # Keep as PROCESSING, don't set FAILURE manually
                 meta={
                     "site_id": site_id,
                     "site_name": result["site_name"],
@@ -384,7 +387,8 @@ def scrape_site_task(self, site_id, card_names, scan_id):
         except Exception as update_error:
             logger.error(f"Failed to update task state on error: {update_error}")
 
-        return result
+        # Re-raise the original exception so Celery can handle the failure properly
+        raise e
 
 
 async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
@@ -511,7 +515,6 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
                 "cards_found": result["count"],
             },
         )
-        # Return the result
         return result
 
     except Exception as e:
@@ -520,17 +523,23 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
         result["status"] = "failed"
         result["end_time"] = datetime.now(timezone.utc)
 
-        celery_task.update_state(
-            state="FAILURE",
-            meta={
-                "site_id": site_id,
-                "site_name": result.get("site_name", "Unknown"),
-                "progress": 100,
-                "status": f"Failed: {str(e)}",
-                "error": str(e),
-            },
-        )
-        return result
+        # Update state but don't set to FAILURE manually
+        try:
+            celery_task.update_state(
+                state="PROCESSING",  # Keep as PROCESSING
+                meta={
+                    "site_id": site_id,
+                    "site_name": result.get("site_name", "Unknown"),
+                    "progress": 100,
+                    "status": f"Failed: {str(e)}",
+                    "error": str(e),
+                },
+            )
+        except Exception as update_error:
+            logger.error(f"Failed to update task state: {update_error}")
+
+        # Re-raise so the parent function can handle it
+        raise e
 
 
 @celery_app.task(bind=True, soft_time_limit=3600, time_limit=3660)
@@ -732,7 +741,7 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
 
     if not sites:
         logger.warning("No sites to scrape")
-        return
+        return []
     progress_increment = 30 / len(sites) if sites else 0
     site_tasks = []
     task_metadata = {}
@@ -768,7 +777,7 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
 
     if not site_tasks:
         logger.info("[Scraping] No sites were dispatched for scraping.")
-        return
+        return []
 
     logger.info(f"[Scraping] Waiting for {len(site_tasks)} tasks to finish...")
 

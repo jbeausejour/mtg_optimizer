@@ -328,9 +328,9 @@ class ExternalDataSynchronizer:
                         r["site_id"] = site_id
                         r["site_name"] = site_name
 
-                    logger.info(
-                        f"Updating progress for {site_name} from {celery_task.progress} to {celery_task.progress + progress_increment}"
-                    )
+                    # logger.info(
+                    #     f"Updating progress for {site_name} from {celery_task.progress} to {celery_task.progress + progress_increment}"
+                    # )
 
                     progress_fraction = found_cards / total_cards if total_cards > 0 else 0
                     increment = progress_fraction * 100  # Scale to percentage

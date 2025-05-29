@@ -143,6 +143,7 @@ class OptimizationConfigDTO(BaseModel):
     strategy: str = Field(..., pattern="^(milp|nsga-ii|hybrid)$")
     min_store: int = Field(..., gt=0)
     max_store: int = 0
+    max_unique_store: int = 0
     find_min_store: bool
     buylist_id: int
     user_id: int

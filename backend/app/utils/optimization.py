@@ -9,6 +9,7 @@ import pandas as pd
 import pulp
 from pulp import PULP_CBC_CMD
 from app.constants import CardLanguage, CardQuality, CardVersion
+from app.constants import CurrencyConverter
 from app.utils.data_fetcher import ErrorCollector
 from deap import algorithms, base, creator, tools
 
@@ -49,6 +50,8 @@ class PurchaseOptimizer:
             for _, row in self.user_wishlist_df.iterrows()
         }
 
+        # Check if currency conversion was applied
+        self._log_currency_info()
         # logger.info("PurchaseOptimizer initialized with config: %s", self.optimizationConfig)
 
         self._validate_input_data()
@@ -60,11 +63,71 @@ class PurchaseOptimizer:
             # Adjust min_store if needed
             self.optimizationConfig.min_store = min(unique_sites, self.optimizationConfig.min_store)
 
+        if unique_sites < self.optimizationConfig.max_store:
+            logger.warning(f"Found only {unique_sites} sites, but minimum {self.optimizationConfig.min_store} required")
+            # Adjust min_store if needed
+            self.optimizationConfig.max_store = min(unique_sites, self.optimizationConfig.max_store)
+
         logger.info(f"[Weights] Cost: {self.optimizationConfig.weights.get('cost', 1.0)}")
         logger.info(f"[Weights] Quality: {self.optimizationConfig.weights.get('quality', 1.0)}")
         logger.info(f"[Weights] Availability: {self.optimizationConfig.weights.get('availability', 100.0)}")
         logger.info(f"[Weights] Store Count: {self.optimizationConfig.weights.get('store_count', 0.3)}")
         logger.info(f"Initializing optimizer with {unique_sites} unique sites")
+
+    def _log_currency_info(self):
+        """Log information about currency conversion in the dataset"""
+        df = self.filtered_listings_df
+
+        # Check if currency conversion columns exist
+        if "original_currency" in df.columns and "original_price" in df.columns:
+            # Log currency distribution
+            currency_stats = (
+                df.groupby("original_currency")
+                .agg(
+                    {
+                        "original_price": ["count", "mean", "min", "max"],
+                        "price": ["mean", "min", "max"],  # USD prices after conversion
+                    }
+                )
+                .round(4)
+            )
+
+            logger.info("=== CURRENCY CONVERSION SUMMARY ===")
+            for currency in currency_stats.index:
+                count = currency_stats.loc[currency, ("original_price", "count")]
+                orig_avg = currency_stats.loc[currency, ("original_price", "mean")]
+                orig_min = currency_stats.loc[currency, ("original_price", "min")]
+                orig_max = currency_stats.loc[currency, ("original_price", "max")]
+                usd_avg = currency_stats.loc[currency, ("price", "mean")]
+                usd_min = currency_stats.loc[currency, ("price", "min")]
+                usd_max = currency_stats.loc[currency, ("price", "max")]
+
+                converter = CurrencyConverter()
+                symbol = converter.get_currency_symbol(currency)
+
+                logger.info(f"Currency: {currency} ({symbol})")
+                logger.info(f"  Items: {count}")
+                logger.info(
+                    f"  Original prices: {symbol}{orig_min:.2f} - {symbol}{orig_max:.2f} (avg: {symbol}{orig_avg:.2f})"
+                )
+                logger.info(f"  USD prices: ${usd_min:.2f} - ${usd_max:.2f} (avg: ${usd_avg:.2f})")
+
+                if currency != "USD":
+                    rate = (
+                        currency_stats.loc[currency, ("price", "mean")]
+                        / currency_stats.loc[currency, ("original_price", "mean")]
+                    )
+                    logger.info(f"  Conversion rate used: ~{rate:.4f} (1 {currency} = {rate:.4f} USD)")
+
+            logger.info("=== END CURRENCY CONVERSION SUMMARY ===")
+
+            # Validate that all prices are now in USD
+            total_items = len(df)
+            converted_items = len(df[df["original_currency"] != "USD"])
+            logger.info(f"Currency conversion: {converted_items}/{total_items} items converted to USD")
+
+        else:
+            logger.info("No currency conversion data found - assuming all prices are in CAD (default currency)")
 
     def init_fitness_creator(self, weights):
         def safe(w, fallback):
@@ -166,7 +229,7 @@ class PurchaseOptimizer:
 
             logger.info(f"Starting optimization with {len(card_names)} cards")
             logger.info(
-                f"Found {self.filtered_listings_df['site_name'].nunique()}/{optimizationConfig.max_store} unique sites"
+                f"Found {self.filtered_listings_df['site_name'].nunique()}/{optimizationConfig.max_unique_store} unique sites"
             )
             # logger.info(f"Unique sites: {self.filtered_listings_df['site_name'].unique().tolist()}")
 
@@ -902,7 +965,12 @@ class PurchaseOptimizer:
 
     @staticmethod
     def _compute_penalized_price(
-        row: pd.Series, preferences: dict, strict: bool, high_cost: float = 10_000
+        row: pd.Series,
+        preferences: dict,
+        strict: bool,
+        quality_weight_map: dict = None,
+        language_weight_map: dict = None,
+        high_cost: float = 10_000,
     ) -> Tuple[float, float, str]:
         """
         Returns: (final_price, penalty_multiplier, reason)
@@ -910,9 +978,14 @@ class PurchaseOptimizer:
         explanations = []
         base_price = row.get("price", high_cost)
 
-        # STEP 1: Apply base quality weight (this was missing!)
+        # STEP 1: Apply base quality weight using cached lookup
         quality = row.get("quality", "DMG")
-        quality_multiplier = CardQuality.get_weight(quality)
+        if quality_weight_map and quality in quality_weight_map:
+            quality_multiplier = quality_weight_map[quality]
+        else:
+            # Fallback to direct lookup if cache not available
+            quality_multiplier = CardQuality.get_weight(quality)
+
         weighted_price = base_price * quality_multiplier
 
         # STEP 2: Apply preference penalties on top
@@ -929,11 +1002,22 @@ class PurchaseOptimizer:
 
                 if not strict and actual != expected:
                     if attr == "language":
-                        attr_penalty = CardLanguage.calculate_language_preference_penalty(actual, expected)
+                        if language_weight_map and actual in language_weight_map:
+                            # Use cached language weight
+                            attr_penalty = language_weight_map[actual] / language_weight_map.get(expected, 1.0)
+                        else:
+                            # Fallback to direct calculation
+                            attr_penalty = CardLanguage.calculate_language_preference_penalty(actual, expected)
                     elif attr == "version":
                         attr_penalty = CardVersion.calculate_version_preference_penalty(actual, expected)
                     elif attr == "quality":
-                        attr_penalty = CardQuality.calculate_quality_preference_penalty(actual, expected)
+                        if quality_weight_map and actual in quality_weight_map and expected in quality_weight_map:
+                            # Use cached quality weights for preference penalty
+                            actual_weight = quality_weight_map[actual]
+                            expected_weight = quality_weight_map[expected]
+                            attr_penalty = actual_weight / expected_weight if expected_weight > 0 else 1.3
+                        else:
+                            attr_penalty = CardQuality.calculate_quality_preference_penalty(actual, expected)
                     else:  # foil
                         attr_penalty = 1.3
 
@@ -965,26 +1049,76 @@ class PurchaseOptimizer:
             total_qty = user_wishlist_df["quantity"].sum()
             high_cost = 10000
 
-            def compute_weighted(row):
-                prefs = self.card_preferences.get(row["name"], {})
-                price, penalty, explanations = self._compute_penalized_price(
-                    row, prefs, self.optimizationConfig.strict_preferences
-                )
-                row["weighted_price"] = price
-                row["penalty_multiplier"] = penalty
-                row["explanations"] = explanations
-                return price
+            # def compute_weighted(row):
+            #     prefs = self.card_preferences.get(row["name"], {})
+            #     price, penalty, explanations = self._compute_penalized_price(
+            #         row, prefs, self.optimizationConfig.strict_preferences
+            #     )
+            #     row["weighted_price"] = price
+            #     row["penalty_multiplier"] = penalty
+            #     row["explanations"] = explanations
+            #     return price
 
-            def compute_weighted_old(row):
-                # TEMPORARY DEBUG: Skip all penalties to test if this is the issue
-                price = row.get("price", 10000)
-                row["weighted_price"] = price
-                row["penalty_multiplier"] = 1.0
-                row["explanations"] = "debug_mode_no_penalties"
-                return price
-
+            # def compute_weighted_old(row):
+            #     # TEMPORARY DEBUG: Skip all penalties to test if this is the issue
+            #     price = row.get("price", 10000)
+            #     row["weighted_price"] = price
+            #     row["penalty_multiplier"] = 1.0
+            #     row["explanations"] = "debug_mode_no_penalties"
+            #     return price
             # Compute penalized price
-            filtered_listings_df["weighted_price"] = filtered_listings_df.apply(compute_weighted, axis=1)
+            # filtered_listings_df["weighted_price"] = filtered_listings_df.apply(compute_weighted, axis=1)
+
+            # VECTORIZED APPROACH: Compute base quality weights
+            quality_weights = filtered_listings_df["quality"].map(CardQuality.get_weight)
+            base_weighted_price = filtered_listings_df["price"] * quality_weights
+
+            # Initialize penalty tracking
+            filtered_listings_df["penalty_multiplier"] = 1.0
+            filtered_listings_df["penalty_explanation"] = ""
+            filtered_listings_df["preference_applied"] = False
+
+            cards_with_prefs = set(self.card_preferences.keys())
+            mask_has_prefs = filtered_listings_df["name"].isin(cards_with_prefs)
+
+            # For cards without preferences: use simple quality weighting (vectorized)
+            simple_mask = ~mask_has_prefs
+            filtered_listings_df.loc[simple_mask, "weighted_price"] = base_weighted_price[simple_mask]
+            filtered_listings_df.loc[simple_mask, "penalty_explanation"] = "No user preferences defined"
+
+            if mask_has_prefs.any():
+                pref_df = filtered_listings_df[mask_has_prefs].copy()
+                # Store results for batch update
+                weighted_prices = []
+                penalties = []
+                explanations = []
+
+                def compute_with_preferences(row):
+                    """Only for rows that need preference processing"""
+                    prefs = self.card_preferences[row["name"]]  # We know it exists
+                    price, penalty, explanation = self._compute_penalized_price(
+                        row, prefs, self.optimizationConfig.strict_preferences, high_cost=high_cost
+                    )
+                    weighted_prices.append(price)
+                    penalties.append(penalty)
+                    explanations.append(explanation)
+                    return price
+
+                # Apply detailed calculation only to subset that needs it
+                pref_df.apply(compute_with_preferences, axis=1)
+
+                # Batch update the main DataFrame
+                filtered_listings_df.loc[mask_has_prefs, "weighted_price"] = weighted_prices
+                filtered_listings_df.loc[mask_has_prefs, "penalty_multiplier"] = penalties
+                filtered_listings_df.loc[mask_has_prefs, "penalty_explanation"] = explanations
+                filtered_listings_df.loc[mask_has_prefs, "preference_applied"] = True
+
+                logger.info(f"Vectorized: {simple_mask.sum()} cards, Complex: {mask_has_prefs.sum()} cards")
+            else:
+                logger.info(f"All {len(filtered_listings_df)} cards processed with vectorized approach")
+
+            # Log penalty statistics for all processed cards
+            self._log_penalty_statistics(filtered_listings_df, mask_has_prefs)
 
             # Create cost matrix
             raw_costs = {}
@@ -1038,6 +1172,92 @@ class PurchaseOptimizer:
         except Exception as e:
             logger.error(f"Error in setup_pulp_optimization: {str(e)}", exc_info=True)
             return None, None, None, None, None, None, None
+
+    def _log_penalty_statistics(self, df, preference_mask):
+        """Log detailed statistics about penalties applied"""
+        pref_df = df[preference_mask]
+
+        if pref_df.empty:
+            return
+
+        logger.info("=" * 60)
+        logger.info("🔍 PENALTY ANALYSIS")
+        logger.info("=" * 60)
+
+        # Overall penalty statistics
+        avg_penalty = pref_df["penalty_multiplier"].mean()
+        max_penalty = pref_df["penalty_multiplier"].max()
+        min_penalty = pref_df["penalty_multiplier"].min()
+
+        logger.info(f"Penalty Statistics:")
+        logger.info(f"  Average: {avg_penalty:.2f}x")
+        logger.info(f"  Range: {min_penalty:.2f}x - {max_penalty:.2f}x")
+
+        # High penalty listings (>2x cost increase)
+        high_penalty_mask = pref_df["penalty_multiplier"] > 2.0
+        if high_penalty_mask.any():
+            high_penalty_count = high_penalty_mask.sum()
+            logger.warning(f"⚠️  {high_penalty_count} listings with high penalties (>2x):")
+
+            high_penalty_df = pref_df[high_penalty_mask].nlargest(10, "penalty_multiplier")
+            for _, row in high_penalty_df.iterrows():
+                logger.warning(f"  {row['name']} at {row['site_name']}: " f"{row['penalty_multiplier']:.1f}x penalty")
+                logger.warning(f"    Reason: {row['penalty_explanation']}")
+
+        # Strict filter rejections
+        strict_rejections = pref_df[pref_df["penalty_explanation"] == "strict_filter"]
+        if not strict_rejections.empty:
+            logger.warning(f"❌ {len(strict_rejections)} listings rejected by strict preferences")
+
+            # Group by card to show which cards are most affected
+            rejection_by_card = strict_rejections.groupby("name").size().sort_values(ascending=False)
+            for card_name, count in rejection_by_card.head(5).items():
+                logger.warning(f"  {card_name}: {count} listings rejected")
+
+        # Cards with no viable options after penalties
+        expensive_cards = []
+        for card_name in pref_df["name"].unique():
+            card_listings = pref_df[pref_df["name"] == card_name]
+            min_price = card_listings["weighted_price"].min()
+            if min_price >= 10000:  # High cost threshold
+                expensive_cards.append(card_name)
+
+        if expensive_cards:
+            logger.error(f"💰 Cards with no viable options after penalties: {expensive_cards}")
+
+        logger.info("=" * 60)
+
+    @staticmethod
+    def _log_solution_penalty_summary(results):
+        """Log summary of penalties in the final solution"""
+        logger.info("=" * 60)
+        logger.info("📊 FINAL SOLUTION PENALTY SUMMARY")
+        logger.info("=" * 60)
+
+        total_cards = len(results)
+        penalized_cards = [r for r in results if r.get("penalty_multiplier", 1.0) > 1.0]
+
+        if penalized_cards:
+            logger.info(f"Cards with penalties: {len(penalized_cards)}/{total_cards}")
+
+            # Calculate cost impact
+            original_total = sum(r["original_price"] * r["quantity"] for r in results)
+            weighted_total = sum(r["weighted_price"] * r["quantity"] for r in results)
+            cost_increase = weighted_total - original_total
+
+            logger.info(f"Original cost: ${original_total:.2f}")
+            logger.info(f"Weighted cost: ${weighted_total:.2f}")
+            logger.info(f"Penalty impact: +${cost_increase:.2f} ({(cost_increase/original_total)*100:.1f}%)")
+
+            # Show most penalized cards in solution
+            high_penalty_cards = sorted(penalized_cards, key=lambda x: x["penalty_multiplier"], reverse=True)[:5]
+            logger.info("Most penalized cards in solution:")
+            for card in high_penalty_cards:
+                logger.info(f"  {card['name']}: {card['penalty_multiplier']:.1f}x - {card['penalty_explanation']}")
+        else:
+            logger.info("No penalties applied to cards in final solution")
+
+        logger.info("=" * 60)
 
     @staticmethod
     def _run_feasibility_scan(
@@ -1709,6 +1929,46 @@ class PurchaseOptimizer:
             {"site_name": store, "site_id": cards[0]["site_id"], "cards": cards} for store, cards in stores_data.items()
         ]
 
+        for result in results:
+            try:
+                card_name = result["name"]
+                site_name = result["site_name"]
+
+                # Find the corresponding row in filtered_listings_df
+                matching_row = filtered_listings_df[
+                    (filtered_listings_df["name"] == card_name) & (filtered_listings_df["site_name"] == site_name)
+                ]
+
+                if not matching_row.empty:
+                    row = matching_row.iloc[0]
+                    result["penalty_multiplier"] = float(row.get("penalty_multiplier", 1.0))
+                    result["penalty_explanation"] = str(row.get("penalty_explanation", ""))
+                    result["preference_applied"] = bool(row.get("preference_applied", False))
+                    result["original_price"] = result["price"]
+                    result["weighted_price"] = float(row.get("weighted_price", result["price"]))
+                else:
+                    # Fallback values if matching row not found
+                    result["penalty_multiplier"] = 1.0
+                    result["penalty_explanation"] = "No penalty data available"
+                    result["preference_applied"] = False
+                    result["original_price"] = result["price"]
+                    result["weighted_price"] = result["price"]
+            except Exception as e:
+                logger.warning(f"Failed to add penalty info for {result.get('name', 'unknown')}: {e}")
+                # Set safe defaults
+                result["penalty_multiplier"] = 1.0
+                result["penalty_explanation"] = "Error retrieving penalty data"
+                result["preference_applied"] = False
+                result["original_price"] = result["price"]
+                result["weighted_price"] = result["price"]
+
+        # Log final solution penalty summary (with error handling)
+        try:
+            if results:
+                PurchaseOptimizer._log_solution_penalty_summary(results)
+        except Exception as e:
+            logger.warning(f"Failed to log penalty summary: {e}")
+
         return {
             "nbr_card_in_solution": int(total_card_nbr),
             "total_price": float(total_price),
@@ -2172,7 +2432,9 @@ class PurchaseOptimizer:
 
             # Store penalty
             store_penalty = (
-                (store_count - optimizationConfig.max_store) * 1000 if store_count > optimizationConfig.max_store else 0
+                (store_count - optimizationConfig.max_unique_store) * 1000
+                if store_count > optimizationConfig.max_unique_store
+                else 0
             )
 
             # Calculate cost with completeness penalty

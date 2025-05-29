@@ -1,8 +1,40 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../utils/api';
-import {Alert, Button, message, Row, Col, Card, List, Modal, Switch, InputNumber, Select, Typography, Spin, Divider, Progress, Space, Tag, Tooltip, Collapse, Slider } from 'antd';
+import { 
+  TrophyOutlined, 
+  ShopOutlined, 
+  DollarOutlined, 
+  CheckCircleOutlined, 
+  ExclamationCircleOutlined,
+  EyeOutlined  
+} from '@ant-design/icons';
+import {
+  Alert, 
+  Button, 
+  message, 
+  Row, 
+  Col, 
+  Card, 
+  List, 
+  Modal, 
+  Switch, 
+  InputNumber, 
+  Select, 
+  Typography, 
+  Spin, 
+  Divider, 
+  Space,
+  Tag, 
+  Tooltip, 
+  Collapse
+
+
+} from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import NormalizedWeightSliders, { weightConfig } from '../components/NormalizedWeightSliders';
+
+import BeautifulProgressDisplay from '../components/BeautifulProgressDisplay';
+import { useNavigate } from 'react-router-dom';
 
 import RadarChart from '../components/RadarChart';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
@@ -16,6 +48,7 @@ const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
 const Optimize = () => {
+  const navigate = useNavigate();
   const { theme } = useTheme();
   const { Option } = Select;
 
@@ -28,6 +61,7 @@ const Optimize = () => {
 
   const [optimizationStrategy, setOptimizationStrategy] = useState('hybrid');
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [isOptimizationComplete, setIsOptimizationComplete] = useState(false);
   const [optimizationResult, setOptimizationResult] = useState(null);
   const [minStore, setMinStore] = useState(3);
   const [maxStore, setMaxStore] = useState(15);
@@ -203,28 +237,51 @@ const Optimize = () => {
     setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
   }, [filteredSites, selectedSites]);
 
+  
   const checkTaskStatus = async (id) => {
     try {
       const response = await api.get(`/task_status/${id}`);
       setTaskState(response.data.state);
       setTaskStatus(response.data.status);
       setTaskProgress(response.data.progress ?? 0);
-      setTaskDetails(response.data.details ?? null); // ← this line fixes it
+      setTaskDetails(response.data.details ?? null);
 
       // Extract subtasks from the response
       if (response.data.current && response.data.current.subtasks) {
         setSubtasks(response.data.current.subtasks);
       }
+      
       if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
         setIsOptimizing(false);
-        setTaskId(null);
         setSubtasks(null);
         localStorage.removeItem('mtg_task_id');
+        
         if (response.data.state === 'SUCCESS') {
           message.success('Optimization completed successfully!');
-          setOptimizationResult(response.data.result?.optimization);
+          
+          // The result is directly in response.data.result (not .optimization)
+          const optimizationData = response.data.result;
+          
+          console.log('Setting optimization result:', optimizationData);
+          
+          // Add best_solution property by finding it from solutions array
+          if (optimizationData && optimizationData.solutions) {
+            const bestSolution = optimizationData.solutions.find(s => s.is_best_solution);
+            optimizationData.best_solution = bestSolution;
+          }
+          
+          setOptimizationResult(optimizationData);
+          setIsOptimizationComplete(true);
+          
+          // Keep taskId for a bit longer to show the success summary
+          setTimeout(() => {
+            setTaskId(null);
+            setIsOptimizationComplete(false);
+          }, 10000); // Show success summary for 10 seconds
         } else {
           message.error(`Optimization failed: ${response.data.error}`);
+          setTaskId(null);
+          setIsOptimizationComplete(false);
         }
       }
     } catch (error) {
@@ -232,7 +289,30 @@ const Optimize = () => {
       setIsOptimizing(false);
       setTaskId(null);
       setSubtasks(null);
+      setIsOptimizationComplete(false);
     }
+  };
+
+  // Add this function to handle viewing results:
+  const handleViewResults = () => {
+    if (optimizationResult) {
+      // Scroll to results section
+      const resultsElement = document.getElementById('optimization-results');
+      if (resultsElement) {
+        resultsElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      
+      // Optional: Navigate to a dedicated results page
+      navigate('/results');
+    }
+  };
+  const handleGoToResultsPage = () => {
+    navigate('/results', { 
+      state: { 
+        fromOptimization: true,
+        optimizationId: optimizationResult?.id // if you have the result ID
+      } 
+    });
   };
 
   const fetchSites = async () => {
@@ -265,6 +345,8 @@ const Optimize = () => {
   };
 
   const handleOptimize = async () => {
+    setOptimizationResult(null);
+    setIsOptimizationComplete(false);
     try {
       const sitesToOptimize = filteredSites
         .filter(site => selectedSites[site.id])
@@ -593,37 +675,110 @@ const Optimize = () => {
         </Col>
       </Row>
 
-      {isOptimizing && (
-        <>
-          <Progress percent={Math.round(taskProgress)} status="active" />
-          <Text>{taskStatus}</Text>
-          {taskDetails && <pre>{JSON.stringify(taskDetails, null, 2)}</pre>}
-          {subtasks && <SubtaskProgress subtasks={subtasks} theme={theme} />}
+      {(isOptimizing || isOptimizationComplete) && (
+        <div style={{ marginBottom: '24px' }}>
+          <BeautifulProgressDisplay 
+            taskStatus={taskStatus}
+            taskProgress={taskProgress}
+            taskDetails={taskDetails}
+            taskId={taskId}
+            isComplete={isOptimizationComplete}
+            onViewResults={optimizationResult ? handleViewResults : null}
+          />
+
+          {/* Subtask Progress - only show during optimization, not after completion */}
+          {isOptimizing && !isOptimizationComplete && subtasks && (
+            <SubtaskProgress subtasks={subtasks} theme={theme} />
+          )}
+          
           <Divider />
-        </>
+        </div>
       )}
 
       {optimizationResult && (
-        <div className="mt-8">
+        <div id="optimization-results" className="mt-8" style={{ 
+          background: 'linear-gradient(135deg, #f6ffed 0%, #fcffe6 100%)',
+          padding: '24px',
+          borderRadius: '12px',
+          border: '2px solid #b7eb8f',
+          marginBottom: '24px'
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            marginBottom: '16px' 
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <TrophyOutlined style={{ fontSize: '32px', color: '#52c41a' }} />
+              <Title level={2} style={{ margin: 0, color: '#52c41a' }}>
+                Optimization Results
+              </Title>
+            </div>
+            
+            <Button 
+              type="primary" 
+              icon={<EyeOutlined />}
+              size="large"
+              onClick={handleGoToResultsPage}
+              style={{
+                background: 'linear-gradient(135deg, #52c41a 0%, #73d13d 100%)',
+                border: 'none',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(82, 196, 26, 0.3)'
+              }}
+            >
+              View in Results Page
+            </Button>
+          </div>
+          
+          {/* Render the optimization summary */}
           <OptimizationSummary 
             result={optimizationResult} 
             onCardClick={handleCardClick}
           />
-          <div className="mt-4">
-            <Title level={4}>Best Solution</Title>
-            <Space>
-              <Tag color="blue">{`${optimizationResult.best_solution.number_store} Stores`}</Tag>
-              <Tag color={optimizationResult.best_solution.completeness ? 'green' : 'orange'}>
-                {optimizationResult.best_solution.completeness ? 'Complete' : `${optimizationResult.best_solution.percentage}%`}
-              </Tag>
-              <Text>${optimizationResult.best_solution.total_price.toFixed(2)}</Text>
-            </Space>
-          </div>
-          <div className="mt-4">
-            <Title level={4}>Iteration</Title>
-            <Space>
-              <Tag color="blue">{`Iteration ${optimizationResult.best_solution.iteration}`}</Tag>
-            </Space>
+          
+          {/* Show best solution summary */}
+          {optimizationResult.best_solution && (
+            <div className="mt-4">
+              <Title level={4}>Best Solution Summary</Title>
+              <Space wrap>
+                <Tag color="blue" icon={<ShopOutlined />} style={{ fontSize: '14px', padding: '4px 8px' }}>
+                  {optimizationResult.best_solution.number_store} Stores
+                </Tag>
+                <Tag 
+                  color={optimizationResult.best_solution.missing_cards_count === 0 ? 'green' : 'orange'} 
+                  icon={optimizationResult.best_solution.missing_cards_count === 0 ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
+                  style={{ fontSize: '14px', padding: '4px 8px' }}
+                >
+                  {optimizationResult.best_solution.missing_cards_count === 0 ? 'Complete' : 
+                    `${((optimizationResult.best_solution.nbr_card_in_solution / optimizationResult.best_solution.total_qty) * 100).toFixed(1)}%`
+                  }
+                </Tag>
+                <Tag color="gold" icon={<DollarOutlined />} style={{ fontSize: '14px', padding: '4px 8px' }}>
+                  ${optimizationResult.best_solution.total_price.toFixed(2)}
+                </Tag>
+                <Tag color="purple" style={{ fontSize: '14px', padding: '4px 8px' }}>
+                  {optimizationResult.best_solution.nbr_card_in_solution}/{optimizationResult.best_solution.total_qty} Cards
+                </Tag>
+              </Space>
+            </div>
+          )}
+          
+          <div style={{ 
+            marginTop: '16px', 
+            padding: '12px', 
+            background: 'rgba(255, 255, 255, 0.7)', 
+            borderRadius: '8px',
+            textAlign: 'center'
+          }}>
+            <Text type="secondary">
+              💡 This optimization has been saved to your history. Visit the 
+              <Button type="link" onClick={handleGoToResultsPage} style={{ padding: '0 4px' }}>
+                Results Page
+              </Button>
+              to view all your optimizations and compare different runs.
+            </Text>
           </div>
         </div>
       )}

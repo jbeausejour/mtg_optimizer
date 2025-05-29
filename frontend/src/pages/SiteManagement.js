@@ -12,6 +12,21 @@ import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 const { Title } = Typography;
 const { Option } = Select;
 
+// Supported currencies for site configuration
+const SUPPORTED_CURRENCIES = {
+  'CAD': 'Canadian Dollar (C$)',
+  'USD': 'US Dollar ($)',
+  'EUR': 'Euro (€)',
+  'GBP': 'British Pound (£)',
+  'JPY': 'Japanese Yen (¥)',
+  'AUD': 'Australian Dollar (A$)',
+  'CHF': 'Swiss Franc (CHF)',
+  'SEK': 'Swedish Krona (kr)',
+  'NOK': 'Norwegian Krone (kr)',
+  'DKK': 'Danish Krone (kr)',
+};
+
+
 const SiteManagement = () => {
   const { theme } = useTheme();
   const queryClient = useQueryClient();
@@ -35,7 +50,7 @@ const SiteManagement = () => {
     handleResetAllFilters,
     handleColumnVisibilityChange
   } = useEnhancedTableHandler({
-    visibleColumns: ['name', 'url', 'method', 'country', 'type', 'active', 'action']
+    visibleColumns: ['name', 'url', 'method', 'country', 'currency', 'type', 'active', 'action']
   }, 'site_management_table');
 
   const [editMethodValue, setEditMethodValue] = useState('');
@@ -270,6 +285,26 @@ const SiteManagement = () => {
       onFilter: (value, record) => record.type === value,
     },
     {
+      title: 'Currency',
+      dataIndex: 'currency',
+      key: 'currency',
+      render: (currency) => {
+        const currencyInfo = SUPPORTED_CURRENCIES[currency] || currency;
+        const isSupported = SUPPORTED_CURRENCIES[currency];
+        return (
+          <Tag color={isSupported ? "blue" : "orange"} title={currencyInfo}>
+            {currency}
+          </Tag>
+        );
+      },
+      filters: Object.keys(SUPPORTED_CURRENCIES).map(code => ({
+        text: `${code} - ${SUPPORTED_CURRENCIES[code]}`,
+        value: code,
+      })),
+      filteredValue: filteredInfo.currency || null,
+      onFilter: (value, record) => record.currency === value,
+    },
+    {
       title: 'Active',
       dataIndex: 'active',
       key: 'active',
@@ -389,6 +424,15 @@ const SiteManagement = () => {
               <Option value="NotWorking">Not Working</Option>
             </Select>
           </Form.Item>
+          <Form.Item name="currency" label="Currency" rules={[{ required: true, message: 'Please select a currency' }]}>
+            <Select placeholder="Select currency" showSearch optionFilterProp="children">
+              {Object.entries(SUPPORTED_CURRENCIES).map(([code, name]) => (
+                <Option key={code} value={code} title={name}>
+                  <span style={{ fontWeight: 'bold' }}>{code}</span> - {name}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
           <Form.Item name="active" label="Active" valuePropName="checked">
             <Switch />
           </Form.Item>
@@ -448,6 +492,15 @@ const SiteManagement = () => {
               <Option value="Marketplace">Marketplace</Option>
               <Option value="NoInventory">No Inventory</Option>
               <Option value="NotWorking">Not Working</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="currency" label="Currency" rules={[{ required: true, message: 'Please select a currency' }]} initialValue="CAD">
+            <Select placeholder="Select currency" showSearch optionFilterProp="children">
+              {Object.entries(SUPPORTED_CURRENCIES).map(([code, name]) => (
+                <Option key={code} value={code} title={name}>
+                  <span style={{ fontWeight: 'bold' }}>{code}</span> - {name}
+                </Option>
+              ))}
             </Select>
           </Form.Item>
           <Form.Item name="active" label="Active" valuePropName="checked">

@@ -1,4 +1,5 @@
 import logging
+import time
 import aiohttp
 from quart import Blueprint, request, jsonify
 
@@ -425,35 +426,116 @@ async def get_card_by_scryfall_id(card_id):
 ############################################################################################################
 
 
-@card_routes.route("/task_status/<task_id>", methods=["GET"])
-@jwt_required
-async def task_status(task_id):
+@card_routes.route("/task_status/<task_id>")
+def get_task_status(task_id):
+    """Get task status with better error handling"""
     try:
         result = AsyncResult(task_id)
 
-        response = {
-            "task_id": task_id,
-            "state": result.state,
-            "current": result.info if isinstance(result.info, dict) else str(result.info),
-            "result": None,
-        }
+        # Check if task exists and is valid
+        if not result:
+            return jsonify({"state": "PENDING", "status": "Task not found", "progress": 0, "error": "Task not found"})
 
-        if result.state == "PENDING":
-            response["current"] = {"status": "Task pending...", "progress": 0}
-        elif result.state == "PROCESSING":
-            # Include subtask information if available
-            if isinstance(result.info, dict) and "subtasks" in result.info:
-                response["subtasks"] = result.info["subtasks"]
-        elif result.state == "SUCCESS":
-            response["result"] = result.result
-        elif result.state == "FAILURE":
-            response["error"] = str(result.info)
+        # Get task state safely
+        try:
+            state = result.state
+        except Exception as e:
+            logger.warning(f"Failed to get task state for {task_id}: {e}")
+            state = "UNKNOWN"
 
-        return jsonify(response), 200
+        # Get task info safely
+        task_info = None
+        try:
+            if hasattr(result, "info") and result.info:
+                task_info = result.info
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning(f"Failed to get task info for {task_id}: {e}")
+            task_info = None
+
+        # Handle different states
+        if state == "PENDING":
+            response = {"state": state, "status": "Task is pending...", "progress": 0}
+        elif state == "PROCESSING":
+            if task_info and isinstance(task_info, dict):
+                response = {
+                    "state": state,
+                    "status": task_info.get("status", "Processing..."),
+                    "progress": task_info.get("progress", 0),
+                    "current": task_info,
+                    "details": task_info.get("details"),
+                }
+            else:
+                response = {"state": state, "status": "Processing...", "progress": 0}
+        elif state == "SUCCESS":
+            if task_info:
+                response = {
+                    "state": state,
+                    "status": "Task completed successfully",
+                    "progress": 100,
+                    "result": task_info,
+                }
+            else:
+                # Try to get the actual result
+                try:
+                    task_result = result.result
+                    response = {
+                        "state": state,
+                        "status": "Task completed successfully",
+                        "progress": 100,
+                        "result": task_result,
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to get task result for {task_id}: {e}")
+                    response = {
+                        "state": state,
+                        "status": "Task completed but result unavailable",
+                        "progress": 100,
+                        "error": str(e),
+                    }
+        elif state == "FAILURE":
+            # Handle failure state carefully
+            error_message = "Task failed"
+            if task_info:
+                if isinstance(task_info, dict):
+                    error_message = task_info.get("error", str(task_info))
+                else:
+                    error_message = str(task_info)
+
+            response = {"state": state, "status": "Task failed", "progress": 100, "error": error_message}
+        else:
+            # Unknown or other states
+            response = {
+                "state": state,
+                "status": f"Task in unknown state: {state}",
+                "progress": 0,
+                "error": f"Unknown task state: {state}",
+            }
+
+        return jsonify(response)
 
     except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception(f"Error checking task status for {task_id}: {e}")
+        return jsonify({"state": "ERROR", "status": "Failed to check task status", "progress": 0, "error": str(e)}), 500
+
+
+# Also add this helper function for better task monitoring
+def safe_get_task_info(task_id, max_retries=3):
+    """Safely get task information with retries"""
+    for attempt in range(max_retries):
+        try:
+            result = AsyncResult(task_id)
+            return {
+                "state": result.state,
+                "info": result.info if hasattr(result, "info") else None,
+                "result": result.result if result.state == "SUCCESS" else None,
+            }
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed to get task info for {task_id}: {e}")
+            if attempt == max_retries - 1:
+                return {"state": "ERROR", "info": None, "result": None, "error": str(e)}
+            time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+
+    return None
 
 
 @card_routes.route("/cancel_task/<task_id>", methods=["POST"])
@@ -707,6 +789,7 @@ async def update_site(site_id):
 
         async with flask_session_scope() as session:
             updated_site = await SiteService.update_site(session, site_id, data)
+            await session.commit()
             if not updated_site:
                 return (
                     jsonify({"status": "info", "message": "No changes were needed - site data is already up to date"}),
@@ -736,6 +819,7 @@ async def delete_site(site_id):
     try:
         async with flask_session_scope() as session:
             deleted = await SiteService.delete_site(session, site_id)
+            await session.commit()
             if deleted:
                 return jsonify({"status": "success", "message": "Site deleted successfully"}), 200
             else:

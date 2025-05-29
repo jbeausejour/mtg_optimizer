@@ -1,8 +1,10 @@
 import React from 'react';
-import { Card, Table, Tag, Typography, Progress } from 'antd';
+import { Card, Table, Tag, Typography, Progress, Collapse } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
+const { Panel } = Collapse;
+
 // New component for displaying subtask progress
 const SubtaskProgress = ({ subtasks, theme }) => {
   if (!subtasks) return null;
@@ -85,20 +87,39 @@ const SubtaskProgress = ({ subtasks, theme }) => {
     // If progress is equal, sort by cards_count (descending)
     return (b.cards_count || 0) - (a.cards_count || 0);
   });
+  // Calculate summary stats
+  const totalSites = dataSource.length;
+  const completedSites = dataSource.filter(site => site.status === 'completed').length;
+  const failedSites = dataSource.filter(site => site.status === 'failed').length;
+  const processingSites = dataSource.filter(site => site.status === 'processing').length;
 
+  const headerTitle = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+      <span>Site Scraping Progress</span>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <Tag color="success">{completedSites} completed</Tag>
+        <Tag color="processing">{processingSites} processing</Tag>
+        {failedSites > 0 && <Tag color="error">{failedSites} failed</Tag>}
+        <Tag color="default">{totalSites} total</Tag>
+      </div>
+    </div>
+  );
 
   return (
     <Card 
-      title="Site Scraping Progress" 
       size="small"
       style={{ marginBottom: 16 }}
     >
-      <Table
-        columns={columns}
-        dataSource={dataSource}
-        pagination={false}
-        size="small"
-      />
+      <Collapse defaultActiveKey={['1']} size="small">
+        <Panel header={headerTitle} key="1">
+          <Table
+            columns={columns}
+            dataSource={dataSource}
+            pagination={false}
+            size="small"
+          />
+        </Panel>
+      </Collapse>
     </Card>
   );
 };

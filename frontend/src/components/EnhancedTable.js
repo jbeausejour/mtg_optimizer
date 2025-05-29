@@ -150,6 +150,20 @@ const EnhancedTable = ({
     onSelectionChange(newSelection);
   };
 
+  // Ensure columns have proper keys and dataSource has proper row keys
+  const normalizedDataSource = dataSource.map((item, index) => ({
+    ...item,
+    // Ensure each record has a unique identifier
+    key: item.id || item.key || `row-${index}`,
+    id: item.id || item.key || `row-${index}`
+  }));
+
+  // Ensure all columns have proper keys
+  const normalizedColumns = columns.map((column, index) => ({
+    ...column,
+    key: column.key || column.dataIndex || `column-${index}`
+  }));
+
   // Add checkbox column if selection is enabled
   const enhancedColumns = rowSelectionEnabled && selectedIds
     ? [
@@ -179,9 +193,9 @@ const EnhancedTable = ({
             />
           ),
         },
-        ...columns
+        ...normalizedColumns
       ] 
-    : columns;
+    : normalizedColumns;
 
   // Configure onRow handler for row clicking
   const onRowConfig = record => ({
@@ -214,14 +228,14 @@ const EnhancedTable = ({
         <div style={{ marginBottom: 12 }}>
           <ExportOptions
             dataSource={getFilteredData()}
-            columns={columns}
+            columns={normalizedColumns}
             filename={exportFilename}
             copyFormat={exportCopyFormat}
           />
         </div>
       )}
       <Table
-        dataSource={dataSource}
+        dataSource={normalizedDataSource}
         columns={enhancedColumns}
         rowKey="id"
         onChange={handleTableChange}
