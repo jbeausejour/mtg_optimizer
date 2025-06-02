@@ -22,6 +22,13 @@
   --btn-hover-background-color: #4096ff;
   --btn-hover-text-color: #f8f8f8;
   --btn-text-color: #ffffff;
+
+  /* Light theme notification colors */
+  --notification-bg: #ffffff;
+  --notification-border: #d9d9d9;
+  --notification-text: #000000;
+  --notification-text-secondary: #666666;
+  --notification-shadow: rgba(0, 0, 0, 0.15);
 }
 
 [data-theme='dark'] {
@@ -48,13 +55,25 @@
   --btn-hover-background-color: #4096ff;
   --btn-hover-text-color: #2c2c2c;
   --btn-text-color: #1c1c1c;
+
+  /* Dark theme notification colors */
+  --notification-bg: #2c2c2c;
+  --notification-border: #444444;
+  --notification-text: #ffffff;
+  --notification-text-secondary: #dddddd;
+  --notification-shadow: rgba(0, 0, 0, 0.4);
 }
 
 /* Global Styles */
 html, body {
   background-color: var(--color-bg);
   color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
+
+/* =============================================================================
+   ANTD COMPONENT STYLES
+   ============================================================================= */
 
 .card-name-autocomplete .ant-select-selector {
   height: auto !important;
@@ -77,7 +96,8 @@ html, body {
 .App,
 .dashboard,
 .results,
-.site-management {
+.site-management,
+.settings {
   background-color: var(--color-bg);
   color: var(--color-text);
 }
@@ -131,10 +151,12 @@ html, body {
   color: var(--color-text) !important;
   cursor: pointer;
 }
+
 /* Ensure headings have the correct theme color */
 h1, h2, h3, h4, h5, h6 {
   color: var(--color-text);
 }
+
 .ant-list-item-meta-content {
   color: var(--color-text);
 }
@@ -153,19 +175,84 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--color-border);
 }
 
+.ant-card-head {
+  background-color: var(--color-bg-alt);
+  border-color: var(--color-border);
+}
+
 .ant-card-head-title,
 .ant-card-body {
   color: var(--color-text);
 }
 
-/* Input Styles */
-.ant-input {
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  border-color: var(--color-border);
+/* Form and Input Styles */
+.ant-input,
+.ant-input-number,
+.ant-select-selector,
+.ant-input-password {
+  background-color: var(--color-bg) !important;
+  color: var(--color-text) !important;
+  border-color: var(--color-border) !important;
+}
+
+.ant-input::placeholder,
+.ant-input-number::placeholder,
+.ant-select-selection-placeholder {
+  color: var(--color-text-alt) !important;
+}
+
+.ant-input:focus,
+.ant-input-number:focus,
+.ant-select-focused .ant-select-selector,
+.ant-input-password:focus {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.2) !important;
+}
+
+/* Select dropdown */
+.ant-select-dropdown {
+  background-color: var(--color-bg) !important;
+  border-color: var(--color-border) !important;
+}
+
+.ant-select-item {
+  color: var(--color-text) !important;
+}
+
+.ant-select-item:hover {
+  background-color: var(--color-hover) !important;
+}
+
+.ant-select-item-option-selected {
+  background-color: var(--color-accent) !important;
+  color: white !important;
+}
+
+/* Switch styles */
+.ant-switch {
+  background-color: var(--color-border) !important;
+}
+
+.ant-switch-checked {
+  background-color: var(--color-accent) !important;
+}
+
+/* Form labels */
+.ant-form-item-label > label {
+  color: var(--color-text) !important;
+}
+
+.ant-form-item-extra {
+  color: var(--color-text-alt) !important;
 }
 
 /* Button Styles */
+.ant-btn {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
 .ant-btn-primary {
   background-color: var(--btn-background-color) !important;
   color: var(--btn-text-color) !important;
@@ -177,6 +264,21 @@ h1, h2, h3, h4, h5, h6 {
 .ant-btn-primary:active {
   background-color: var(--btn-hover-background-color) !important;
   color: var(--btn-hover-text-color) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(22, 119, 255, 0.3);
+}
+
+.ant-btn-default {
+  background-color: var(--color-bg) !important;
+  color: var(--color-text) !important;
+  border-color: var(--color-border) !important;
+}
+
+.ant-btn-default:hover,
+.ant-btn-default:focus {
+  background-color: var(--color-hover) !important;
+  color: var(--color-text) !important;
+  border-color: var(--color-accent) !important;
 }
 
 /* Modal Styles */
@@ -188,12 +290,39 @@ h1, h2, h3, h4, h5, h6 {
 .ant-modal-header {
   background-color: var(--color-bg-alt);
   color: var(--color-text);
+  border-color: var(--color-border);
 }
 
 .ant-modal-title,
 .ant-modal-body {
   color: var(--color-text);
 }
+
+.ant-modal-footer {
+  background-color: var(--color-bg);
+  border-color: var(--color-border);
+}
+
+/* Tooltip styles */
+.ant-tooltip-inner {
+  background-color: var(--notification-bg);
+  color: var(--notification-text);
+  border: 1px solid var(--notification-border);
+}
+
+.ant-tooltip-arrow::before {
+  background-color: var(--notification-bg);
+  border-color: var(--notification-border);
+}
+
+/* Divider styles */
+.ant-divider {
+  border-color: var(--color-border);
+}
+
+/* =============================================================================
+   CUSTOM STYLES
+   ============================================================================= */
 
 /* Adjust pre tag color for JSON display */
 pre {
@@ -230,10 +359,13 @@ pre {
 /* Section Styles */
 .section {
   padding: 20px;
-  background-color: var (--color-bg);
-  color: var (--color-text);
+  background-color: var(--color-bg); /* Fixed: removed space in var() */
+  color: var(--color-text); /* Fixed: removed space in var() */
 }
 
+/* =============================================================================
+   ANIMATIONS
+   ============================================================================= */
 
 @keyframes pulse {
   0% { 
@@ -275,6 +407,32 @@ pre {
     transform: translateY(0);
   }
 }
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* =============================================================================
+   ENHANCED UI EFFECTS
+   ============================================================================= */
 
 /* Hover effects for success cards */
 .optimization-success-card {

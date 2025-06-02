@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class AdminService(AsyncBaseService):
     """Async service for admin operations"""
 
+    model_class = Settings
+
     @classmethod
     async def get_setting(cls, session: AsyncSession, key: str) -> Optional[Settings]:
         """Get a setting by key"""
@@ -25,22 +27,34 @@ class AdminService(AsyncBaseService):
             raise
 
     @classmethod
+    async def get_setting_by_key(cls, session: AsyncSession, key: str) -> Optional[Settings]:
+        """Get a specific setting by key"""
+        try:
+            stmt = select(Settings).where(Settings.key == key)
+            result = await session.execute(stmt)
+            return result.scalars().first()
+        except Exception as e:
+            logger.error(f"Error fetching setting '{key}': {str(e)}")
+            raise
+
+    @classmethod
     async def update_setting(cls, session: AsyncSession, key: str, value: str) -> Settings:
         """Update or create a setting"""
         try:
-            # Check if setting exists
-            setting = await cls.get_setting(session, key)
-
-            if setting:
-                # Update existing setting
-                await cls.update(session, setting, {"value": value})
+            existing_setting = await cls.get_setting_by_key(session, key)
+            if existing_setting:
+                existing_setting.value = str(value)
+                await session.flush()  # Only flush, don't commit
+                logger.info(f"Updated setting '{key}' to '{value}'")
+                return existing_setting
             else:
-                # Create new setting
-                setting = await cls.create(session, key=key, value=value)
-
-            return setting
+                setting = await cls.create(session, key=key, value=str(value))
+                await session.flush()  # Only flush
+                logger.info(f"Created new setting '{key}' with value '{value}'")
+                return setting
         except Exception as e:
             logger.error(f"Error updating setting '{key}': {str(e)}")
+            await session.rollback()
             raise
 
     @classmethod

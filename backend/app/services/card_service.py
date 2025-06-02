@@ -2,7 +2,7 @@ import json
 import re
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import aiohttp
 import asyncio
@@ -62,6 +62,9 @@ class CardService(AsyncBaseService):
         "set boosters reserved list": "Mystery Booster: The List",
     }
 
+    ##################
+    # Redis Operations
+    ##################
     @staticmethod
     async def get_redis_client() -> Redis:
         try:
@@ -81,22 +84,68 @@ class CardService(AsyncBaseService):
             await CardService._redis_client.wait_closed()
             delattr(CardService, "_redis_client")
 
-    # ====== 🔹 Caching Scryfall Card Names and Sets 🔹 ======
+    ##################
+    # Cache Operations
+    ##################
+    @classmethod
+    async def initialize_cache(cls):
+        """Initialize cache during application startup."""
+        logger.info("Initializing card names cache...")
+        success = await cls.ensure_card_names_cache()
+        if success:
+            logger.info("Card names cache initialized successfully")
+        else:
+            logger.error("Failed to initialize card names cache")
+        return success
+
+    @classmethod
+    async def ensure_card_names_cache(cls) -> bool:
+        """
+        Ensure card names cache exists. Only fetches if missing.
+        Returns True if cache is available, False if failed to create.
+        """
+        redis_client = await cls.get_redis_client()
+
+        # Check if cache exists
+        if await redis_client.exists(REDIS_CARDNAME_KEY):
+            return True
+
+        # Cache doesn't exist - fetch it once
+        logger.info("Card names cache missing, initializing...")
+        names = await cls.fetch_scryfall_card_names()
+        return len(names) > 0
+
+    @classmethod
+    async def get_cached_card_names(cls) -> List[str]:
+        """
+        Get cached card names. Does NOT fetch if missing - returns empty list.
+        Use ensure_card_names_cache() first if you need to guarantee cache exists.
+        """
+        redis_client = await cls.get_redis_client()
+
+        cached_names_json = await redis_client.get(REDIS_CARDNAME_KEY)
+        if not cached_names_json:
+            logger.warning("Card names cache is empty")
+            return []
+
+        try:
+            return json.loads(cached_names_json)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse cached card names")
+            return []
+
+    ##################
+    # Fetch Operations
+    ##################
     @classmethod
     async def fetch_scryfall_card_names_async(cls, session: AsyncSession):
         """Async version of fetch_scryfall_card_names that accepts a session"""
         # This method doesn't actually use the session, but we include it for consistency
         return await cls.fetch_scryfall_card_names()
 
-    @classmethod
-    async def fetch_scryfall_set_codes_async(cls, session: AsyncSession):
-        """Async version of fetch_scryfall_set_codes that accepts a session"""
-        # This method doesn't actually use the session, but we include it for consistency
-        return await cls.fetch_scryfall_set_codes()
-
     @staticmethod
     async def fetch_scryfall_card_names():
-        """Fetch the full list of valid card names from Scryfall and cache it in Redis with normalization."""
+        """Fetch the full list of valid card names from Scryfall and cache OFFICIAL names in Redis."""
         redis_client = await CardService.get_redis_client()
 
         try:
@@ -105,32 +154,38 @@ class CardService(AsyncBaseService):
                 async with session.get("https://api.scryfall.com/catalog/card-names") as response:
                     response.raise_for_status()
                     data = await response.json()
-                    card_names = data.get("data", [])
+                    official_card_names = data.get("data", [])
 
-            # ✅ Normalize all card names
-            normalized_card_names = set()
+            # Store the OFFICIAL names directly (no lowercasing!)
+            all_card_names = set()
 
-            logger.info("Normalizing...")
-            for name in card_names:
-                normalized_name = name.strip().lower()
-                normalized_card_names.add(normalized_name)
+            for official_name in official_card_names:
+                # Add the official name
+                all_card_names.add(official_name)
 
-                # ✅ Handle double-sided cards
-                if " // " in normalized_name:
-                    parts = normalized_name.split(" // ")
-                    normalized_card_names.add(parts[0])  # First part
-                    normalized_card_names.add(parts[1])  # Second part
+                # Handle double-sided cards - add each side as well
+                if " // " in official_name:
+                    parts = official_name.split(" // ")
+                    for part in parts:
+                        part_stripped = part.strip()
+                        if part_stripped:
+                            all_card_names.add(part_stripped)
 
-            # ✅ Store in Redis (convert set to list)
-            logger.info("Storing full card list in redis...")
-            await redis_client.set(REDIS_CARDNAME_KEY, json.dumps(list(normalized_card_names)))
+            # Store ONLY the official names in Redis
+            await redis_client.set(REDIS_CARDNAME_KEY, json.dumps(list(all_card_names)))
 
-            logger.info(f"Cached {len(normalized_card_names)} card names from Scryfall.")
-            return normalized_card_names
+            logger.info(f"Cached {len(all_card_names)} official card names.")
+            return all_card_names
 
         except Exception as e:
             logger.error(f"Error fetching Scryfall card names: {str(e)}")
-            return []
+            return set()
+
+    @classmethod
+    async def fetch_scryfall_set_codes_async(cls, session: AsyncSession):
+        """Async version of fetch_scryfall_set_codes that accepts a session"""
+        # This method doesn't actually use the session, but we include it for consistency
+        return await cls.fetch_scryfall_set_codes()
 
     @staticmethod
     async def fetch_scryfall_set_codes():
@@ -164,6 +219,20 @@ class CardService(AsyncBaseService):
         except Exception as e:
             logger.error(f"Error fetching Scryfall sets: {str(e)}")
             return {}
+
+    @classmethod
+    async def fetch_all_sets(cls) -> List[Dict[str, str]]:
+        """Fetch all valid sets from Redis (cached from Scryfall)."""
+        redis_client = await cls.get_redis_client()
+        cached_sets = await redis_client.get(REDIS_SETS_KEY)
+
+        if cached_sets:
+            sets_data = json.loads(cached_sets)
+            return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
+
+        # If not cached, fetch and return
+        sets_data = await cls.fetch_scryfall_set_codes()
+        return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
 
     @classmethod
     async def fetch_scryfall_card_data(
@@ -321,6 +390,107 @@ class CardService(AsyncBaseService):
             logger.error(f"Error in fetch_scryfall_card_data: {str(e)}", exc_info=True)
             return None
 
+    ##################
+    # Card Operations
+    ##################
+    @classmethod
+    async def get_official_card_name(cls, input_name: str) -> Optional[str]:
+        """
+        Get the official card name from any input variation.
+        Now simplified - just searches the official names with fuzzy matching.
+        """
+        if not input_name or not input_name.strip():
+            return None
+
+        redis_client = await cls.get_redis_client()
+
+        # Get the official names from cache
+        cached_names_json = await redis_client.get(REDIS_CARDNAME_KEY)
+        if not cached_names_json:
+            # Cache miss - rebuild cache
+            logger.info("Card names cache miss, rebuilding...")
+            await cls.fetch_scryfall_card_names()
+            cached_names_json = await redis_client.get(REDIS_CARDNAME_KEY)
+
+        if not cached_names_json:
+            logger.error("Could not load card names from cache")
+            return None
+
+        try:
+            official_names = json.loads(cached_names_json)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse card names, rebuilding...")
+            await cls.fetch_scryfall_card_names()
+            return await cls.get_official_card_name(input_name)  # Retry once
+
+        # Normalize the input for searching
+        input_lower = input_name.strip().lower()
+
+        # Direct case-insensitive match first
+        for official_name in official_names:
+            if official_name.lower() == input_lower:
+                return official_name
+
+        # Fuzzy matching fallback
+        from thefuzz import process, fuzz
+
+        best_match = process.extractOne(
+            input_lower, [name.lower() for name in official_names], scorer=fuzz.ratio, score_cutoff=85
+        )
+
+        if best_match:
+            # Find the original official name that corresponds to the matched lowercase version
+            matched_lower = best_match[0]
+            for official_name in official_names:
+                if official_name.lower() == matched_lower:
+                    logger.debug(f"Fuzzy matched '{input_name}' to '{official_name}' with score {best_match[1]}")
+                    return official_name
+
+        # Partial matching for double-sided cards
+        for official_name in official_names:
+            if input_lower in official_name.lower() or official_name.lower() in input_lower:
+                if len(input_lower) >= 3 and len(official_name) >= 3:
+                    similarity = fuzz.partial_ratio(input_lower, official_name.lower())
+                    if similarity >= 80:
+                        logger.debug(f"Partial matched '{input_name}' to '{official_name}'")
+                        return official_name
+
+        logger.debug(f"No official name found for '{input_name}'")
+        return None
+
+    @classmethod
+    async def get_card_suggestions(cls, query: str) -> List[str]:
+        """Get card suggestions. Requires cache to be initialized."""
+        if not query or len(query) < 2:
+            return []
+
+        # Ensure cache exists
+        if not await cls.ensure_card_names_cache():
+            logger.error("Could not initialize card names cache for suggestions")
+            return []
+
+        # Get cached names
+        official_names = await cls.get_cached_card_names()
+        if not official_names:
+            return []
+
+        query_lower = query.lower().strip()
+
+        # Find matches
+        matches = []
+        for official_name in official_names:
+            if query_lower in official_name.lower():
+                matches.append(official_name)
+
+        # Sort by relevance
+        def sort_key(name):
+            name_lower = name.lower()
+            starts_with_query = 0 if name_lower.startswith(query_lower) else 1
+            return (starts_with_query, len(name))
+
+        matches.sort(key=sort_key)
+        return matches[:20]
+
     @classmethod
     async def generate_purchase_links(
         cls, purchase_data: List[Dict[str, Any]], active_sites: Dict[int, Any]
@@ -438,31 +608,35 @@ class CardService(AsyncBaseService):
 
     @classmethod
     async def is_valid_card_name(cls, card_name: str) -> bool:
-        """Check if a given card name exists in the cached Scryfall card list, handling double-sided names."""
-        redis_client = await cls.get_redis_client()
-        card_names_json = await redis_client.get(REDIS_CARDNAME_KEY)
+        """Check if card name is valid. Requires cache to be initialized."""
+        if not card_name or not card_name.strip():
+            return False
 
-        if not card_names_json:
-            card_names = await cls.fetch_scryfall_card_names()
-        else:
-            card_names = json.loads(card_names_json)
+        # Ensure cache exists
+        if not await cls.ensure_card_names_cache():
+            logger.error("Could not initialize card names cache for validation")
+            return False
 
-        # Normalize input (remove extra spaces, handle case sensitivity)
-        normalized_input = card_name.strip().lower()
+        # Get cached names
+        official_names = await cls.get_cached_card_names()
+        if not official_names:
+            return False
 
-        # Direct match first
-        if normalized_input in card_names:
-            return True
+        input_lower = card_name.strip().lower()
 
-        # Handle double-sided names (Scryfall uses " // ")
-        for full_card_name in card_names:
-            if " // " in full_card_name:
-                # Extract both sides of the double-sided card
-                sides = full_card_name.lower().split(" // ")
-                if normalized_input in sides:
-                    return True
+        # Check against all official names
+        for official_name in official_names:
+            if official_name.lower() == input_lower:
+                return True
 
-        return False  # No match found
+            # Handle double-sided cards
+            if " // " in official_name:
+                sides = official_name.split(" // ")
+                for side in sides:
+                    if side.strip().lower() == input_lower:
+                        return True
+
+        return False
 
     @staticmethod
     async def extract_magic_set_from_href(url):
@@ -497,6 +671,39 @@ class CardService(AsyncBaseService):
         except Exception as e:
             logger.error(f"Fatal error in extract_magic_set: {str(e)}", exc_info=True)
             return None
+
+    @classmethod
+    async def get_card_suggestions(cls, query: str) -> List[str]:
+        """Get card suggestions. Requires cache to be initialized."""
+        if not query or len(query) < 2:
+            return []
+
+        # Ensure cache exists
+        if not await cls.ensure_card_names_cache():
+            logger.error("Could not initialize card names cache for suggestions")
+            return []
+
+        # Get cached names
+        official_names = await cls.get_cached_card_names()
+        if not official_names:
+            return []
+
+        query_lower = query.lower().strip()
+
+        # Find matches
+        matches = []
+        for official_name in official_names:
+            if query_lower in official_name.lower():
+                matches.append(official_name)
+
+        # Sort by relevance
+        def sort_key(name):
+            name_lower = name.lower()
+            starts_with_query = 0 if name_lower.startswith(query_lower) else 1
+            return (starts_with_query, len(name))
+
+        matches.sort(key=sort_key)
+        return matches[:20]
 
     ##################
     # Set Operations
@@ -645,20 +852,6 @@ class CardService(AsyncBaseService):
         name = re.sub(r"[^a-zA-Z0-9\s]", " ", name)  # remove special chars
         name = re.sub(r"\b(alternate|extended|art|showcase|borderless)\b", "", name, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", name).strip().lower()
-
-    @classmethod
-    async def fetch_all_sets(cls) -> List[Dict[str, str]]:
-        """Fetch all valid sets from Redis (cached from Scryfall)."""
-        redis_client = await cls.get_redis_client()
-        cached_sets = await redis_client.get(REDIS_SETS_KEY)
-
-        if cached_sets:
-            sets_data = json.loads(cached_sets)
-            return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
-
-        # If not cached, fetch and return
-        sets_data = await cls.fetch_scryfall_set_codes()
-        return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
 
     @classmethod
     async def get_sets_data(cls, force_refresh=False):
@@ -822,27 +1015,3 @@ class CardService(AsyncBaseService):
 
         # Then get the set code using the existing method
         return await cls.get_set_code(clean_set_name)
-
-    @classmethod
-    async def get_card_suggestions(cls, query: str) -> List[str]:
-        """Get card name suggestions based on a query string."""
-        if not query or len(query) < 2:
-            return []
-
-        redis_client = await cls.get_redis_client()
-        cached_names = await redis_client.get(REDIS_CARDNAME_KEY)
-
-        if not cached_names:
-            card_names = await cls.fetch_scryfall_card_names()
-        else:
-            card_names = json.loads(cached_names)
-
-        # Normalize query
-        query_lower = query.lower().strip()
-
-        # Find matches
-        matches = [name for name in card_names if query_lower in name.lower()]
-
-        # Sort by relevance and limit results
-        matches.sort(key=lambda x: (0 if x.lower().startswith(query_lower) else 1, len(x)))
-        return matches[:20]

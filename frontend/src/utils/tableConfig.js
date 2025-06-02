@@ -335,13 +335,175 @@ export const getCheckboxColumn = (selectedIds, handleCheckboxChange, selectAllCh
   ),
 });
 
-// New utility for creating a common pagination config
-export const getStandardPagination = (customConfig = {}) => ({
-  pageSize: 10,
+/**
+ * Standard pagination configuration factory
+ * @param {number} defaultPageSize - Default page size from user settings
+ * @returns {Object} Pagination configuration object
+ */
+export const getStandardPagination = (defaultPageSize = 20) => ({
+  current: 1,
+  pageSize: defaultPageSize,
+  total: 0,
   showSizeChanger: true,
-  pageSizeOptions: ['10', '20', '50', '100'],
-  showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`,
-  ...customConfig
+  showQuickJumper: true,
+  showTotal: (total, range) => 
+    `${range[0]}-${range[1]} of ${total} items`,
+  pageSizeOptions: ['5', '10', '20', '50', '100'],
+  // Position the pagination controls
+  position: ['bottomCenter'],
+  // Responsive behavior
+  responsive: true,
+  // Show less items on mobile
+  simple: false
+});
+
+/**
+ * Get responsive pagination config for mobile devices
+ * @param {number} defaultPageSize - Default page size from user settings
+ * @returns {Object} Mobile-optimized pagination configuration
+ */
+export const getMobilePagination = (defaultPageSize = 20) => ({
+  ...getStandardPagination(defaultPageSize),
+  simple: true,
+  showSizeChanger: false,
+  showQuickJumper: false,
+  showTotal: (total, range) => `${range[0]}-${range[1]}/${total}`
+});
+/**
+ * Standard table scroll configuration
+ */
+export const getStandardScroll = () => ({
+  x: 'max-content',
+  y: 'calc(100vh - 300px)' // Adjust based on your layout
+});
+
+/**
+ * Standard row selection configuration
+ * @param {Set} selectedIds - Currently selected row IDs
+ * @param {Function} onSelectChange - Selection change handler
+ * @param {Function} onSelectAll - Select all handler
+ * @param {boolean} selectAllChecked - Whether select all is checked
+ * @returns {Object} Row selection configuration
+ */
+export const getStandardRowSelection = (selectedIds, onSelectChange, onSelectAll, selectAllChecked) => ({
+  type: 'checkbox',
+  selectedRowKeys: Array.from(selectedIds),
+  onChange: onSelectChange,
+  onSelectAll: onSelectAll,
+  getCheckboxProps: (record) => ({
+    disabled: record.disabled || false,
+    name: record.name,
+  }),
+  columnTitle: (
+    <input
+      type="checkbox"
+      checked={selectAllChecked}
+      onChange={onSelectAll}
+      style={{ cursor: 'pointer' }}
+    />
+  ),
+  columnWidth: 50,
+  fixed: 'left'
+});
+
+/**
+ * Standard table loading configuration
+ */
+export const getStandardLoading = (isLoading, tip = 'Loading...') => ({
+  spinning: isLoading,
+  tip,
+  size: 'large'
+});
+
+/**
+ * Standard table locale configuration
+ */
+export const getStandardLocale = () => ({
+  emptyText: 'No data available',
+  filterConfirm: 'Apply',
+  filterReset: 'Reset',
+  filterEmptyText: 'No filters',
+  selectAll: 'Select current page',
+  selectInvert: 'Invert current page',
+  sortTitle: 'Sort',
+  expand: 'Expand row',
+  collapse: 'Collapse row',
+  triggerDesc: 'Click to sort descending',
+  triggerAsc: 'Click to sort ascending',
+  cancelSort: 'Click to cancel sorting'
+});
+
+/**
+ * Get column filter props for text search
+ * @param {string} dataIndex - Column data index
+ * @param {Function} handleSearch - Search handler
+ * @param {Function} handleReset - Reset handler
+ * @param {Object} searchInput - Search input ref
+ * @returns {Object} Filter dropdown props
+ */
+export const getTextFilterProps = (dataIndex, handleSearch, handleReset, searchInput) => ({
+  filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+    <div style={{ padding: 8 }}>
+      <input
+        ref={node => {
+          if (searchInput.current) {
+            searchInput.current[dataIndex] = node;
+          }
+        }}
+        placeholder={`Search ${dataIndex}`}
+        value={selectedKeys[0]}
+        onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+        onPressEnter={() => handleSearch(selectedKeys, confirm, dataIndex)}
+        style={{ marginBottom: 8, display: 'block', width: 188 }}
+      />
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <button
+          type="button"
+          onClick={() => handleSearch(selectedKeys, confirm, dataIndex)}
+          style={{ width: 90, marginRight: 8 }}
+        >
+          Search
+        </button>
+        <button
+          type="button"
+          onClick={() => handleReset(clearFilters, dataIndex)}
+          style={{ width: 90 }}
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  ),
+  filterIcon: filtered => (
+    <span style={{ color: filtered ? '#1890ff' : undefined }}>🔍</span>
+  ),
+  onFilter: (value, record) =>
+    record[dataIndex]
+      ? record[dataIndex].toString().toLowerCase().includes(value.toLowerCase())
+      : '',
+});
+
+/**
+ * Standard table size options
+ */
+export const TABLE_SIZES = {
+  SMALL: 'small',
+  MIDDLE: 'middle', 
+  LARGE: 'large'
+};
+
+/**
+ * Default table props that can be spread into any table component
+ * @param {Object} settings - User settings object
+ * @returns {Object} Default table props
+ */
+export const getDefaultTableProps = (settings = {}) => ({
+  pagination: getStandardPagination(settings.itemsPerPage),
+  scroll: getStandardScroll(),
+  locale: getStandardLocale(),
+  size: TABLE_SIZES.MIDDLE,
+  bordered: true,
+  rowKey: 'id'
 });
 
 export { cardNameStyle };

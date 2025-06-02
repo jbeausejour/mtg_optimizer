@@ -6,6 +6,9 @@ import { useLocation } from 'react-router-dom';
 
 import { CheckCircleOutlined, WarningOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import { useSettings } from '../utils/SettingsContext';
+import { useNotification } from '../utils/NotificationContext';
+import { useApiWithNotifications } from '../utils/useApiWithNotifications';
 import { OptimizationSummary } from '../components/OptimizationDisplay';
 import api from '../utils/api';
 import ColumnSelector from '../components/ColumnSelector';
@@ -19,6 +22,7 @@ const { Title, Text } = Typography;
 
 const Results = () => {
   const { theme } = useTheme();
+  const { settings } = useSettings(); 
   const location = useLocation();
   const [selectedResult, setSelectedResult] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
@@ -28,6 +32,8 @@ const Results = () => {
   const queryClient = useQueryClient();
   const [cardData, setFetchedCard] = useState(null);
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
+  const { messageApi, notificationApi } = useNotification();
+  const { deleteWithNotifications } = useApiWithNotifications();
   const {
     mutateAsync: fetchCard,
   } = useFetchScryfallCard();
@@ -71,14 +77,18 @@ useEffect(() => {
       setSelectedResult(latestResult);
       
       // Show success message only once
-      message.success('🎉 Your latest optimization is ready! Results shown below.');
+      notificationApi.success({
+        message: 'Optimization Complete',
+        description: '🎉 Your latest optimization is ready! Results shown below.',
+        placement: 'topRight',
+      });
       setHasShownSuccessMessage(true);
       
       // Optional: Clear the location state to prevent re-triggering on subsequent visits
       window.history.replaceState({}, document.title);
     }
   }
-}, [optimizationResults, location.state, loading, hasShownSuccessMessage]);
+}, [optimizationResults, location.state, loading, hasShownSuccessMessage, showSuccess]);
 
   
   const handleModalClose = () => {
@@ -105,7 +115,11 @@ useEffect(() => {
       };
       setFetchedCard(enrichedCard);
     } catch (err) {
-      message.error('Failed to fetch card data');
+      notificationApi.error({
+        message: 'Failed to fetch card details', 
+        description: err.message || 'Failed to fetch card data',
+        placement: 'topRight',
+      });
       setIsModalVisible(false);    // Close modal on error
     } finally {
       setIsModalLoading(false);    // Stop spinner
@@ -163,10 +177,17 @@ useEffect(() => {
     onError: (err, resultId, context) => {
       // Roll back to the previous value if there's an error
       queryClient.setQueryData(['optimizations'], context.previousResults);
-      message.error('Failed to delete optimization.');
+      notificationApi.error({
+        message: 'Failed to delete optimization',
+        description: err.message || 'Failed to delete optimization', 
+        placement: 'topRight',
+      });
     },
     onSuccess: (_, resultId) => {
-      message.success('Optimization deleted successfully');
+      notificationApi.success({
+        message: 'Optimization deleted successfully',
+        placement: 'topRight',
+      });
       // If the deleted result is currently selected, deselect it
       if (selectedResult && selectedResult.id === resultId) {
         setSelectedResult(null);
@@ -185,21 +206,29 @@ useEffect(() => {
 
   // Handle bulk deletion
   const handleBulkDelete = useCallback(async () => {
-    try {
-      const count = selectedResultIds.size;
-      const deletionPromises = Array.from(selectedResultIds).map(resultId =>
-        deleteOptimizationMutation.mutateAsync(resultId)
-      );
-      await Promise.all(deletionPromises);
-      setSelectedResultIds(new Set());
-      message.success(`Successfully deleted ${count} result(s).`);
-      queryClient.invalidateQueries(['results']);
-    } catch (error) {
-      console.error('Bulk deletion error:', error);
-      message.error('Failed to delete some or all of the selected results.');
-      queryClient.invalidateQueries(['results']);
-    }
-  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, queryClient]);
+    await deleteWithNotifications(
+      async () => {
+        const count = selectedResultIds.size;
+        const deletionPromises = Array.from(selectedResultIds).map(resultId =>
+          deleteOptimizationMutation.mutateAsync(resultId)
+        );
+        await Promise.all(deletionPromises);
+        return { count };
+      },
+      'optimization results',
+      {
+        loadingMessage: `Deleting ${selectedResultIds.size} result(s)...`,
+        onSuccess: (result) => {
+          setSelectedResultIds(new Set());
+          queryClient.invalidateQueries(['results']);
+        },
+        onError: () => {
+          queryClient.invalidateQueries(['results']);
+        }
+      }
+    );
+  }, [selectedResultIds, deleteOptimizationMutation, setSelectedResultIds, queryClient, deleteWithNotifications]);
+  
   
   // Define columns for the results table
   const columns = useMemo(() => [
@@ -462,7 +491,7 @@ useEffect(() => {
             exportCopyFormat={null} 
             rowKey="id"
             onChange={handleTableChange}
-            pagination={pagination}
+            pagination={pagination} 
             rowSelectionEnabled={true}
             selectedIds={selectedResultIds}
             onSelectionChange={setSelectedResultIds}

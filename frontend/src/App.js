@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider} from '@tanstack/react-query';
+import { ConfigProvider } from 'antd';
 import { AuthProvider } from './utils/AuthContext';
+import { SettingsProvider } from './utils/SettingsContext';
+import { NotificationProvider } from './utils/NotificationContext';
 import Navigation from './components/Navigation';
 import Login from './components/Login';
+import Layout from './components/Layout';
 import Register from './components/Register';
 import Dashboard from './pages/Dashboard';
 import BuylistManagement from './pages/CardManagement';
@@ -18,46 +22,67 @@ import ProtectedRoute from './components/ProtectedRoute';
 const queryClient = new QueryClient();
 
 // Custom Hook to conditionally render navigation based on route
-const Layout = ({ children }) => {
+const RouterContent = () => {
   const location = useLocation();
   const showNavbar = location.pathname !== '/login' && location.pathname !== '/register';
   
+  // For login/register pages, render without Layout
+  if (!showNavbar) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+      </Routes>
+    );
+  }
+  
+  // For other pages, use Layout with Navigation
   return (
-    <div className="app-container">
-      {showNavbar && <Navigation />}
-      <div className="content-container" style={{ 
-        marginTop: showNavbar ? '60px' : '0' // Adjust this value based on your navigation height
-      }}>
-        {children}
-      </div>
-    </div>
+    <>
+      
+      <Layout>
+        {[
+          <Navigation key="nav" />,
+          <Routes key="routes">
+            <Route element={<ProtectedRoute />}>
+              <Route path="/" element={<Dashboard/>} />
+              <Route path="/buylist-management" element={<BuylistManagement/>} />
+              <Route path="/site-management" element={<SiteManagement/>} />
+              <Route path="/optimize" element={<Optimize/>} />
+              <Route path="/results" element={<Results/>} />
+              <Route path="/results/:scanId" element={<Results/>} />
+              <Route path="/price-tracker" element={<PriceTracker/>} />
+              <Route path="/settings" element={<Settings/>} />
+            </Route>
+          </Routes>
+        ]}
+      </Layout>
+    </>
   );
 };
 
 function App() {
-
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Router>
-          <Layout>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-              <Route element={<ProtectedRoute />}>
-                <Route path="/" element={<Dashboard/>} />
-                <Route path="/buylist-management" element={<BuylistManagement/>} />
-                <Route path="/site-management" element={<SiteManagement/>} />
-                <Route path="/optimize" element={<Optimize/>} />
-                <Route path="/results" element={<Results/>} />
-                <Route path="/results/:scanId" element={<Results/>} /> {/* Update this line */}
-                <Route path="/price-tracker" element={<PriceTracker/>} />
-                <Route path="/settings" element={<Settings/>} />
-              </Route>
-            </Routes>
-          </Layout>
-        </Router>
-      </AuthProvider>
+      {/* Configure theme for Ant Design v5 */}
+      <ConfigProvider
+        theme={{
+          token: {
+            colorPrimary: '#1677ff',
+            borderRadius: 6,
+          },
+        }}
+      >
+        <NotificationProvider>
+          <AuthProvider>
+            <SettingsProvider>
+              <Router>
+                <RouterContent />
+              </Router>
+            </SettingsProvider>
+          </AuthProvider>  
+        </NotificationProvider>
+      </ConfigProvider>
     </QueryClientProvider>
   );
 }

@@ -3,6 +3,9 @@ import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
 import { Card, Typography, Button, Spin, Modal, message, Space, Popconfirm, Input, Checkbox } from 'antd';
 import { DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import { useSettings } from '../utils/SettingsContext';
+import { useNotification } from '../utils/NotificationContext';
+import { useApiWithNotifications } from '../utils/useApiWithNotifications';
 import { 
   getStandardTableColumns, 
   getColumnSearchProps, 
@@ -19,12 +22,16 @@ const { Title, Text } = Typography;
 
 const PriceTracker = () => {
   const { theme } = useTheme();
+  const { settings } = useSettings(); 
   const [selectedScan, setSelectedScan] = useState(null);
   const [selectedCard, setSelectedCard] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isModalLoading, setIsModalLoading] = useState(false);
   const [modalMode, setModalMode] = useState('view');
   const queryClient = useQueryClient();
+
+  const { messageApi, notificationApi } = useNotification();
+  const { deleteWithNotifications } = useApiWithNotifications();
 
   const [cardData, setFetchedCard] = useState(null);
   const {
@@ -101,7 +108,7 @@ const PriceTracker = () => {
     onError: (err, scanId, context) => {
       // Roll back to the previous value if there's an error
       queryClient.setQueryData(['scans'], context.previousScans);
-      message.error('Failed to delete scan.');
+      showOperationError('delete', err.message || 'Failed to delete scan', 'scan');
     },
     onSettled: () => {
       // Always refetch after error or success to make sure the server state
@@ -134,7 +141,11 @@ const PriceTracker = () => {
       };
       setFetchedCard(enrichedCard);
     } catch (err) {
-      message.error('Failed to fetch card data');
+      notificationApi.error({
+        message: 'Failed to fetch card details',
+        description: err.message || 'Failed to fetch card data',
+        placement: 'topRight',
+      });
       setIsModalVisible(false);    // Close modal on error
     } finally {
       setIsModalLoading(false);    // Stop spinner
@@ -182,29 +193,34 @@ const PriceTracker = () => {
   // Handle bulk deletion
   const handleBulkDelete = useCallback(async () => {
     if (selectedScanIds.size === 0) {
-      message.warning('No scans selected for deletion.');
+      messageApi.warning('No scans selected for deletion.');
       return;
     }
     
 
-    try {
-      const scanIdList = Array.from(selectedScanIds);
-      // console.log("🔥 Sending bulk delete payload:", scanIdList);
-      await api.delete('/scans', {
-        data: {
-          scan_ids: scanIdList
+    await deleteWithNotifications(
+      async () => {
+        const scanIdList = Array.from(selectedScanIds);
+        await api.delete('/scans', {
+          data: {
+            scan_ids: scanIdList
+          }
+        });
+        return { count: scanIdList.length };
+      },
+      'scans',
+      {
+        loadingMessage: `Deleting ${selectedScanIds.size} scan(s)...`,
+        onSuccess: (result) => {
+          setSelectedScanIds(new Set());
+          queryClient.invalidateQueries(['scans']);
+        },
+        onError: () => {
+          queryClient.invalidateQueries(['scans']);
         }
-      });
-  
-      setSelectedScanIds(new Set());
-      message.success(`Successfully deleted ${scanIdList.length} scan(s).`);
-      queryClient.invalidateQueries(['scans']);
-    } catch (error) {
-      console.error('Bulk deletion error:', error);
-      message.error('Failed to delete some or all of the selected scans.');
-      queryClient.invalidateQueries(['scans']);
-    }
-  }, [selectedScanIds, setSelectedScanIds, queryClient]);
+      }
+    );
+  }, [selectedScanIds, setSelectedScanIds, queryClient, deleteWithNotifications, messageApi.warning]);
   
   // Define columns for the scans table using the new utility functions
   const scanColumns = useMemo(() => {
@@ -469,6 +485,7 @@ const PriceTracker = () => {
                   persistStateKey="price_tracker_detail_table"
                   onRowClick={handleCardClick}
                   onChange={handleDetailTableChange}
+                  pagination={pagination} 
                 />
               </>
             )}
@@ -516,6 +533,7 @@ const PriceTracker = () => {
             onSelectionChange={setSelectedScanIds}
             onRowClick={(record) => setSelectedScan(record)}
             onChange={handleTableChange}
+            pagination={pagination} 
           />
         </Card>
       )}

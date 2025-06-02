@@ -1,8 +1,11 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
-import { Card, Typography, Button, Space, Modal, Form, Input, message, Spin, Tag, Switch, Select } from 'antd';
-import { EditOutlined, PlusOutlined, DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
+import { Card, Typography, Button, Space, Modal, Form, Input, message, Tag, Switch, Select } from 'antd';
+import { EditOutlined, PlusOutlined, DeleteOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import { useSettings } from '../utils/SettingsContext';
+import { useNotification } from '../utils/NotificationContext';
+import { useApiWithNotifications } from '../utils/useApiWithNotifications';
 import api from '../utils/api';
 import { getColumnSearchProps } from '../utils/tableConfig';
 import ColumnSelector from '../components/ColumnSelector';
@@ -29,6 +32,7 @@ const SUPPORTED_CURRENCIES = {
 
 const SiteManagement = () => {
   const { theme } = useTheme();
+  const { settings } = useSettings(); 
   const queryClient = useQueryClient();
   const [editingRecord, setEditingRecord] = useState(null);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -36,10 +40,19 @@ const SiteManagement = () => {
   const [editForm] = Form.useForm();
   const [addForm] = Form.useForm();
   
+  // Notification hooks
+  const { messageApi, notificationApi } = useNotification();
+  const { 
+    createWithNotifications, 
+    updateWithNotifications, 
+    deleteWithNotifications 
+  } = useApiWithNotifications();
+
   // Use enhanced table handler for consistent behavior
   const {
     filteredInfo,
     sortedInfo,
+    pagination,
     selectedIds: selectedSiteIds,
     setSelectedIds: setSelectedSiteIds,
     searchInput,
@@ -67,13 +80,20 @@ const SiteManagement = () => {
     mutationFn: (values) => api.post('/sites', { ...values }),
     onSuccess: () => {
       queryClient.invalidateQueries(['sites']);
-      message.success('Site added successfully');
+      notificationApi.success({
+        message: 'Site created successfully',
+        placement: 'topRight',
+      });
       setIsAddModalVisible(false);
       addForm.resetFields();
     },
     onError: (error) => {
       console.error('Error adding site:', error);
-      message.error('Failed to add site');
+      notificationApi.error({
+        message: 'Failed to create site',
+        description: error.message || 'Failed to add site',
+        placement: 'topRight',
+      });
     }
   });
   
@@ -82,29 +102,41 @@ const SiteManagement = () => {
     mutationFn: (values) => api.put(`/sites/${editingRecord.id}`, { ...values }),
     onSuccess: (response) => {
       if (!response.data) {
-        message.error('Failed to update site: No response data');
+        showOperationError('update', 'No response data received', 'site');
         return;
       }
       switch (response.data.status) {
         case 'success':
-          message.success(response.data.message || 'Site updated successfully');
+          notificationApi.success({
+            message: 'Site updated successfully',
+            placement: 'topRight',
+          });
+          
           queryClient.invalidateQueries(['sites']);
           setIsEditModalVisible(false);
           break;
-        case 'info':
-          message.info(response.data.message || 'Site updated with some considerations');
-          setIsEditModalVisible(false);
+          case 'info':
+            notificationApi.info({
+              message: 'Site updated',
+              description: response.data.message || 'Site updated with some considerations',
+              placement: 'topRight',
+            });
+            setIsEditModalVisible(false);
+            break;
+          case 'warning':
+            notificationApi.warning({
+              message: 'Site updated with warnings',
+              description: response.data.message || 'Site updated with warnings',
+              placement: 'topRight',
+            });
           break;
-        case 'warning':
-          message.warning(response.data.message || 'Site updated with warnings');
-          break;
-        default:
-          message.error('Failed to update site: Unknown status');
+          default:
+            showOperationError('update', 'Unknown status returned', 'site');
       }
     },
     onError: (error) => {
       console.error('Error updating site:', error);
-      message.error('Failed to update site');
+      showOperationError('update', error.message || 'Failed to update site', 'site');
     }
   });
   
@@ -130,10 +162,10 @@ const SiteManagement = () => {
     onError: (err, siteId, context) => {
       // Roll back to the previous value if there's an error
       queryClient.setQueryData(['sites'], context.previousSites);
-      message.error('Failed to delete site.');
+      showOperationError('delete', err.message || 'Failed to delete site', 'site');
     },
     onSuccess: () => {
-      message.success('Site deleted successfully');
+      showOperationSuccess('delete', 'site');
     },
     onSettled: () => {
       // Always refetch after error or success
@@ -181,43 +213,20 @@ const SiteManagement = () => {
   // Handle bulk deletion
   const handleBulkDelete = useCallback(() => {
     if (selectedSiteIds.size === 0) {
-      message.warning('No sites selected for deletion.');
+      messageApi.warning('No sites selected for deletion.');
       return;
     }
-    
-    Modal.confirm({
-      title: `Are you sure you want to delete ${selectedSiteIds.size} selected site(s)?`,
-      content: 'This action cannot be undone.',
-      okText: 'Yes, delete',
-      okType: 'danger',
-      cancelText: 'Cancel',
-      onOk: async () => {
-        try {
-          // Store count before clearing for message
-          const count = selectedSiteIds.size;
-          
-          // Create an array of deletion promises
-          const deletionPromises = Array.from(selectedSiteIds).map(id => 
-            deleteSiteMutation.mutateAsync(id)
-          );
-          
-          // Wait for all deletions to complete
-          await Promise.all(deletionPromises);
-          
-          // Clear selection and show success
-          setSelectedSiteIds(new Set());
-          message.success(`Successfully deleted ${count} site(s).`);
-          
-          // Invalidate after everything is done
-          queryClient.invalidateQueries(['sites']);
-        } catch (error) {
-          console.error('Bulk deletion error:', error);
-          message.error('Failed to delete some or all selected sites.');
-          // Invalidate to get back to a consistent state
-          queryClient.invalidateQueries(['sites']);
-        }
-      }
-    });
+  
+    deleteWithNotifications(
+      async () => {
+        const deletionPromises = Array.from(selectedSiteIds).map(id => deleteSiteMutation.mutateAsync(id));
+        await Promise.all(deletionPromises);
+        setSelectedSiteIds(new Set());
+        return { count: selectedSiteIds.size };
+      },
+      'site(s)',
+      { loadingMessage: `Deleting ${selectedSiteIds.size} site(s).` }
+    );
   }, [selectedSiteIds, deleteSiteMutation, setSelectedSiteIds]);
 
   const handleMethodChange = useCallback((value, formType) => {
@@ -367,6 +376,7 @@ const SiteManagement = () => {
         selectedIds={selectedSiteIds}
         onSelectionChange={setSelectedSiteIds}
         onChange={handleTableChange}
+        pagination={pagination} 
       />
       
       {/* Edit Modal */}

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../utils/api';
+import { useNotification } from '../utils/NotificationContext';
+import { useApiWithNotifications } from '../utils/useApiWithNotifications';
 import { 
   TrophyOutlined, 
   ShopOutlined, 
@@ -51,6 +53,10 @@ const Optimize = () => {
   const navigate = useNavigate();
   const { theme } = useTheme();
   const { Option } = Select;
+
+  // Notification hooks
+  const { messageApi, notificationApi } = useNotification();
+  const { executeWithNotifications, fetchWithNotifications } = useApiWithNotifications();
 
   const [cards, setCards] = useState([]);
   const [selectedCard, setSelectedCard] = useState({});
@@ -161,7 +167,7 @@ const Optimize = () => {
   
     // Avoid setting the same value or spamming messages
     if (allMaxed && !window.__allWeightsWarned) {
-      message.warning('All weights are maxed — this may lead to conflicting optimization goals.');
+      messageApi.warning('All weights are maxed — this may lead to conflicting optimization goals.');
       window.__allWeightsWarned = true;
     } else if (!allMaxed) {
       window.__allWeightsWarned = false;
@@ -173,7 +179,7 @@ const Optimize = () => {
     if (current !== next) {
       localStorage.setItem('mtg_weights', next);
     }
-  }, [weights]);
+  }, [weights, messageApi.warning]);
 
   const findMinStoretooltipContent = (
     <div>
@@ -257,7 +263,10 @@ const Optimize = () => {
         localStorage.removeItem('mtg_task_id');
         
         if (response.data.state === 'SUCCESS') {
-          message.success('Optimization completed successfully!');
+          notificationApi.success({
+            message: 'Optimization completed successfully',
+            placement: 'topRight',
+          });
           
           // The result is directly in response.data.result (not .optimization)
           const optimizationData = response.data.result;
@@ -279,7 +288,11 @@ const Optimize = () => {
             setIsOptimizationComplete(false);
           }, 10000); // Show success summary for 10 seconds
         } else {
-          message.error(`Optimization failed: ${response.data.error}`);
+          notificationApi.error({
+            message: 'Optimization failed',
+            description: response.data.error || 'Unknown error occurred',
+            placement: 'topRight',
+          });
           setTaskId(null);
           setIsOptimizationComplete(false);
         }
@@ -316,100 +329,127 @@ const Optimize = () => {
   };
 
   const fetchSites = async () => {
-    try {
-      const response = await api.get('/sites');
-      const sitesWithTypes = response.data.map(site => ({
-        ...site,
-        type: site.type || 'primary'
-      }));
-      setSites(sitesWithTypes);
-      const initialSelected = sitesWithTypes.reduce((acc, site) => ({
-        ...acc,
-        [site.id]: site.active
-      }), {});
-      setSelectedSites(initialSelected);
-    } catch (error) {
-      console.error('Error fetching sites:', error);
-      message.error('Failed to fetch sites');
-    }
+    await fetchWithNotifications(
+      async () => {
+        const response = await api.get('/sites');
+        const sitesWithTypes = response.data.map(site => ({
+          ...site,
+          type: site.type || 'primary'
+        }));
+        setSites(sitesWithTypes);
+        const initialSelected = sitesWithTypes.reduce((acc, site) => ({
+          ...acc,
+          [site.id]: site.active
+        }), {});
+        setSelectedSites(initialSelected);
+        return sitesWithTypes;
+      },
+      {
+        operation: 'fetch',
+        item: 'sites',
+        showSuccessNotification: false,
+      }
+    );
   };
 
   const fetchBuylists = async () => {
-    try {
-      const response = await api.get('/buylists');
-      setBuylists(response.data);
-    } catch (error) {
-      console.error('Error fetching buylists:', error);
-      message.error('Failed to fetch buylists');
-    }
+    await fetchWithNotifications(
+      async () => {
+        const response = await api.get('/buylists');
+        setBuylists(response.data);
+        return response.data;
+      },
+      {
+        operation: 'fetch',
+        item: 'buylists',
+        showSuccessNotification: false,
+      }
+    );
   };
 
   const handleOptimize = async () => {
     setOptimizationResult(null);
     setIsOptimizationComplete(false);
-    try {
-      const sitesToOptimize = filteredSites
-        .filter(site => selectedSites[site.id])
-        .map(site => site.id.toString());
+    
+    await executeWithNotifications(
+      async () => {
+        const sitesToOptimize = filteredSites
+          .filter(site => selectedSites[site.id])
+          .map(site => site.id.toString());
 
-      if (sitesToOptimize.length === 0) {
-        message.warning('Please select at least one site to optimize');
-        return;
+        if (sitesToOptimize.length === 0) {
+          throw new Error('Please select at least one site to optimize');
+        }
+
+        let minStoreValue = minStore;
+        let maxStoreValue = maxStore;
+        if (findMinStore) {
+          minStoreValue = 1;
+          maxStoreValue = 0;  
+        }
+
+        const response = await api.post('/start_scraping', {
+          sites: sitesToOptimize,
+          strategy: optimizationStrategy,
+          min_store: minStoreValue,
+          max_store: maxStoreValue,
+          find_min_store: findMinStore,
+          min_age_seconds: minAge,
+          buylist_id: selectedBuylist?.buylistId,
+          strict_preferences: strictPreferences,
+          user_preferences: Object.fromEntries(
+            cards.map(card => [
+              card.name,
+              {
+                set_name: card.set_name,
+                language: card.language,
+                quality: card.quality,
+                version: card.version
+              }
+            ])
+          ),
+          card_list: cards.map(card => ({
+            name: card.name,
+            set_name: card.set_name,
+            language: card.language,
+            quality: card.quality,
+            quantity: card.quantity
+          })),
+          weights: weights,
+        });
+
+        setTaskId(response.data.task_id);
+        setIsOptimizing(true);
+        setSubtasks(null);
+        localStorage.setItem('mtg_task_id', response.data.task_id);
+        
+        return { taskId: response.data.task_id, siteCount: sitesToOptimize.length };
+      },
+      {
+        operation: 'start',
+        item: 'optimization',
+        loadingMessage: 'Starting optimization...',
+        onSuccess: (result) => {
+          messageApi.info(`Optimization task started with ${result.siteCount} sites!`);
+        }
       }
-      let minStoreValue = minStore;
-      let maxStoreValue = maxStore;
-      if (findMinStore) {
-        minStoreValue = 1;
-        maxStoreValue = 0;  
-      }
-      const response = await api.post('/start_scraping', {
-        sites: sitesToOptimize,
-        strategy: optimizationStrategy,
-        min_store: minStoreValue,
-        max_store: maxStoreValue,
-        find_min_store: findMinStore,
-        min_age_seconds: minAge,
-        buylist_id: selectedBuylist?.buylistId,
-        strict_preferences: strictPreferences,
-        user_preferences: Object.fromEntries(
-          cards.map(card => [
-            card.name,
-            {
-              set_name: card.set_name,
-              language: card.language,
-              quality: card.quality,
-              version: card.version
-            }
-          ])
-        ),
-        card_list: cards.map(card => ({
-          name: card.name,
-          set_name: card.set_name,
-          language: card.language,
-          quality: card.quality,
-          quantity: card.quantity
-        })),
-        weights: weights,
-      });
-      setTaskId(response.data.task_id);
-      setIsOptimizing(true);
-      setSubtasks(null);
-      localStorage.setItem('mtg_task_id', response.data.task_id);
-      message.success(`Optimization task started with ${sitesToOptimize.length} sites!`);
-    } catch (error) {
-      message.error('Failed to start optimization task');
-      console.error('Error during optimization:', error);
-    }
+    );
   };
 
   const handleSelectBuylist = async (buylistId) => {
-    try {
-      const response = await api.get(`/buylists/${buylistId}`);
-      setCards(response.data);
-      message.success('Buylist selected successfully');
-    } catch (error) {
-      message.error('Failed to select buylist');
-    }
+    await fetchWithNotifications(
+      async () => {
+        const response = await api.get(`/buylists/${buylistId}`);
+        setCards(response.data);
+        return response.data;
+      },
+      {
+        operation: 'load',
+        item: 'buylist',
+        showSuccessNotification: true,
+        successMessage: 'Buylist loaded successfully'
+      }
+    );
   };
 
   const handleCardClick = async (card) => {
@@ -431,7 +471,11 @@ const Optimize = () => {
       };
       setFetchedCard(enrichedCard);
     } catch (err) {
-      message.error('Failed to fetch card data');
+      notificationApi.error({
+        message: 'Failed to fetch card details',
+        description: err.message || 'Failed to fetch card data',
+        placement: 'topRight',
+      });
       setIsModalVisible(false);    // Close modal on error
     } finally {
       setIsModalLoading(false);    // Stop spinner

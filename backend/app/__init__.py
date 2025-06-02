@@ -67,6 +67,28 @@ def create_app(config_class=get_config()):
         app.register_blueprint(admin_routes, url_prefix="/api/v1")
         app.register_blueprint(card_routes, url_prefix="/api/v1")
 
+    @app.before_serving
+    async def initialize_caches():
+        from app.services.card_service import CardService
+
+        logging.info("Initializing application caches...")
+
+        try:
+            # Initialize card names cache
+            card_cache_success = await CardService.initialize_cache()
+            if card_cache_success:
+                logging.info("✅ Card names cache initialized successfully")
+            else:
+                logging.error("❌ Failed to initialize card names cache")
+
+            # Initialize sets cache if needed
+            set_cache_success = await CardService.initialize_sets_cache()
+
+            logging.info("🚀 Application cache initialization complete")
+
+        except Exception as e:
+            logging.error(f"💥 Cache initialization failed: {str(e)}")
+
     # Setup logging with duplicate prevention
     # Get the app logger
     root_logger = logging.getLogger()

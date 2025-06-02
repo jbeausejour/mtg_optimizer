@@ -23,31 +23,102 @@ admin_routes = Blueprint("admin_routes", __name__)
 
 
 # Settings Operations
+# Settings Operations
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required
 async def get_settings():
     logger.info("Getting all settings")
-    settings = AdminService.get_all_settings()
-    return jsonify([setting.to_dict() for setting in settings])
+    async with flask_session_scope() as session:
+        settings = await AdminService.get_all_settings(session)
+
+        # Convert settings to a dictionary format for frontend consumption
+        settings_dict = {}
+        for setting in settings:
+            key = setting.key
+            value = setting.value
+
+            # Convert stored string values back to appropriate types
+            if key in ["itemsPerPage", "priceAlertThreshold"]:
+                try:
+                    settings_dict[key] = int(value) if value else 0
+                except (ValueError, TypeError):
+                    settings_dict[key] = 0
+            elif key == "enablePriceAlerts":
+                # Convert string boolean back to actual boolean
+                settings_dict[key] = value.lower() in ["true", "1", "yes", "on"] if value else False
+            else:
+                settings_dict[key] = value
+
+        return jsonify(settings_dict)
+
+
+def normalize_setting_value(key: str, value):
+    """Normalize setting values to appropriate types and convert to string for storage"""
+    if value is None:
+        return ""
+
+    # Handle boolean fields
+    if key == "enablePriceAlerts":
+        if isinstance(value, bool):
+            return str(value).lower()
+        elif isinstance(value, str):
+            return value.lower() if value.lower() in ["true", "false"] else "false"
+        else:
+            return "false"
+
+    # Handle numeric fields
+    elif key in ["itemsPerPage", "priceAlertThreshold"]:
+        try:
+            # Convert to number first to validate, then back to string for storage
+            if isinstance(value, str) and value.strip() == "":
+                return "0"
+            num_value = float(value)
+            if key == "itemsPerPage":
+                num_value = int(num_value)  # itemsPerPage should be integer
+            return str(num_value)
+        except (ValueError, TypeError):
+            return "0"
+
+    # Handle string fields
+    else:
+        return str(value) if value is not None else ""
 
 
 @admin_routes.route("/settings", methods=["POST"])
 @jwt_required
 async def update_settings():
-    data = await request.get_json()
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Invalid data"}), 400
+    try:
+        data = await request.get_json()
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Invalid data"}), 400
 
-    updated_settings = []
-    for key, value in data.items():
-        if not validate_setting_key(key) or not validate_setting_value(value):
-            return jsonify({"error": f"Invalid setting key or value: {key}"}), 400
+        async with flask_session_scope() as session:
+            updated_settings = []
 
-        setting = AdminService.update_setting(key, value)
-        updated_settings.append(setting.to_dict())
-        logger.info(f"Setting updated: {key}")
+            for key, value in data.items():
+                # Normalize the value for storage and validation
+                normalized_value = normalize_setting_value(key, value)
 
-    return jsonify(updated_settings), 200
+                # Validate the key and normalized value
+                if not validate_setting_key(key):
+                    logger.error(f"Invalid setting key: {key}")
+                    return jsonify({"error": f"Invalid setting key: {key}"}), 400
+
+                if not validate_setting_value(normalized_value):
+                    logger.error(f"Invalid setting value for key '{key}': {normalized_value}")
+                    return jsonify({"error": f"Invalid setting value for key: {key}"}), 400
+
+                # Update the setting
+                setting = await AdminService.update_setting(session, key, normalized_value)
+                updated_settings.append(setting.to_dict())
+                logger.info(f"Setting updated: {key} = {normalized_value}")
+
+            await session.commit()
+            return jsonify(updated_settings), 200
+
+    except Exception as e:
+        logger.error(f"Error updating settings: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @admin_routes.route("/login", methods=["POST"])

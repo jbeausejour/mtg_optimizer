@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useMutation, useQueryClient} from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
-import { Modal, Button, message, Spin, Space, Input, Typography, Popconfirm , List, AutoComplete } from 'antd';
+import { Modal, Button, Spin, Space, Input, Typography, Popconfirm , List, AutoComplete } from 'antd';
 import { EditOutlined, DeleteOutlined, SearchOutlined, ClearOutlined, SaveOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
+import { useSettings } from '../utils/SettingsContext';
+import { useApiWithNotifications } from '../utils/useApiWithNotifications';
+import { useNotification } from '../utils/NotificationContext';
 import api from '../utils/api';
 import { useBuylistState } from '../hooks/useBuylistState';
 import { getStandardTableColumns } from '../utils/tableConfig';
@@ -21,7 +24,10 @@ const { Title} = Typography;
 const BuylistManagement = () => {
   const location = useLocation();
   const { theme } = useTheme();
+  const { settings } = useSettings(); 
   const { selectedBuylist, setSelectedBuylist } = useBuylistState();
+  const { messageApi, notificationApi } = useNotification();
+  const { deleteWithNotifications } = useApiWithNotifications();
 
   const initialBuylistId = location?.state?.buylistId || null;
   const initialBuylistName = location?.state?.buylistName || "";
@@ -40,6 +46,8 @@ const BuylistManagement = () => {
   const [savedBuylists, setSavedBuylists] = useState([]);
   const [loadedBuylistName, setLoadedBuylistName] = useState("");
   const [pendingSelection, setPendingSelection] = useState(null);
+  const [autoCompleteValue, setAutoCompleteValue] = useState('');
+  const [hasInitialized, setHasInitialized] = useState(false);
   
   // Card search and import state - Restored from old version
   const [suggestions, setSuggestions] = useState([]);
@@ -104,44 +112,59 @@ const BuylistManagement = () => {
       },
       onError: (err, variables, context) => {
         setCards(context.previousCards);
-        message.error('Failed to delete card.');
+        notificationApi.error({
+          message: 'Failed to delete card',
+          description: err.message,
+          placement: 'topRight',
+        });
       },
       onSuccess: () => {
-        message.success('Card deleted successfully.');
+        notificationApi.success({
+          message: 'Card deleted successfully',
+          placement: 'topRight',
+        });
       },
       onSettled: () => {
         queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
       }
     });
 
-  const bulkDeleteCardsMutation = useMutation({
-    mutationFn: async ({ cardsToDelete }) => {
-      return await api.delete('/buylist/cards', {
-        data: {
-          buylistId: selectedBuylist?.buylistId,
-          cards: cardsToDelete
-        }
-      });
-    },
-    onSuccess: (data, variables) => {
-      message.success(`${variables.cardsToDelete.length} card(s) deleted successfully.`);
-      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
-    },
-    onError: (error) => {
-      console.error('Bulk deletion error:', error);
-      message.error('Failed to delete selected cards.');
-      queryClient.invalidateQueries(['buylist', selectedBuylist?.buylistId]);
+  const handleBulkDelete = useCallback(() => {
+    if (selectedCardIds.size === 0) {
+      messageApi.warning('No cards selected for deletion.');
+      return;
     }
-  });
+  
+    deleteWithNotifications(
+      async () => {
+        const cardsToDelete = cards.filter(card => selectedCardIds.has(card.id))
+          .map(card => ({ name: card.name, quantity: card.quantity || 1 }));
+        await api.delete('/buylist/cards', {
+          data: {
+            buylistId: selectedBuylist?.buylistId,
+            cards: cardsToDelete
+          }
+        });
+        setCards(prev => prev.filter(card => !selectedCardIds.has(card.id)));
+        setSelectedCardIds(new Set());
+        return { count: cardsToDelete.length };
+      },
+      'cards',
+      { loadingMessage: `Deleting ${selectedCardIds.size} card(s).` }
+    );
+  }, [selectedCardIds, cards, selectedBuylist?.buylistId]);
 
   const deleteBuylistMutation = useMutation({
     mutationFn: async ({ buylistId }) => {
       return await api.delete(`/buylists/${buylistId}`);
     },
     onSuccess: (_, { buylistId }) => {
-      message.success("Buylist deleted successfully.");
+      notificationApi.success({
+        message: 'Buylist deleted successfully',
+        placement: 'topRight',
+      });
       fetchSavedBuylists();
-  
+    
       if (selectedBuylist?.buylistId === buylistId) {
         setSelectedBuylist({ buylistId: null, name: "" });
         setLoadedBuylistName("");
@@ -150,12 +173,23 @@ const BuylistManagement = () => {
     },
     onError: (error) => {
       console.error("Error deleting buylist:", error);
-      message.error("Failed to delete buylist.");
+      notificationApi.error({
+        message: 'Failed to delete buylist',
+        placement: 'topRight',
+      });
     }
   });
   
+
   useEffect(() => {
+    // Only run initialization once, or when explicitly needed
+    if (hasInitialized && !initialBuylistId) {
+      console.log('Skipping re-initialization - already initialized');
+      return;
+    }
+  
     const initializeBuylists = async () => {
+      console.log('Running buylist initialization...');
       setErrorCards([]);
       setLoading(true);
       try {
@@ -165,41 +199,64 @@ const BuylistManagement = () => {
   
         setSavedBuylists(response.data);
   
-        const selected = initialBuylistId
-          ? { buylistId: initialBuylistId, name: initialBuylistName }
-          : { buylistId: response.data[0].id, name: response.data[0].name };
+        // Priority order for selecting buylist:
+        // 1. Already selected buylist from state (if it exists in the fetched list)
+        // 2. Initial buylist from location state
+        // 3. First buylist from the response
+        let selected;
+        
+        if (selectedBuylist?.buylistId && response.data.find(b => b.id === selectedBuylist.buylistId)) {
+          // Use existing selected buylist if it's still valid
+          selected = selectedBuylist;
+          console.log('Using existing selected buylist:', selected);
+        } else if (initialBuylistId) {
+          // Use initial buylist from location state
+          selected = { buylistId: initialBuylistId, name: initialBuylistName };
+          console.log('Using initial buylist from location:', selected);
+        } else {
+          // Default to first buylist
+          selected = { buylistId: response.data[0].id, name: response.data[0].name };
+          console.log('Using first buylist as default:', selected);
+        }
   
         const cardsRes = await api.get(`/buylists/${selected.buylistId}`);
-  
         const cardsData = Array.isArray(cardsRes.data) ? cardsRes.data : [];
   
         setCards(cardsData);
         setSelectedBuylist(selected);
         setLoadedBuylistName(selected.name);
+        setHasInitialized(true);
   
         // Sync cards_count immediately to prevent flicker
         setSavedBuylists(prev =>
           prev.map(b =>
-            b.buylistId === selected.buylistId ? { ...b, cards_count: cardsData.length } : b
+            b.id === selected.buylistId ? { ...b, cards_count: cardsData.length } : b
           )
         );
   
         if (cardsData.length > 0) {
-          message.success(`Buylist "${selected.name}" loaded successfully.`);
+          notificationApi.success({
+            message: 'Buylist loaded successfully',
+            description: `Buylist "${selected.name}" loaded successfully.`,
+            placement: 'topRight',
+          });
         } else {
-          message.info(`Buylist "${selected.name}" is empty.`);
+          messageApi.info(`Buylist "${selected.name}" is empty.`);
         }
   
       } catch (error) {
-        console.error('Failed to fetch or load buylists:', error);
-        message.error('Failed to initialize buylists.');
+        console.error('Failed to fetch or load buylists:', error)
+        notificationApi.error({
+          message: 'Failed to initialize buylists',
+          placement: 'topRight',
+        });
       } finally {
         setLoading(false);
       }
     };
   
     initializeBuylists();
-  }, [initialBuylistId, initialBuylistName]);
+  }, [initialBuylistId, initialBuylistName]); // Removed selectedBuylist?.buylistId dependency
   
   // Update effects when cards change - Restored from old version
   useEffect(() => {
@@ -241,10 +298,18 @@ const BuylistManagement = () => {
               title="Are you sure you want to delete this card?"
               okText="Yes"
               cancelText="No"
-              onConfirm={() => handleDeleteCard(record.id)}  // ✅ Use the ID here
+              onConfirm={(e) => {
+                e?.stopPropagation?.();
+                handleDeleteCard(record); // ✅ Correct - passes full record
+              }}
+              
               onCancel={(e) => e.stopPropagation()}
             >
-              <Button danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
+              <Button 
+                type="link" 
+                danger 
+                icon={<DeleteOutlined />} 
+                onClick={(e) => e.stopPropagation()}>
                 Delete
               </Button>
             </Popconfirm>
@@ -267,7 +332,10 @@ const BuylistManagement = () => {
       }
     } catch (error) {
       console.error('Debug: Failed to fetch saved buylists', error);
-      message.error('Failed to fetch saved buylists');
+      notificationApi.error({
+        message: 'Failed to fetch saved buylists',
+        placement: 'topRight',
+      });
     }
   };
 
@@ -289,10 +357,17 @@ const BuylistManagement = () => {
         )
       );
   
-      message.success(`Buylist "${buylist.name}" loaded successfully.`);
+      notificationApi.success({
+        message: 'Buylist loaded successfully',
+        description: `Buylist "${buylist.name}" loaded successfully.`,
+        placement: 'topRight',
+      });
     } catch (error) {
       console.error('Failed to load buylist:', error);
-      message.error('Failed to load buylist.');
+      notificationApi.error({
+        message: 'Failed to load buylist',
+        placement: 'topRight',
+      });
     } finally {
       setLoading(false);
     }
@@ -301,7 +376,7 @@ const BuylistManagement = () => {
   const handleSaveBuylist = async () => {
     setErrorCards([]);
     if (!selectedBuylist?.buylistId || !selectedBuylist?.name) {
-      message.error('Buylist ID and name are required.');
+      messageApi.error('Buylist ID and name are required.');
       return;
     }
   
@@ -319,9 +394,15 @@ const BuylistManagement = () => {
         )
       );
   
-      message.success('Buylist name updated successfully.');
+      notificationApi.success({
+        message: 'Buylist name updated successfully',
+        placement: 'topRight',
+      });
     } catch (error) {
-      message.error('Failed to rename buylist.');
+      notificationApi.error({
+        message: 'Failed to rename buylist',
+        placement: 'topRight',
+      });
       console.error('Error renaming buylist:', error);
     }
   };
@@ -355,9 +436,16 @@ const BuylistManagement = () => {
           { buylistId: newBuylist.id, name: newBuylist.name }
       ]);
 
-      message.success(`New buylist "${newBuylist.name}" created.`);
+      notificationApi.success({
+        message: 'Buylist created successfully',
+        description: `New buylist "${newBuylist.name}" created.`,
+        placement: 'topRight',
+      });
     } catch (error) {
-      message.error("Failed to create a new buylist.");
+      notificationApi.error({
+        message: 'Failed to create a new buylist',
+        placement: 'topRight',
+      });
       console.error("Error creating new buylist:", error);
     }
   };
@@ -391,8 +479,11 @@ const BuylistManagement = () => {
     
     // Reset selection state after import
     setSelectedCardIds(new Set());
-    
-    message.success('Cards imported successfully.');
+        
+    notificationApi.success({
+      message: 'Cards imported successfully',
+      placement: 'topRight',
+    });
   };
 
   const handleSuggestionSearch = (value) => {
@@ -416,60 +507,51 @@ const BuylistManagement = () => {
   };
 
   const handleSelectCard = useCallback(async (value) => {
-    // Generate a temporary client-side ID
-    const clientSideId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Create the new card object
-    const newCard = {
-      id: clientSideId,
-      name: value,
-      quantity: 1,
-      set_name: '',
-      quality: 'NM',
-      language: 'English',
-      version: 'Standard',
-      foil: false
-    };
-    
-    // Optimistically update UI first
-    setCards(prevCards => [...prevCards, newCard]);
+    // Clear the AutoComplete input immediately
+    setAutoCompleteValue('');
     setSuggestions([]);
     
     try {
-      // Save the card to the server
+      // Save the card to the server FIRST (no optimistic update)
+      console.log('Adding card to server:', value);
       const response = await api.post(`/buylists/${selectedBuylist?.buylistId}/cards`,  {
         cards: [{
           name: value,
           quantity: 1,
           quality: 'NM',
           language: 'English',
-          set_name: '',
-          set_code: '',
           version: 'Standard',
           foil: false
         }]
       });
       
-      // If successful, update the card with the server-provided ID
-      if (response.data && response.data.addedCards && response.data.addedCards.length > 0) {
-        const serverCard = response.data.addedCards[0];
-        
-        // Replace the temporary card with the server version
-        setCards(prevCards => prevCards.map(card => 
-          card.id === clientSideId ? { ...serverCard, id: serverCard.id } : card
-        ));
-        
-        // console.log('Card added successfully:', serverCard);
-        message.success('Card(s) added successfully.');
-      }
+      console.log('API Response:', response.data);
+      console.log('Response structure:', Object.keys(response.data || {}));
+      
+      // Reload the buylist to get the actual current state
+      console.log('Reloading buylist after adding card...');
+      const cardsResponse = await api.get(`/buylists/${selectedBuylist?.buylistId}`);
+      const cardsData = Array.isArray(cardsResponse.data) ? cardsResponse.data : [];
+      
+      console.log('Reloaded cards:', cardsData.length, 'cards');
+      setCards(cardsData);
+      
+      // Show success notification
+      notificationApi.success({
+        message: 'Card added successfully',
+        description: `"${value}" was added to your buylist.`,
+        placement: 'topRight',
+      });
+      
     } catch (error) {
       console.error('Error adding card:', error);
-      message.error(`Failed to add card: ${error.message}`);
-      
-      // Remove the card from UI if the API call fails
-      setCards(prevCards => prevCards.filter(card => card.id !== clientSideId));
+      notificationApi.error({
+        message: 'Failed to add card',
+        description: error.message,
+        placement: 'topRight',
+      });
     }
-  }, [selectedBuylist?.buylistId, setCards]);
+  }, [selectedBuylist?.buylistId, setCards, setAutoCompleteValue, setSuggestions, notificationApi]);
   
   const handleModalClose = () => {
     setIsModalVisible(false);
@@ -498,7 +580,11 @@ const BuylistManagement = () => {
       // console.log("response.data incoming props:", response.data);
     } catch (error) {
       // console.error('Error fetching card:', error);
-      message.error(`Failed to fetch card details: ${error.message}`);
+      notificationApi.error({
+        message: 'Failed to fetch card details',
+        description: error.message,
+        placement: 'topRight',
+      });
       setIsModalVisible(false);    // Close modal on error
     } finally {
       setIsModalLoading(false);    // Stop spinner
@@ -543,52 +629,44 @@ const BuylistManagement = () => {
         )
       );
   
-      message.success('Card updated successfully');
+      notificationApi.success({
+        message: 'Card updated successfully',
+        placement: 'topRight',
+      });
       handleModalClose();
     } catch (error) {
       console.error('5. Update error:', error);
-      message.error(`Failed to update card: ${error.message}`);
+      notificationApi.error({
+        message: 'Failed to update card',
+        description: error.message,
+        placement: 'topRight',
+      });
     } finally {
       console.groupEnd();
     }
   }, [setCards, handleModalClose]);
   
-  const handleDeleteCard = useCallback((cardId) => {
-    const cardToDelete = cards.find(card => card.id === cardId);
-    if (!cardToDelete) {
-      message.error('Card not found');
+  const handleDeleteCard = useCallback((cardRecord) => {
+    console.log('=== DELETE CARD DEBUG ===');
+    console.log('Deleting card record:', cardRecord);
+    
+    if (!cardRecord || !cardRecord.id) {
+      console.log('❌ Invalid card record');
+      messageApi.error('Invalid card data');
       return;
     }
   
+    console.log('✅ Using card record directly:', cardRecord);
+    console.log('=== END DELETE DEBUG ===');
+    
     deleteCardMutation.mutate({
-      card_id: cardId,
+      card_id: cardRecord.id,
       cardData: {
-        name: cardToDelete.name,
-        quantity: cardToDelete.quantity || 1
+        name: cardRecord.name,
+        quantity: cardRecord.quantity || 1
       }
     });
-  }, [deleteCardMutation, cards]);
-  
-  // Handler for bulk deletion 
-  const handleBulkDelete = useCallback(() => {
-    if (selectedCardIds.size === 0) {
-      message.warning('No cards selected for deletion.');
-      return;
-    }
-
-    const cardsToDelete = cards
-      .filter(card => selectedCardIds.has(card.id))
-      .map(card => ({
-        name: card.name,
-        quantity: card.quantity || 1
-      }));
-
-    // Optimistically update the UI
-    setCards(prev => prev.filter(card => !selectedCardIds.has(card.id)));
-    setSelectedCardIds(new Set());
-
-    bulkDeleteCardsMutation.mutate({ cardsToDelete });
-  }, [selectedCardIds, cards, selectedBuylist?.buylistId]);
+  }, [deleteCardMutation, messageApi]);
 
   const debouncedFetchSuggestions = debounce(fetchSuggestions, 300);
   
@@ -606,6 +684,8 @@ const BuylistManagement = () => {
             onSearch={handleSuggestionSearch}
             onSelect={handleSelectCard}
             placeholder="Add card..."
+            value={autoCompleteValue}
+            onChange={setAutoCompleteValue}
             style={{ 
               marginBottom: 16,
               width: '100%'
@@ -693,6 +773,7 @@ const BuylistManagement = () => {
                   </Button>
                 </Popconfirm>
 
+
                 {item.name} {(item.id === selectedBuylist?.buylistId)
                   ? `(${cards.length})`
                   : (item.cards_count !== undefined ? `(${item.cards_count})` : '')}
@@ -722,7 +803,10 @@ const BuylistManagement = () => {
             cancelText="No"
             onConfirm={handleBulkDelete}
           >
-          <Button danger icon={<DeleteOutlined />}>
+          <Button 
+            type="link" 
+            danger 
+            icon={<DeleteOutlined />}>
             Delete Selected ({selectedCardIds.size})
           </Button>
         </Popconfirm>
@@ -742,6 +826,7 @@ const BuylistManagement = () => {
         onSelectionChange={setSelectedCardIds}
         onRowClick={handleCardClick}
         onChange={handleTableChange}
+        pagination={pagination} 
       />
       
       {/* Card Detail Modal */}

@@ -137,7 +137,7 @@ async def add_cards_to_buylist(buylistId):
         async with flask_session_scope() as session:
             updated_buylist = await UserBuylistCardService.add_cards_to_buylist(session, buylistId, user_id, cards)
             await session.commit()
-            return jsonify(updated_buylist.to_dict()), 201
+            return jsonify(updated_buylist), 201
 
     except Exception as e:
         logger.error(f"Error adding cards to buylist {buylistId}: {str(e)}")

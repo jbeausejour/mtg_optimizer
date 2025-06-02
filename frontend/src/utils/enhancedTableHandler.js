@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useSettings } from './SettingsContext';
 import { getStandardPagination } from './tableConfig';
 
 /**
@@ -10,6 +11,7 @@ import { getStandardPagination } from './tableConfig';
  * @returns {Object} Unified table state and handlers
  */
 export const useEnhancedTableHandler = (initialConfig = {}, persistKey = null) => {
+  const { settings } = useSettings();
   // Initialize state with either persisted state, provided initialConfig, or defaults
   const [filteredInfo, setFilteredInfo] = useState(initialConfig.filteredInfo || {});
   const [sortedInfo, setSortedInfo] = useState(initialConfig.sortedInfo || {});
@@ -21,6 +23,15 @@ export const useEnhancedTableHandler = (initialConfig = {}, persistKey = null) =
   const [visibleColumns, setVisibleColumns] = useState(initialConfig.visibleColumns || []);
   const searchInput = useRef({});
 
+  // Update pagination when settings change
+  useEffect(() => {
+    setPagination(prev => ({
+      ...prev,
+      pageSize: settings.itemsPerPage || 20,
+      current: 1 // Reset to first page when page size changes
+    }));
+  }, [settings.itemsPerPage]);
+
   // Load persisted state if a key is provided
   useEffect(() => {
     if (persistKey) {
@@ -30,10 +41,12 @@ export const useEnhancedTableHandler = (initialConfig = {}, persistKey = null) =
           const parsedState = JSON.parse(savedState);
           setFilteredInfo(parsedState.filteredInfo || {});
           setSortedInfo(parsedState.sortedInfo || {});
+          const savedPagination = parsedState.pagination || {};
           setPagination(prev => ({
-            ...getStandardPagination(),
+            ...getStandardPagination(settings.itemsPerPage),
             ...prev,
-            ...parsedState.pagination
+            ...savedPagination,
+            pageSize: settings.itemsPerPage || savedPagination.pageSize || 20
           }));
           
           if (parsedState.selectedIds) {

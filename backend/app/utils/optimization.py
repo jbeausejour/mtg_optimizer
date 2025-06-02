@@ -86,7 +86,7 @@ class PurchaseOptimizer:
                 .agg(
                     {
                         "original_price": ["count", "mean", "min", "max"],
-                        "price": ["mean", "min", "max"],  # USD prices after conversion
+                        "price": ["mean", "min", "max"],  # CAD prices after conversion
                     }
                 )
                 .round(4)
@@ -98,9 +98,9 @@ class PurchaseOptimizer:
                 orig_avg = currency_stats.loc[currency, ("original_price", "mean")]
                 orig_min = currency_stats.loc[currency, ("original_price", "min")]
                 orig_max = currency_stats.loc[currency, ("original_price", "max")]
-                usd_avg = currency_stats.loc[currency, ("price", "mean")]
-                usd_min = currency_stats.loc[currency, ("price", "min")]
-                usd_max = currency_stats.loc[currency, ("price", "max")]
+                cad_avg = currency_stats.loc[currency, ("price", "mean")]
+                cad_min = currency_stats.loc[currency, ("price", "min")]
+                cad_max = currency_stats.loc[currency, ("price", "max")]
 
                 converter = CurrencyConverter()
                 symbol = converter.get_currency_symbol(currency)
@@ -110,21 +110,21 @@ class PurchaseOptimizer:
                 logger.info(
                     f"  Original prices: {symbol}{orig_min:.2f} - {symbol}{orig_max:.2f} (avg: {symbol}{orig_avg:.2f})"
                 )
-                logger.info(f"  USD prices: ${usd_min:.2f} - ${usd_max:.2f} (avg: ${usd_avg:.2f})")
+                logger.info(f"  CAD prices: ${cad_min:.2f} - ${cad_max:.2f} (avg: ${cad_avg:.2f})")
 
-                if currency != "USD":
+                if currency != "CAD":
                     rate = (
                         currency_stats.loc[currency, ("price", "mean")]
                         / currency_stats.loc[currency, ("original_price", "mean")]
                     )
-                    logger.info(f"  Conversion rate used: ~{rate:.4f} (1 {currency} = {rate:.4f} USD)")
+                    logger.info(f"  Conversion rate used: ~{rate:.4f} (1 {currency} = {rate:.4f} CAD)")
 
             logger.info("=== END CURRENCY CONVERSION SUMMARY ===")
 
-            # Validate that all prices are now in USD
+            # Validate that all prices are now in CAD
             total_items = len(df)
-            converted_items = len(df[df["original_currency"] != "USD"])
-            logger.info(f"Currency conversion: {converted_items}/{total_items} items converted to USD")
+            converted_items = len(df[df["original_currency"] != "CAD"])
+            logger.info(f"Currency conversion: {converted_items}/{total_items} items converted to CAD")
 
         else:
             logger.info("No currency conversion data found - assuming all prices are in CAD (default currency)")

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Table, Checkbox, Space } from 'antd';
 import { ExportOptions } from '../utils/exportUtils';
+import { useSettings } from '../utils/SettingsContext';
 import { getStandardPagination } from '../utils/tableConfig';
 
 /**
