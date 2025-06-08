@@ -88,7 +88,7 @@ class CardService(AsyncBaseService):
     # Cache Operations
     ##################
     @classmethod
-    async def initialize_cache(cls):
+    async def initialize_card_names_cache(cls):
         """Initialize cache during application startup."""
         logger.info("Initializing card names cache...")
         success = await cls.ensure_card_names_cache()
@@ -96,6 +96,34 @@ class CardService(AsyncBaseService):
             logger.info("Card names cache initialized successfully")
         else:
             logger.error("Failed to initialize card names cache")
+        return success
+
+    @classmethod
+    async def ensure_sets_cache(cls) -> bool:
+        """
+        Ensure sets cache exists. Only fetches if missing.
+        Returns True if cache is available, False if failed to create.
+        """
+        redis_client = await cls.get_redis_client()
+
+        # Check if cache exists
+        if await redis_client.exists(REDIS_SETS_KEY):
+            return True
+
+        # Cache doesn't exist - fetch it once
+        logger.info("Sets cache missing, initializing...")
+        sets_data = await cls.fetch_scryfall_set_codes()
+        return len(sets_data) > 0
+
+    @classmethod
+    async def initialize_sets_cache(cls):
+        """Initialize sets cache during application startup."""
+        logger.info("Initializing sets cache...")
+        success = await cls.ensure_sets_cache()
+        if success:
+            logger.info("Sets cache initialized successfully")
+        else:
+            logger.error("Failed to initialize sets cache")
         return success
 
     @classmethod
@@ -133,6 +161,25 @@ class CardService(AsyncBaseService):
         except json.JSONDecodeError:
             logger.error("Failed to parse cached card names")
             return []
+
+    @classmethod
+    async def get_cached_sets(cls) -> Dict[str, Dict[str, Any]]:
+        """
+        Get cached sets data. Does NOT fetch if missing - returns empty dict.
+        Use ensure_sets_cache() first if you need to guarantee cache exists.
+        """
+        redis_client = await cls.get_redis_client()
+
+        cached_sets_json = await redis_client.get(REDIS_SETS_KEY)
+        if not cached_sets_json:
+            logger.warning("Sets cache is empty")
+            return {}
+
+        try:
+            return json.loads(cached_sets_json)
+        except json.JSONDecodeError:
+            logger.error("Failed to parse cached sets")
+            return {}
 
     ##################
     # Fetch Operations
@@ -223,15 +270,16 @@ class CardService(AsyncBaseService):
     @classmethod
     async def fetch_all_sets(cls) -> List[Dict[str, str]]:
         """Fetch all valid sets from Redis (cached from Scryfall)."""
-        redis_client = await cls.get_redis_client()
-        cached_sets = await redis_client.get(REDIS_SETS_KEY)
+        # Ensure cache exists
+        if not await cls.ensure_sets_cache():
+            logger.error("Could not initialize sets cache")
+            return []
 
-        if cached_sets:
-            sets_data = json.loads(cached_sets)
-            return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
+        # Get cached data
+        sets_data = await cls.get_cached_sets()
+        if not sets_data:
+            return []
 
-        # If not cached, fetch and return
-        sets_data = await cls.fetch_scryfall_set_codes()
         return [{"set": data["code"], "name": name} for name, data in sets_data.items()]
 
     @classmethod
@@ -641,7 +689,16 @@ class CardService(AsyncBaseService):
     @staticmethod
     async def extract_magic_set_from_href(url):
         try:
-            sets_data = await CardService.get_sets_data()
+
+            # Ensure cache exists before getting data
+            if not await CardService.ensure_sets_cache():
+                logger.error("Could not initialize sets cache")
+                return None
+
+            sets_data = await CardService.get_cached_sets()
+            if not sets_data:
+                return None
+
             known_sets = sets_data.keys()
 
             # Normalize URL for robust matching
@@ -856,16 +913,16 @@ class CardService(AsyncBaseService):
     @classmethod
     async def get_sets_data(cls, force_refresh=False):
         """Fetch set data from Redis or refresh if needed."""
-        redis_client = await cls.get_redis_client()
-
         if force_refresh:
             return await cls.fetch_scryfall_set_codes()
 
-        cached_sets = await redis_client.get(REDIS_SETS_KEY)
-        if cached_sets:
-            return json.loads(cached_sets)
+        # Ensure cache exists
+        if not await cls.ensure_sets_cache():
+            logger.error("Could not initialize sets cache")
+            return {}
 
-        return await cls.fetch_scryfall_set_codes()  # Refresh if missing # Refresh if missing
+        # Get cached data
+        return await cls.get_cached_sets()
 
     @classmethod
     async def get_set_code(cls, set_name: str) -> Optional[str]:

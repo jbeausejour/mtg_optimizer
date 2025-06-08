@@ -73,6 +73,10 @@ class Config:
     MIN_STORE = 1
     FIND_MIN_STORE = False
 
+    USE_NEW_OPTIMIZATION_ARCHITECTURE = os.environ.get("USE_NEW_OPTIMIZATION", "false").lower() == "true"
+    DEFAULT_OPTIMIZATION_ALGORITHM = os.environ.get("DEFAULT_ALGORITHM", "auto")
+    OPTIMIZATION_CACHE_SIZE = int(os.environ.get("OPT_CACHE_SIZE", "50000"))
+
     # Scan retention config
     SCAN_RETENTION_DAYS = 30
 

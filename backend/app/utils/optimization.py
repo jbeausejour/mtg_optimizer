@@ -13,6 +13,12 @@ from app.constants import CurrencyConverter
 from app.utils.data_fetcher import ErrorCollector
 from deap import algorithms, base, creator, tools
 
+from app.optimization.algorithms.factory import OptimizerFactory
+from app.optimization.config.algorithm_configs import AlgorithmConfig
+
+# Global flag for gradual migration
+USE_NEW_ARCHITECTURE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +32,11 @@ class PurchaseOptimizer:
             "quality": "quality",
             "quantity": "quantity",
         }
+
+        # Initialize new architecture if enabled
+        if USE_NEW_ARCHITECTURE:
+            self.algorithm_config = AlgorithmConfig.from_optimization_config(optimizationConfig)
+            self.optimizer_factory = OptimizerFactory()
 
         if filtered_listings_df.empty or user_wishlist_df.empty:
             raise ValueError("Empty input dataframes")
@@ -210,6 +221,42 @@ class PurchaseOptimizer:
                     raise ValueError("Quantity column contains non-numeric values")
 
     def run_optimization(self, card_names, optimizationConfig, celery_task=None):
+        """Enhanced run_optimization with algorithm selection"""
+
+        if USE_NEW_ARCHITECTURE:
+            return self._run_with_new_architecture(card_names, optimizationConfig, celery_task)
+        else:
+            return self._run_with_old_architecture(card_names, optimizationConfig, celery_task)
+
+    def _run_with_new_architecture(self, card_names, optimizationConfig, celery_task=None):
+        """Use new modular architecture"""
+        try:
+            problem_data = {
+                "filtered_listings_df": self.filtered_listings_df,
+                "user_wishlist_df": self.user_wishlist_df,
+                "card_names": card_names,
+            }
+
+            optimizer = self.optimizer_factory.create_optimizer(
+                self.algorithm_config.primary_algorithm, problem_data, self.algorithm_config.to_dict()
+            )
+
+            result = optimizer.optimize()
+
+            # Convert to legacy format for compatibility
+            return {
+                "status": "success",
+                "best_solution": result.best_solution,
+                "iterations": result.all_solutions[:10],
+                "algorithm_used": result.algorithm_used,
+                "execution_time": result.execution_time,
+            }
+
+        except Exception as e:
+            logger.error(f"New architecture failed, falling back to old: {str(e)}")
+            return self._run_with_old_architecture(card_names, optimizationConfig, celery_task)
+
+    def _run_with_old_architecture(self, card_names, optimizationConfig, celery_task=None):
         try:
             error_collector = ErrorCollector.get_instance()  # Initialize error_collector
             milp_result = None
@@ -1990,8 +2037,8 @@ class PurchaseOptimizer:
         """Enhanced NSGA-II implementation with better solution tracking"""
 
         # Initialize parameters
-        NGEN = 50
-        POP_SIZE = 300
+        NGEN = 100
+        POP_SIZE = 500
         TOURNAMENT_SIZE = 3
         CXPB = 0.85
         MUTPB = 0.15

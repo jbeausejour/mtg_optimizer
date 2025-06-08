@@ -72,22 +72,17 @@ const Navigation = () => {
   ];
   
   return (
-    <nav style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      width: '100%',
-      backgroundColor: '#fff', // or your preferred color
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      zIndex: 1000,
-    }}>
-      <Menu 
-        theme={theme} 
-        mode="horizontal" 
-        selectedKeys={[location.pathname]} 
-        items={menuItems}
-      />
-    </nav>
+    <Menu 
+      theme={theme} 
+      mode="horizontal" 
+      selectedKeys={[location.pathname]} 
+      items={menuItems}
+      style={{
+        width: '100%',
+        border: 'none', // Remove any borders
+        boxShadow: 'none', // Remove shadow that was causing dark bar
+      }}
+    />
   );
 };
 

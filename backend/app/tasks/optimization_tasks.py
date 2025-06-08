@@ -20,6 +20,8 @@ from app.dto.optimization_dto import (
     OptimizationSolution,
     StoreInSolution,
 )
+from ..services.enhanced_optimization_service import EnhancedOptimizationService
+
 
 from app.models.site import Site
 from app.models.site_statistics import SiteStatistics
@@ -36,6 +38,10 @@ import nest_asyncio
 
 nest_asyncio.apply()
 logger = logging.getLogger(__name__)
+
+
+# Add flag to switch between old and new systems
+USE_ENHANCED_OPTIMIZATION = False
 
 
 def get_fresh_scan_results(fresh_cards, site_ids):
@@ -944,34 +950,49 @@ async def _optimize_and_return_result(
         sites = (await session.execute(select(Site).filter(Site.id.in_(site_ids)))).scalars().all()
         task_mgr = OptimizationTaskManager(site_ids, sites, cards, optimizationConfig)
         await task_mgr.initialize(session)
-        listings_df, wishlist_df = await task_mgr.prepare_optimization_data(all_results)
-
-        if listings_df is None or listings_df.empty:
-            fail_result = await handle_failure(
-                session, "No valid card listings found", task_mgr, scan_id, None, optimizationConfig
+        if USE_ENHANCED_OPTIMIZATION:
+            # Use new enhanced service
+            enhanced_service = EnhancedOptimizationService()
+            result = await enhanced_service.optimize_card_purchase(
+                session, listings_df, wishlist_df, optimizationConfig, celery_task
             )
-            await session.commit()
-            return fail_result
+            return result
+        else:
+            listings_df, wishlist_df = await task_mgr.prepare_optimization_data(all_results)
 
-        celery_task.progress = 70
-        optimization_result = await task_mgr.run_optimization(listings_df, wishlist_df, optimizationConfig, celery_task)
+            if listings_df is None or listings_df.empty:
+                fail_result = await handle_failure(
+                    session, "No valid card listings found", task_mgr, scan_id, None, optimizationConfig
+                )
+                await session.commit()
+                return fail_result
 
-        if not optimization_result or optimization_result.get("status") != "success":
-            fail_result = await handle_failure(
-                session, "Optimization failed", task_mgr, scan_id, optimization_result, optimizationConfig
+            celery_task.progress = 70
+            optimization_result = await task_mgr.run_optimization(
+                listings_df, wishlist_df, optimizationConfig, celery_task
             )
+
+            if not optimization_result or optimization_result.get("status") != "success":
+                fail_result = await handle_failure(
+                    session, "Optimization failed", task_mgr, scan_id, optimization_result, optimizationConfig
+                )
+                await session.commit()
+                return fail_result
+
+            celery_task.progress = 100
+            elapsed = round(time.time() - start_time, 2)
+            logger.info(f"Task completed in {elapsed} seconds")
+            good_result = await handle_success(
+                session,
+                "Optimization completed successfully",
+                task_mgr,
+                scan_id,
+                optimization_result,
+                optimizationConfig,
+            )
+
             await session.commit()
-            return fail_result
-
-        celery_task.progress = 100
-        elapsed = round(time.time() - start_time, 2)
-        logger.info(f"Task completed in {elapsed} seconds")
-        good_result = await handle_success(
-            session, "Optimization completed successfully", task_mgr, scan_id, optimization_result, optimizationConfig
-        )
-
-        await session.commit()
-    return good_result
+        return good_result
 
 
 async def handle_success(session, message, task_manager, scan_id, optimization_result, optimizationConfig):

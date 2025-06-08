@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, List, Button, Typography, Statistic, Space, Badge, Tag, Spin } from 'antd';
 import { ScanOutlined, ShoppingOutlined, FieldTimeOutlined, DollarOutlined, ShopOutlined } from '@ant-design/icons';
@@ -101,7 +101,8 @@ const Dashboard = () => {
         missedCards: solution.missing_cards?.length || 0
     };
   }, []);
-
+  
+  
   const renderScanItem = (scan) => (
     <List.Item>
       <Card 
@@ -208,6 +209,34 @@ const Dashboard = () => {
     );
   };
 
+  const memoizedScanList = useMemo(() => {
+    if (scansLoading) return null;
+    if (!scansData || scansData.length === 0) {
+      return <Typography.Text type="secondary">No scans available</Typography.Text>;
+    }
+    return (
+      <List
+        dataSource={scansData.slice(0, 10)}
+        renderItem={renderScanItem}
+        split={false}
+      />
+    );
+  }, [scansData, scansLoading]);
+  
+  const memoizedOptimizationList = useMemo(() => {
+    if (optimizationsLoading) return null;
+    if (!optimizationsData || optimizationsData.length === 0) {
+      return <Typography.Text type="secondary">No optimizations available</Typography.Text>;
+    }
+    return (
+      <List
+        dataSource={optimizationsData}
+        renderItem={renderOptimizationItem}
+        split={false}
+      />
+    );
+  }, [optimizationsData, optimizationsLoading]);
+  
   return (
     <div className={`dashboard section ${theme}`}>
       <Title level={2}>Dashboard</Title>
@@ -275,17 +304,7 @@ const Dashboard = () => {
             extra={<Button type="link" onClick={() => handleNavigation('/price-tracker')}>View All</Button>}
             loading={scansLoading}
           >
-            {scansData && scansData.length > 0 ? (
-              <List
-                dataSource={scansData.slice(0, 10)}
-                renderItem={renderScanItem}
-                split={false}
-              />
-            ) : !scansLoading && (
-              <Typography.Text type="secondary">
-                No scans available
-              </Typography.Text>
-            )}
+            {memoizedScanList}
           </Card>
         </Col>
         <Col span={12}>
@@ -299,17 +318,7 @@ const Dashboard = () => {
             extra={<Button type="link" onClick={() => handleNavigation('/results')}>View All</Button>}
             loading={optimizationsLoading}
           >
-            {optimizationsData && optimizationsData.length > 0 ? (
-              <List
-                dataSource={optimizationsData}
-                renderItem={renderOptimizationItem}
-                split={false}
-              />
-            ) : !optimizationsLoading && (
-              <Typography.Text type="secondary">
-                No optimizations available
-              </Typography.Text>
-            )}
+            {memoizedOptimizationList}
           </Card>
         </Col>
       </Row>

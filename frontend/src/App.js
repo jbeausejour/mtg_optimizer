@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider} from '@tanstack/react-query';
-import { ConfigProvider } from 'antd';
+// REMOVED: ConfigProvider import since it's now in ThemeProvider
 import { AuthProvider } from './utils/AuthContext';
 import { SettingsProvider } from './utils/SettingsContext';
 import { NotificationProvider } from './utils/NotificationContext';
@@ -38,51 +38,39 @@ const RouterContent = () => {
   
   // For other pages, use Layout with Navigation
   return (
-    <>
-      
-      <Layout>
-        {[
-          <Navigation key="nav" />,
-          <Routes key="routes">
-            <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<Dashboard/>} />
-              <Route path="/buylist-management" element={<BuylistManagement/>} />
-              <Route path="/site-management" element={<SiteManagement/>} />
-              <Route path="/optimize" element={<Optimize/>} />
-              <Route path="/results" element={<Results/>} />
-              <Route path="/results/:scanId" element={<Results/>} />
-              <Route path="/price-tracker" element={<PriceTracker/>} />
-              <Route path="/settings" element={<Settings/>} />
-            </Route>
-          </Routes>
-        ]}
-      </Layout>
-    </>
+    <Layout>
+      {[
+        <Navigation key="nav" />,
+        <Routes key="routes">
+          <Route element={<ProtectedRoute />}>
+            <Route path="/" element={<Dashboard/>} />
+            <Route path="/buylist-management" element={<BuylistManagement/>} />
+            <Route path="/site-management" element={<SiteManagement/>} />
+            <Route path="/optimize" element={<Optimize/>} />
+            <Route path="/results" element={<Results/>} />
+            <Route path="/results/:scanId" element={<Results/>} />
+            <Route path="/price-tracker" element={<PriceTracker/>} />
+            <Route path="/settings" element={<Settings/>} />
+          </Route>
+        </Routes>
+      ]}
+    </Layout>
   );
 };
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Configure theme for Ant Design v5 */}
-      <ConfigProvider
-        theme={{
-          token: {
-            colorPrimary: '#1677ff',
-            borderRadius: 6,
-          },
-        }}
-      >
-        <NotificationProvider>
+      {/* ConfigProvider is now handled in ThemeProvider */}
+      <NotificationProvider>
+        <SettingsProvider>
           <AuthProvider>
-            <SettingsProvider>
-              <Router>
-                <RouterContent />
-              </Router>
-            </SettingsProvider>
+            <Router>
+              <RouterContent />
+            </Router>
           </AuthProvider>  
-        </NotificationProvider>
-      </ConfigProvider>
+        </SettingsProvider>
+      </NotificationProvider>
     </QueryClientProvider>
   );
 }

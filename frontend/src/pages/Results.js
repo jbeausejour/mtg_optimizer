@@ -88,7 +88,7 @@ useEffect(() => {
       window.history.replaceState({}, document.title);
     }
   }
-}, [optimizationResults, location.state, loading, hasShownSuccessMessage, showSuccess]);
+}, [optimizationResults, location.state, loading, hasShownSuccessMessage]);
 
   
   const handleModalClose = () => {

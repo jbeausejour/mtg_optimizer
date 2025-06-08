@@ -12,15 +12,28 @@ const Layout = ({ children }) => {
   }, [theme]);
 
   return (
-    <AntLayout className={`layout ${theme}`}>
-      <Header>
+    <AntLayout style={{ minHeight: '100vh' }}>
+      <Header style={{ 
+        padding: 0, 
+        background: 'transparent',
+        boxShadow: 'none',
+        border: 'none'
+      }}>
         {children[0]} {/* This will be the Navigation component */}
       </Header>
-      <Content style={{ padding: '0 50px', minHeight: 'calc(100vh - 134px)' }}>
+      <Content style={{ 
+        padding: '0 50px', 
+        minHeight: 'calc(100vh - 134px)',
+        background: 'transparent'
+      }}>
         {children.slice(1)} {/* This will be the Routes */}
       </Content>
-      <Footer style={{ textAlign: 'center' }}>
-        MTG Card Optimizer ©{new Date().getFullYear()} Created by Your Name
+      <Footer style={{ 
+        textAlign: 'center',
+        background: 'transparent',
+        border: 'none'
+      }}>
+        MTG Card Optimizer ©{new Date().getFullYear()}
       </Footer>
     </AntLayout>
   );

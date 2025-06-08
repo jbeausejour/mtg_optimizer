@@ -2,12 +2,15 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { jwtDecode }from 'jwt-decode';
 import api from './api';
 import SetupAxiosInterceptors from './AxiosConfig';
+import { useSettings } from './SettingsContext';
+
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true); 
+  const { refreshSettings } = useSettings();
 
   const isTokenExpiringSoon = (decodedToken) => {
     const currentTime = Date.now();
@@ -90,6 +93,13 @@ export const AuthProvider = ({ children }) => {
       
       const decodedToken = jwtDecode(access_token);
       setUser(decodedToken);
+      // Fetch and apply user settings
+      const settingsResponse = await api.get('/settings', {
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+        },
+      });
+      await refreshSettings();
     } catch (error) {
       console.error('Login error:', error);
       throw error;

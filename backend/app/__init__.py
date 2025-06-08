@@ -75,7 +75,7 @@ def create_app(config_class=get_config()):
 
         try:
             # Initialize card names cache
-            card_cache_success = await CardService.initialize_cache()
+            card_cache_success = await CardService.initialize_card_names_cache()
             if card_cache_success:
                 logging.info("✅ Card names cache initialized successfully")
             else:
@@ -83,6 +83,10 @@ def create_app(config_class=get_config()):
 
             # Initialize sets cache if needed
             set_cache_success = await CardService.initialize_sets_cache()
+            if set_cache_success:
+                logging.info("✅ Sets names cache initialized successfully")
+            else:
+                logging.error("❌ Failed to initialize Sets names cache")
 
             logging.info("🚀 Application cache initialization complete")
 
