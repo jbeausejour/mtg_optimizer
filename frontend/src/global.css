@@ -236,6 +236,113 @@ body[data-theme='light'] .ant-layout-footer {
 }
 
 /* =============================================================================
+   RADAR CHART DARK MODE FIXES
+   ============================================================================= */
+
+/* Base chart styling */
+.recharts-wrapper {
+  background: transparent !important;
+}
+
+.recharts-surface {
+  background: transparent !important;
+}
+
+/* Light theme radar chart - default styling works fine */
+body[data-theme='light'] .recharts-polar-grid-angle line,
+body[data-theme='light'] .recharts-polar-grid-concentric-polygon {
+  stroke: #d9d9d9 !important;
+  opacity: 1 !important;
+}
+
+body[data-theme='light'] .recharts-text {
+  fill: #000000 !important;
+}
+
+/* Dark theme radar chart - increase contrast */
+body[data-theme='dark'] .recharts-polar-grid-angle line {
+  stroke: #595959 !important;
+  stroke-width: 1 !important;
+  opacity: 0.8 !important;
+}
+
+body[data-theme='dark'] .recharts-polar-grid-concentric-polygon {
+  stroke: #595959 !important;
+  stroke-width: 1 !important;
+  opacity: 0.6 !important;
+  fill: none !important;
+}
+
+/* Dark theme text labels - make them bright and readable */
+body[data-theme='dark'] .recharts-text {
+  fill: #ffffff !important;
+  font-weight: 500 !important;
+}
+
+/* Dark theme radar area/line colors - make them pop */
+body[data-theme='dark'] .recharts-radar-polygon {
+  fill: rgba(64, 150, 255, 0.3) !important;
+  stroke: #4096ff !important;
+  stroke-width: 2 !important;
+}
+
+body[data-theme='dark'] .recharts-dot {
+  fill: #4096ff !important;
+  stroke: #ffffff !important;
+  stroke-width: 2 !important;
+}
+
+/* Radar chart container improvements */
+.radar-chart-container,
+.chart-container {
+  background: transparent !important;
+  padding: 16px;
+  border-radius: 8px;
+}
+
+/* Dark theme container subtle background for better chart visibility */
+body[data-theme='dark'] .radar-chart-container,
+body[data-theme='dark'] .chart-container {
+  background: rgba(255, 255, 255, 0.02) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Light theme container */
+body[data-theme='light'] .radar-chart-container,
+body[data-theme='light'] .chart-container {
+  background: rgba(0, 0, 0, 0.02) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+}
+/* =============================================================================
+   EXTRA RADAR CHART CONTRAST - Add if still hard to read
+   ============================================================================= */
+
+/* Dark theme: Even brighter grid lines */
+body[data-theme='dark'] .recharts-polar-grid-angle line {
+  stroke: #8c8c8c !important; /* Brighter gray */
+  stroke-width: 1.5 !important;
+}
+
+body[data-theme='dark'] .recharts-polar-grid-concentric-polygon {
+  stroke: #8c8c8c !important; /* Brighter gray */
+  stroke-width: 1.5 !important;
+  opacity: 0.8 !important;
+}
+
+/* Dark theme: Even brighter text */
+body[data-theme='dark'] .recharts-text {
+  fill: #ffffff !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+}
+
+/* Dark theme: More prominent container */
+body[data-theme='dark'] .radar-chart-container,
+body[data-theme='dark'] .chart-container {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+/* =============================================================================
    UTILITY CLASSES
    ============================================================================= */
 

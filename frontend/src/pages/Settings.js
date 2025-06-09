@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Button, Switch, Select, InputNumber, Card, Divider } from 'antd';
+import { Form, Input, Button, Switch, Select, InputNumber, Card, Divider, Typography } from 'antd';
 import { SettingOutlined, SaveOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../utils/AuthContext';
 import { useNotification } from '../utils/NotificationContext';
 import api from '../utils/api';
+import { useTheme } from '../utils/ThemeContext';
 
+const { Title, Text } = Typography;
 const { Option } = Select;
 
 const Settings = () => {
   const [form] = Form.useForm();
+  const { theme } = useTheme();
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -199,15 +202,16 @@ const Settings = () => {
   };
 
   return (
-    <div className="settings" style={{ padding: '24px' }}>
+    <div className={`settings ${theme}`}>
+      <Title level={2}>Settings</Title>
       <Card 
         title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'left', gap: '8px' }}>
             <SettingOutlined />
             <span>Application Settings</span>
           </div>
         }
-        style={{ maxWidth: '800px', margin: '0 auto' }}
+        style={{ maxWidth: '800px', margin: '0 auto', alignContent: 'left' }}
       >
         <Form 
           form={form} 

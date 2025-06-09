@@ -29,8 +29,6 @@ import {
   Tag, 
   Tooltip, 
   Collapse
-
-
 } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import NormalizedWeightSliders, { weightConfig } from '../components/NormalizedWeightSliders';
@@ -550,7 +548,7 @@ const Optimize = () => {
 
   return (
     <div className={`optimize section ${theme}`}>
-      <h1>Optimize</h1>
+      <Title level={2}>Optimize</Title>
       
       <Row gutter={[16, 8]} className="mb-4">
         <Col span={6}>

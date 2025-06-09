@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Button, message } from 'antd';
+import { Form, Input, Button, message, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../utils/AuthContext';
 import './Login.css';  // Using the global CSS
+
+const { Title } = Typography;
 
 const Login = () => { // Add onLogin as a prop
   const [loading, setLoading] = useState(false);
@@ -41,7 +43,7 @@ const Login = () => { // Add onLogin as a prop
   return (
     <div className="login-container">
       <div className="login-box">
-        <h2>Login</h2>
+        <Title level={2}>Login</Title>
         <Form name="login" onFinish={onFinish}>
           <Form.Item
             name="username"
