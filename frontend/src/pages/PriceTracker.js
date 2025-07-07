@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
-import { Card, Typography, Button, Spin, Modal, message, Space, Popconfirm, Input, Checkbox } from 'antd';
-import { DeleteOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons';
+import { Card, Typography, Button, Spin, Modal, message, Space, Popconfirm, Input, Checkbox, Tabs } from 'antd';
+import { DeleteOutlined, SearchOutlined, ClearOutlined, HistoryOutlined, EyeOutlined } from '@ant-design/icons';
 import { useTheme } from '../utils/ThemeContext';
 import { useSettings } from '../utils/SettingsContext';
 import { useNotification } from '../utils/NotificationContext';
@@ -17,8 +17,10 @@ import ScryfallCardView from '../components/Shared/ScryfallCardView';
 import EnhancedTable from '../components/EnhancedTable';
 import { useEnhancedTableHandler } from '../utils/enhancedTableHandler';
 import ColumnSelector from '../components/ColumnSelector';
+import WatchlistTab from '../components/WatchlistTab'; // Import the new component
 
 const { Title, Text } = Typography;
+const { TabPane } = Tabs;
 
 const PriceTracker = () => {
   const { theme } = useTheme();
@@ -28,6 +30,7 @@ const PriceTracker = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isModalLoading, setIsModalLoading] = useState(false);
   const [modalMode, setModalMode] = useState('view');
+  const [activeTab, setActiveTab] = useState('price-history');
   const queryClient = useQueryClient();
 
   const { messageApi, notificationApi } = useNotification();
@@ -127,10 +130,11 @@ const PriceTracker = () => {
     setModalMode('view');
     setFetchedCard(null);
     setIsModalVisible(true);
+    setIsModalLoading(true);
   
     try {
       const data = await fetchCard({
-        name: card.name,
+        name: card.name || card.card_name,
         set_code: card.set || card.set_code || '',
         language: card.language || 'en',
         version: card.version || 'Standard'
@@ -190,28 +194,24 @@ const PriceTracker = () => {
     }
   };
   
-  // Handle bulk deletion
   const handleBulkDelete = useCallback(async () => {
     if (selectedScanIds.size === 0) {
       messageApi.warning('No scans selected for deletion.');
       return;
     }
-    
-
+  
     await deleteWithNotifications(
       async () => {
         const scanIdList = Array.from(selectedScanIds);
-        await api.delete('/scans', {
-          data: {
-            scan_ids: scanIdList
-          }
+        await api.delete('/scans/delete-many', {
+          data: { scan_ids: scanIdList }
         });
         return { count: scanIdList.length };
       },
       'scans',
       {
         loadingMessage: `Deleting ${selectedScanIds.size} scan(s)...`,
-        onSuccess: (result) => {
+        onSuccess: () => {
           setSelectedScanIds(new Set());
           queryClient.invalidateQueries(['scans']);
         },
@@ -221,6 +221,7 @@ const PriceTracker = () => {
       }
     );
   }, [selectedScanIds, setSelectedScanIds, queryClient, deleteWithNotifications, messageApi.warning]);
+  
   
   // Define columns for the scans table using the new utility functions
   const scanColumns = useMemo(() => {
@@ -435,11 +436,11 @@ const PriceTracker = () => {
     ];
     return baseColumns.filter(col => visibleColumns.includes(col.key));
   }, [sortedInfo, filteredInfo, searchInput, handleSearch, handleReset, formatDate, visibleColumns, handleDelete]);
-  
-  return (
-    <div className={`price-tracker ${theme}`}>
-      <Title level={2}>Price History</Title>
-      {selectedScan ? (
+
+  // Render Price History Tab Content
+  const renderPriceHistoryTab = () => {
+    if (selectedScan) {
+      return (
         <>
           <Button onClick={() => { setSelectedScan(null); resetSelection(); }} type="link" className="mb-4">
             ← Back to Scans
@@ -472,7 +473,6 @@ const PriceTracker = () => {
                       key: 'updated_at',
                       render: (text, record) => {
                         const formatted = formatDate(text);
-                        // console.log("📆 Formatting date for row ID", record?.id, ":", text, "→", formatted);
                         return formatted;
                       },
                       sorter: (a, b) => new Date(a.updated_at || 0) - new Date(b.updated_at || 0),
@@ -491,52 +491,87 @@ const PriceTracker = () => {
             )}
           </Card>
         </>
-      ) : (
-        <Card>
-          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-            <Space>
-              <ColumnSelector 
-                columns={scanColumns}
-                visibleColumns={visibleColumns}
-                onColumnToggle={handleColumnVisibilityChange}
-                persistKey="price_tracker_columns"
-              />
-              <Button onClick={handleResetAllFilters} icon={<ClearOutlined />}>
-                Reset All Filters
-              </Button>
-              {selectedScanIds.size > 0 && (
-                  <Popconfirm
-                  title={`Are you sure you want to delete ${selectedScanIds.size} selected scan(s)?`}
-                  okText="Yes"
-                  cancelText="No"
-                  onConfirm={handleBulkDelete}
-                  disabled={selectedScanIds.size === 0}
-                >
-                  <Button danger icon={<DeleteOutlined />} disabled={selectedScanIds.size === 0}>
-                    Delete Selected ({selectedScanIds.size})
-                  </Button>
-                </Popconfirm>
-                
-              )}
-            </Space>
-          </div>
-          <EnhancedTable
-            dataSource={scans}
-            columns={scanColumns}
-            exportFilename="price_scans_export"
-            exportCopyFormat={null} 
-            rowKey="id"
-            loading={scansLoading}
-            persistStateKey="price_tracker_table"
-            rowSelectionEnabled={true}
-            selectedIds={selectedScanIds}
-            onSelectionChange={setSelectedScanIds}
-            onRowClick={(record) => setSelectedScan(record)}
-            onChange={handleTableChange}
-            pagination={pagination} 
-          />
-        </Card>
-      )}
+      );
+    }
+
+    return (
+      <Card>
+        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+          <Space>
+            <ColumnSelector 
+              columns={scanColumns}
+              visibleColumns={visibleColumns}
+              onColumnToggle={handleColumnVisibilityChange}
+              persistKey="price_tracker_columns"
+            />
+            <Button onClick={handleResetAllFilters} icon={<ClearOutlined />}>
+              Reset All Filters
+            </Button>
+            {selectedScanIds.size > 0 && (
+                <Popconfirm
+                title={`Are you sure you want to delete ${selectedScanIds.size} selected scan(s)?`}
+                okText="Yes"
+                cancelText="No"
+                onConfirm={handleBulkDelete}
+                disabled={selectedScanIds.size === 0}
+              >
+                <Button danger icon={<DeleteOutlined />} disabled={selectedScanIds.size === 0}>
+                  Delete Selected ({selectedScanIds.size})
+                </Button>
+              </Popconfirm>
+              
+            )}
+          </Space>
+        </div>
+        <EnhancedTable
+          dataSource={scans}
+          columns={scanColumns}
+          exportFilename="price_scans_export"
+          exportCopyFormat={null} 
+          rowKey="id"
+          loading={scansLoading}
+          persistStateKey="price_tracker_table"
+          rowSelectionEnabled={true}
+          selectedIds={selectedScanIds}
+          onSelectionChange={setSelectedScanIds}
+          onRowClick={(record) => setSelectedScan(record)}
+          onChange={handleTableChange}
+          pagination={pagination} 
+        />
+      </Card>
+    );
+  };
+  
+  return (
+    <div className={`price-tracker ${theme}`}>
+      <Title level={2}>Price Tracker</Title>
+      
+      <Tabs 
+        activeKey={activeTab} 
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'price-history',
+            label: (
+              <span>
+                <HistoryOutlined />
+                Price History
+              </span>
+            ),
+            children: renderPriceHistoryTab()
+          },
+          {
+            key: 'watchlist',
+            label: (
+              <span>
+                <EyeOutlined />
+                Watchlist
+              </span>
+            ),
+            children: <WatchlistTab onCardClick={handleCardClick} />
+          }
+        ]}
+      />
       
       <Modal
         key={selectedCard?.id}

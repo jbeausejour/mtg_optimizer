@@ -21,14 +21,13 @@ ChartJS.register(
 
 const RadarChart = ({ weights, weightConfig }) => {
   const data = {
-    labels: ['Cost', 'Store Count', 'Availability', 'Quality'],
+    labels: ['Cost', 'Store Count', 'Quality'],
     datasets: [
       {
         label: 'Weight Importance (%)',
         data: [
           (weights.cost / weightConfig.cost.max) * 100,
           (weights.store_count / weightConfig.store_count.max) * 100,
-          (weights.availability / weightConfig.availability.max) * 100,
           (weights.quality / weightConfig.quality.max) * 100,
         ],
         backgroundColor: 'rgba(22, 119, 255, 0.2)',

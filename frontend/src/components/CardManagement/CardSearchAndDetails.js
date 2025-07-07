@@ -11,7 +11,7 @@ const CardForm = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await api.get(`/fetch_card?name=${encodeURIComponent(cardName)}`);
+      const response = await api.get(`/card/fetch?name=${encodeURIComponent(cardName)}`);
       setCardData(response.data);
     } catch (error) {
       console.error('Error fetching card data:', error);

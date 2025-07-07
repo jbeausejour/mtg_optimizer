@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Row, Col, Card, Collapse, Typography, Tag, Space, Button, message, Alert } from 'antd';
-import { WarningOutlined, ShoppingCartOutlined } from '@ant-design/icons';
+import { WarningOutlined, ShoppingCartOutlined, CheckCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { getStandardTableColumns } from '../utils/tableConfig';
 import EnhancedTable from './EnhancedTable';
 import PurchaseHandler from './PurchaseUrls';
@@ -9,6 +9,37 @@ import api from '../utils/api';
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
 
+// Helper functions for backward compatibility with new field names
+const getSolutionMetrics = (solution) => {
+  // Use new fields if available, fallback to legacy fields
+  const cardsRequiredTotal = solution.cards_required_total ?? solution.cards_required_total ?? 0;
+  const cardsRequiredUnique = solution.cards_required_unique ?? (solution.missing_cards ? cardsRequiredTotal - solution.missing_cards.length : 0);
+  const cardsFoundTotal = solution.cards_found_total ?? solution.nbr_card_in_solution ?? solution.total_card_found ?? 0;
+  const cardsFoundUnique = solution.cards_found_unique ?? (cardsRequiredUnique - (solution.missing_cards_count ?? 0));
+  
+  // Use new completeness fields if available, calculate if not
+  const completenessByQuantity = solution.completeness_by_quantity ?? 
+    (cardsRequiredTotal > 0 ? cardsFoundTotal / cardsRequiredTotal : 0);
+  const completenessByUnique = solution.completeness_by_unique ?? 
+    (cardsRequiredUnique > 0 ? cardsFoundUnique / cardsRequiredUnique : 0);
+  
+  const isComplete = solution.is_complete ?? (solution.missing_cards_count === 0);
+  const missingCardsCount = solution.missing_cards_count ?? 0;
+  
+  return {
+    cardsRequiredTotal,
+    cardsRequiredUnique,
+    cardsFoundTotal,
+    cardsFoundUnique,
+    completenessByQuantity,
+    completenessByUnique,
+    isComplete,
+    missingCardsCount,
+    totalPrice: solution.total_price ?? 0,
+    numberStore: solution.number_store ?? 0,
+    missingCards: solution.missing_cards ?? []
+  };
+};
 
 export const OptimizationSummary = ({ result, onCardClick }) => {
   const solutions = result?.solutions || [];
@@ -17,13 +48,17 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
   const sortedSolutions = [...solutions].sort((a, b) => {
     if (a.is_best_solution) return -1;
     if (b.is_best_solution) return 1;
-    if (a.missing_cards_count !== b.missing_cards_count) {
-      return a.missing_cards_count - b.missing_cards_count;
+    
+    const metricsA = getSolutionMetrics(a);
+    const metricsB = getSolutionMetrics(b);
+    
+    if (metricsA.missingCardsCount !== metricsB.missingCardsCount) {
+      return metricsA.missingCardsCount - metricsB.missingCardsCount;
     }
-    if (a.total_price !== b.total_price) {
-      return a.total_price - b.total_price;
+    if (metricsA.totalPrice !== metricsB.totalPrice) {
+      return metricsA.totalPrice - metricsB.totalPrice;
     }
-    return a.number_store - b.number_store;
+    return metricsA.numberStore - metricsB.numberStore;
   });
 
   const bestSolution = sortedSolutions.find(s => s.is_best_solution);
@@ -33,10 +68,8 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
     const [purchaseData, setPurchaseData] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     
-    
     const handlePurchase = async () => {
       try {
-
         const response = await api.post('/purchase_order', { 
           purchase_data: solution.stores,
         });
@@ -102,6 +135,63 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
       </>
     );
   };
+
+  // Solution Details component
+  const SolutionDetails = ({ solution, onCardClick }) => {
+    const dataSource = solution.stores.flatMap(store => 
+      store.cards.map(card => ({
+        key: `${card.name}-${store.site_name}`,
+        site_name: store.site_name,
+        site_id: store.site_id,
+        ...card
+      }))
+    );
+
+    const columns = [
+      ...getStandardTableColumns(onCardClick),
+      {
+        title: 'Store',
+        dataIndex: 'site_name',
+        key: 'site_name',
+        sorter: (a, b) => a.site_name.localeCompare(b.site_name),
+      },
+      {
+        title: 'Details',
+        key: 'details',
+        render: (_, record) => (
+          <Space>
+            {record.foil && <Tag className="foil-tag">Foil</Tag>}
+            {record.language !== 'English' && (
+              <Tag className="language-tag">{record.language}</Tag>
+            )}
+            {record.version !== 'Normal' && (
+              <Tag className="version-tag">{record.version}</Tag>
+            )}
+          </Space>
+        ),
+      }
+    ];
+
+    return (
+      <Card title="Solution Details" size="small" style={{ marginTop: 16 }}>
+        <EnhancedTable
+          dataSource={dataSource}
+          columns={columns}
+          exportFilename={`optimization_solution_${solution.id || 'export'}`}
+          persistKey={`optimization_solution_${solution.id || 'default'}`}
+          scroll={{ y: 400 }}
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          size="small"
+          onRow={(record) => ({
+            onClick: () => {
+              onCardClick?.(record);
+            }
+          })}
+        />
+      </Card>
+    );
+  };
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card>
@@ -110,10 +200,43 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
             <Title level={4} style={{ margin: 0 }}>Optimization Results</Title>
             <Tag className="sites-tag">{`${result.sites_scraped} Sites`}</Tag>
             <Tag className="cards-tag">{`${result.cards_scraped} Cards`}</Tag>
+            {result.algorithm_used && (
+              <Tag color="blue" icon={<InfoCircleOutlined />}>
+                {result.algorithm_used.toUpperCase()}
+              </Tag>
+            )}
+            {result.execution_time && (
+              <Tag color="purple">
+                {result.execution_time.toFixed(1)}s
+              </Tag>
+            )}
           </Space>
           
           {result.message && (
             <Text type="secondary">{result.message}</Text>
+          )}
+
+          {/* algorithm information */}
+          {result.algorithm_used && (
+            <Alert
+              message={`Optimization completed using ${result.algorithm_used.toUpperCase()} algorithm`}
+              description={
+                <Space direction="vertical">
+                  {result.execution_time && (
+                    <Text>Execution time: {result.execution_time.toFixed(2)} seconds</Text>
+                  )}
+                  {result.iterations && (
+                    <Text>Iterations: {result.iterations}</Text>
+                  )}
+                  {result.convergence_metric != null && (
+                    <Text>Convergence metric: {safeToFixed(result.convergence_metric, 4)}</Text>
+                  )}
+                </Space>
+              }
+              type="info"
+              showIcon
+              style={{ marginTop: 8 }}
+            />
           )}
         </Space>
       </Card>
@@ -178,33 +301,64 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
             header={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                 <Space>
-                  <Text strong>{`${bestSolution.number_store} Stores`}</Text>
+                  <Text strong>{`${getSolutionMetrics(bestSolution).numberStore} Stores`}</Text>
                   <Tag className="success-tag">Best Solution</Tag>
-                  <Tag className={bestSolution.nbr_card_in_solution === bestSolution.total_qty ? 'complete-tag' : 'partial-tag'}>
-                    {bestSolution.missing_cards_count === 0
-                      ? 'Complete'
-                      : `${((1 -(bestSolution.missing_cards_count / bestSolution.total_qty)) * 100).toFixed(1)}% Complete`}
+                  <Tag className={getSolutionMetrics(bestSolution).isComplete ? 'complete-tag' : 'partial-tag'}>
+                    {getSolutionMetrics(bestSolution).isComplete ? 'Complete' : `${(getSolutionMetrics(bestSolution).completenessByQuantity * 100).toFixed(1)}% Complete`}
                   </Tag>
-                  <Tag className="price-tag">${bestSolution.total_price.toFixed(2)}</Tag>
+                  <Tag className="price-tag">${getSolutionMetrics(bestSolution).totalPrice.toFixed(2)}</Tag>
                 </Space>
                 <Space>
-                  {bestSolution.missing_cards_count > 0 && (
+                  {getSolutionMetrics(bestSolution).missingCardsCount > 0 && (
                     <Tag className="missing-tag" icon={<WarningOutlined />}>
-                      {bestSolution.missing_cards_count} Missing Cards
+                      {getSolutionMetrics(bestSolution).missingCardsCount} Missing Cards
                     </Tag>
                   )}
                   <Tag>
-                    {`${bestSolution.nbr_card_in_solution-bestSolution.missing_cards_count}/${bestSolution.total_qty} Cards Found`}
+                    {`${getSolutionMetrics(bestSolution).cardsFoundTotal}/${getSolutionMetrics(bestSolution).cardsRequiredTotal} Cards Found`}
                   </Tag>
+                  {/* Show metrics if available */}
+                  {bestSolution.completeness_by_unique !== undefined && (
+                    <Tag color="blue">
+                      {`${getSolutionMetrics(bestSolution).cardsFoundUnique}/${getSolutionMetrics(bestSolution).cardsRequiredUnique} Types`}
+                    </Tag>
+                  )}
                 </Space>
               </div>
             }
           >
             <StoreDistribution solution={bestSolution} />
-            {bestSolution.missing_cards?.length > 0 && (
+            
+            {/* completeness information */}
+            {(bestSolution.completeness_by_quantity !== undefined || bestSolution.completeness_by_unique !== undefined) && (
+              <Card title="Solution Quality" size="small" style={{ marginBottom: 16 }}>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <div style={{ textAlign: 'center' }}>
+                      <Text strong>Card Quantity</Text>
+                      <div style={{ fontSize: '24px', color: getSolutionMetrics(bestSolution).completenessByQuantity >= 1.0 ? '#52c41a' : '#faad14' }}>
+                        {(getSolutionMetrics(bestSolution).completenessByQuantity * 100).toFixed(1)}%
+                      </div>
+                      <Text type="secondary">{getSolutionMetrics(bestSolution).cardsFoundTotal} of {getSolutionMetrics(bestSolution).cardsRequiredTotal} cards</Text>
+                    </div>
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ textAlign: 'center' }}>
+                      <Text strong>Card Types</Text>
+                      <div style={{ fontSize: '24px', color: getSolutionMetrics(bestSolution).completenessByUnique >= 1.0 ? '#52c41a' : '#faad14' }}>
+                        {(getSolutionMetrics(bestSolution).completenessByUnique * 100).toFixed(1)}%
+                      </div>
+                      <Text type="secondary">{getSolutionMetrics(bestSolution).cardsFoundUnique} of {getSolutionMetrics(bestSolution).cardsRequiredUnique} types</Text>
+                    </div>
+                  </Col>
+                </Row>
+              </Card>
+            )}
+            
+            {getSolutionMetrics(bestSolution).missingCards.length > 0 && (
               <Card title="Missing Cards" size="small" style={{ marginBottom: 16 }}>
                 <Space wrap>
-                  {bestSolution.missing_cards.map(card => (
+                  {getSolutionMetrics(bestSolution).missingCards.map(card => (
                     <Tag
                       key={card}
                       className="missing-card-tag cursor-pointer"
@@ -216,6 +370,8 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                 </Space>
               </Card>
             )}
+            
+            {/* DETAILED PANEL - This is the key addition */}
             <SolutionDetails solution={bestSolution} onCardClick={onCardClick} />
           </Panel>
         </Collapse>
@@ -224,41 +380,74 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
       {otherSolutions.length > 0 ? (
         <Collapse>
           {otherSolutions.map((solution, index) => {
-            const completeness = solution.nbr_card_in_solution === solution.total_qty;
-            const percentage = ((solution.nbr_card_in_solution / solution.total_qty) * 100).toFixed(1);
+            const metrics = getSolutionMetrics(solution);
+            const completenessPercentage = (metrics.completenessByQuantity * 100).toFixed(1);
             
             return (
               <Panel
-                key={index}
+                key={`solution-${solution.id || index}`}
                 header={
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                     <Space>
-                      <Text strong>{`${solution.number_store} Stores`}</Text>
-                      <Tag className={completeness ? 'complete-tag' : 'partial-tag'}>
-                        {completeness ? 'Complete' : `${percentage}% Complete`}
+                      <Text strong>{`${metrics.numberStore} Stores`}</Text>
+                      <Tag className={metrics.isComplete ? 'complete-tag' : 'partial-tag'}>
+                        {metrics.isComplete ? 'Complete' : `${completenessPercentage}% Complete`}
                       </Tag>
-                      <Tag className="price-tag">${solution.total_price.toFixed(2)}</Tag>
+                      <Tag className="price-tag">${metrics.totalPrice.toFixed(2)}</Tag>
                     </Space>
                     <Space>
-                      {solution.missing_cards_count > 0 && (
+                      {metrics.missingCardsCount > 0 && (
                         <Tag className="missing-tag" icon={<WarningOutlined />}>
-                          {solution.missing_cards_count} Missing Cards
+                          {metrics.missingCardsCount} Missing Cards
                         </Tag>
                       )}
                       <Tag>
-                        {`${solution.nbr_card_in_solution}/${bestSolution.nbr_card_in_solution} Cards Found`}
+                        {`${metrics.cardsFoundTotal}/${metrics.cardsRequiredTotal} Cards Found`}
                       </Tag>
+                      {/* Show metrics if available */}
+                      {solution.completeness_by_unique !== undefined && (
+                        <Tag color="blue">
+                          {`${metrics.cardsFoundUnique}/${metrics.cardsRequiredUnique} Types`}
+                        </Tag>
+                      )}
                     </Space>
                   </div>
                 }
               >
                 <StoreDistribution solution={solution} />
-                {solution.missing_cards?.length > 0 && (
+                
+                {/* completeness information */}
+                {(solution.completeness_by_quantity !== undefined || solution.completeness_by_unique !== undefined) && (
+                  <Card title="Solution Quality" size="small" style={{ marginBottom: 16 }}>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <div style={{ textAlign: 'center' }}>
+                          <Text strong>Card Quantity</Text>
+                          <div style={{ fontSize: '24px', color: metrics.completenessByQuantity >= 1.0 ? '#52c41a' : '#faad14' }}>
+                            {(metrics.completenessByQuantity * 100).toFixed(1)}%
+                          </div>
+                          <Text type="secondary">{metrics.cardsFoundTotal} of {metrics.cardsRequiredTotal} cards</Text>
+                        </div>
+                      </Col>
+                      <Col span={12}>
+                        <div style={{ textAlign: 'center' }}>
+                          <Text strong>Card Types</Text>
+                          <div style={{ fontSize: '24px', color: metrics.completenessByUnique >= 1.0 ? '#52c41a' : '#faad14' }}>
+                            {(metrics.completenessByUnique * 100).toFixed(1)}%
+                          </div>
+                          <Text type="secondary">{metrics.cardsFoundUnique} of {metrics.cardsRequiredUnique} types</Text>
+                        </div>
+                      </Col>
+                    </Row>
+                  </Card>
+                )}
+                
+                {metrics.missingCards.length > 0 && (
                   <Card title="Missing Cards" size="small" style={{ marginBottom: 16 }}>
                     <Space wrap>
-                      {solution.missing_cards.map(card => (
-                        <Tag 
-                          key={card} 
+                      {metrics.missingCards.map(card => (
+                        <Tag
+                          key={card}
                           className="missing-card-tag cursor-pointer"
                           onClick={() => onCardClick(card)}
                         >
@@ -268,70 +457,21 @@ export const OptimizationSummary = ({ result, onCardClick }) => {
                     </Space>
                   </Card>
                 )}
+                
+                {/* DETAILED PANEL - This is the key addition for other solutions too */}
                 <SolutionDetails solution={solution} onCardClick={onCardClick} />
               </Panel>
             );
           })}
         </Collapse>
       ) : (
-        <Card>
-          <Text type="warning">No optimization solutions available</Text>
-        </Card>
+        !bestSolution && (
+          <Card>
+            <Text type="warning">No optimization solutions available</Text>
+          </Card>
+        )
       )}
     </Space>
-  );
-};
-
-const SolutionDetails = ({ solution, onCardClick }) => {
-  const dataSource = solution.stores.flatMap(store => 
-    store.cards.map(card => ({
-      key: `${card.name}-${store.site_name}`,
-      site_name: store.site_name,
-      site_id: store.site_id,
-      ...card
-    }))
-  );
-
-  const columns = [
-    ...getStandardTableColumns(onCardClick),
-    {
-      title: 'Store',
-      dataIndex: 'site_name',
-      key: 'site_name',
-      sorter: (a, b) => a.site_name.localeCompare(b.site_name),
-    },
-    {
-      title: 'Details',
-      key: 'details',
-      render: (_, record) => (
-        <Space>
-          {record.foil && <Tag className="foil-tag">Foil</Tag>}
-          {record.language !== 'English' && (
-            <Tag className="language-tag">{record.language}</Tag>
-          )}
-          {record.version !== 'Normal' && (
-            <Tag className="version-tag">{record.version}</Tag>
-          )}
-        </Space>
-      ),
-    }
-  ];
-
-  return (
-    <EnhancedTable
-      dataSource={dataSource}
-      columns={columns}
-      exportFilename={`optimization_solution_${solution.id || 'export'}`}
-      persistKey={`optimization_solution_${solution.id || 'default'}`}
-      scroll={{ y: 400 }}
-      pagination={false}
-      size="small"
-      onRow={(record) => ({
-        onClick: () => {
-          onCardClick?.(record);
-        }
-      })}
-    />
   );
 };
 

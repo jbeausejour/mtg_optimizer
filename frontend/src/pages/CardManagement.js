@@ -46,7 +46,7 @@ const BuylistManagement = () => {
   const [savedBuylists, setSavedBuylists] = useState([]);
   const [loadedBuylistName, setLoadedBuylistName] = useState("");
   const [pendingSelection, setPendingSelection] = useState(null);
-  const [autoCompleteValue, setAutoCompleteValue] = useState('');
+  const [cardSearchValue, setCardSearchValue] = useState('');
   const [hasInitialized, setHasInitialized] = useState(false);
   
   // Card search and import state - Restored from old version
@@ -129,30 +129,33 @@ const BuylistManagement = () => {
       }
     });
 
-  const handleBulkDelete = useCallback(() => {
-    if (selectedCardIds.size === 0) {
-      messageApi.warning('No cards selected for deletion.');
-      return;
-    }
-  
-    deleteWithNotifications(
-      async () => {
-        const cardsToDelete = cards.filter(card => selectedCardIds.has(card.id))
-          .map(card => ({ name: card.name, quantity: card.quantity || 1 }));
-        await api.delete('/buylist/cards', {
-          data: {
-            buylistId: selectedBuylist?.buylistId,
-            cards: cardsToDelete
-          }
-        });
-        setCards(prev => prev.filter(card => !selectedCardIds.has(card.id)));
-        setSelectedCardIds(new Set());
-        return { count: cardsToDelete.length };
-      },
-      'cards',
-      { loadingMessage: `Deleting ${selectedCardIds.size} card(s).` }
-    );
-  }, [selectedCardIds, cards, selectedBuylist?.buylistId]);
+    const handleBulkDelete = useCallback(async () => {
+      if (selectedCardIds.size === 0) {
+        messageApi.warning('No cards selected for deletion.');
+        return;
+      }
+    
+      const cardsToDelete = cards
+        .filter(card => selectedCardIds.has(card.id))
+        .map(card => ({ name: card.name, quantity: card.quantity || 1 }));
+    
+      await deleteWithNotifications(
+        async () => {
+          await api.delete('/buylist/cards/delete-many', {
+            data: {
+              buylistId: selectedBuylist?.buylistId,
+              cards: cardsToDelete
+            }
+          });
+          setCards(prev => prev.filter(card => !selectedCardIds.has(card.id)));
+          setSelectedCardIds(new Set());
+          return { count: cardsToDelete.length };
+        },
+        'cards',
+        { loadingMessage: `Deleting ${cardsToDelete.length} card(s)...` }
+      );
+    }, [selectedCardIds, cards, selectedBuylist?.buylistId]);
+    
 
   const deleteBuylistMutation = useMutation({
     mutationFn: async ({ buylistId }) => {
@@ -494,7 +497,7 @@ const BuylistManagement = () => {
   const fetchSuggestions = async (query) => {
     if (query.length > 2) {
       try {
-        const response = await api.get(`/card_suggestions?query=${query}`);
+        const response = await api.get(`/card/suggestions?query=${query}`);
         // console.log('Suggestions received:', response.data);
         setSuggestions(response.data.map(name => ({ value: name })));
       } catch (error) {
@@ -506,9 +509,9 @@ const BuylistManagement = () => {
     }
   };
 
-  const handleSelectCard = useCallback(async (value) => {
+  const handleCardNameSelect = useCallback(async (value) => {
     // Clear the AutoComplete input immediately
-    setAutoCompleteValue('');
+    setCardSearchValue('');
     setSuggestions([]);
     
     try {
@@ -551,7 +554,7 @@ const BuylistManagement = () => {
         placement: 'topRight',
       });
     }
-  }, [selectedBuylist?.buylistId, setCards, setAutoCompleteValue, setSuggestions, notificationApi]);
+  }, [selectedBuylist?.buylistId, setCards, setCardSearchValue, setSuggestions, notificationApi]);
   
   const handleModalClose = () => {
     setIsModalVisible(false);
@@ -682,10 +685,10 @@ const BuylistManagement = () => {
           <AutoComplete
             options={suggestions}
             onSearch={handleSuggestionSearch}
-            onSelect={handleSelectCard}
+            onSelect={handleCardNameSelect}
             placeholder="Add card..."
-            value={autoCompleteValue}
-            onChange={setAutoCompleteValue}
+            value={cardSearchValue}
+            onChange={setCardSearchValue}
             style={{ 
               marginBottom: 16,
               width: '100%'

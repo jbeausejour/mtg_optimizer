@@ -1,101 +1,164 @@
-from typing import Dict, List, Type, Optional
+# backend/app/optimization/algorithms/factory.py
 import logging
+from typing import Dict, Any, Type, Optional
+
 from ..core.base_optimizer import BaseOptimizer
+from .milp.milp_optimizer import MILPOptimizer
+from .evolutionary.nsga2_optimizer import NSGA2Optimizer
+from .evolutionary.nsga3_optimizer import NSGA3Optimizer
+from .evolutionary.moead_optimizer import MOEADOptimizer
+from .hybrid.milp_moead_hybrid import HybridMILPMOEADOptimizer
+from .hybrid.milp_nsga3_hybrid import HybridMILPNSGA3Optimizer
 
 logger = logging.getLogger(__name__)
 
 
 class OptimizerFactory:
-    """Factory for creating optimization algorithms with smart selection"""
+    """Factory class for creating optimization algorithm instances"""
 
-    def __init__(self):
-        self._algorithms: Dict[str, Type[BaseOptimizer]] = {}
-        self._register_default_algorithms()
+    # Registry of available optimizers
+    _optimizers: Dict[str, Type[BaseOptimizer]] = {
+        "milp": MILPOptimizer,
+        "nsga2": NSGA2Optimizer,
+        "nsga-ii": NSGA2Optimizer,  # Alias
+        "nsga3": NSGA3Optimizer,
+        "nsga-iii": NSGA3Optimizer,  # Alias
+        "moead": MOEADOptimizer,
+        "moea/d": MOEADOptimizer,  # Alias
+        "hybrid_milp_moead": HybridMILPMOEADOptimizer,
+        "hybrid_milp_nsga3": HybridMILPNSGA3Optimizer,
+        "hybrid": HybridMILPMOEADOptimizer,  # Default alias
+    }
 
-    def _register_default_algorithms(self):
-        """Register default algorithms"""
-        try:
-            from .milp.milp_optimizer import MILPOptimizer
-            from .evolutionary.nsga2_optimizer import ImprovedNSGA2Optimizer
-            from .hybrid.milp_moead_hybrid import MILPMOEADHybrid
+    @classmethod
+    def register_optimizer(cls, name: str, optimizer_class: Type[BaseOptimizer]):
+        """Register a new optimizer type"""
+        if not issubclass(optimizer_class, BaseOptimizer):
+            raise ValueError(f"{optimizer_class} must be a subclass of BaseOptimizer")
+        cls._optimizers[name.lower()] = optimizer_class
+        logger.info(f"Registered optimizer: {name}")
 
-            self._algorithms.update(
-                {
-                    "milp": MILPOptimizer,
-                    "nsga2": ImprovedNSGA2Optimizer,
-                    "hybrid_milp_moead": MILPMOEADHybrid,
-                }
-            )
+    @classmethod
+    def create_optimizer(cls, algorithm: str, problem_data: Dict[str, Any], config: Dict[str, Any]) -> BaseOptimizer:
+        """
+        Create an optimizer instance
 
-            # Try to import MOEA/D if it's implemented
-            try:
-                from .evolutionary.moead_optimizer import MOEADOptimizer
+        Args:
+            algorithm: Name of the algorithm to use
+            problem_data: Problem-specific data (listings, wishlist, etc.)
+            config: Algorithm configuration parameters
 
-                self._algorithms["moead"] = MOEADOptimizer
-            except ImportError:
-                logger.info("MOEA/D optimizer not available yet")
+        Returns:
+            Configured optimizer instance
+        """
+        algorithm_lower = algorithm.lower()
 
-            logger.info(f"Registered {len(self._algorithms)} optimization algorithms")
-        except ImportError as e:
-            logger.warning(f"Some algorithms failed to load: {e}")
-
-    def register_algorithm(self, name: str, algorithm_class: Type[BaseOptimizer]):
-        """Register a new algorithm (for plugins/extensions)"""
-        self._algorithms[name] = algorithm_class
-        logger.info(f"Registered new algorithm: {name}")
-
-    def create_optimizer(self, algorithm: str, problem_data: Dict, config: Dict) -> BaseOptimizer:
-        """Create optimizer instance with validation"""
-
-        if algorithm == "auto":
-            algorithm = self._select_best_algorithm(problem_data, config)
-            logger.info(f"Auto-selected algorithm: {algorithm}")
-
-        if algorithm not in self._algorithms:
-            available = list(self._algorithms.keys())
+        if algorithm_lower not in cls._optimizers:
+            available = ", ".join(cls._optimizers.keys())
             raise ValueError(f"Unknown algorithm: {algorithm}. Available: {available}")
 
+        optimizer_class = cls._optimizers[algorithm_lower]
+
         try:
-            optimizer_class = self._algorithms[algorithm]
+            # Create optimizer instance
             optimizer = optimizer_class(problem_data, config)
 
-            if not optimizer.validate_input():
-                raise ValueError(f"Invalid input data for algorithm: {algorithm}")
+            logger.info(
+                f"Created {optimizer.get_algorithm_name()} optimizer with config: "
+                f"time_limit={config.get('time_limit', 'default')}, "
+                f"max_iterations={config.get('max_iterations', 'default')}"
+            )
 
             return optimizer
 
         except Exception as e:
-            logger.error(f"Failed to create optimizer {algorithm}: {str(e)}")
-            # Fallback to MILP if available
-            if algorithm != "milp" and "milp" in self._algorithms:
-                logger.info("Falling back to MILP optimizer")
-                return self._algorithms["milp"](problem_data, config)
+            logger.error(f"Failed to create {algorithm} optimizer: {str(e)}")
             raise
 
-    def _select_best_algorithm(self, problem_data: Dict, config: Dict) -> str:
-        """Automatically select best algorithm based on problem characteristics"""
+    @classmethod
+    def get_available_algorithms(cls) -> list[str]:
+        """Get list of available algorithm names"""
+        # Return unique algorithm names (excluding aliases)
+        unique_algorithms = []
+        seen_classes = set()
 
-        # Extract problem characteristics
-        problem_size = len(problem_data.get("filtered_listings_df", []))
-        num_cards = len(problem_data.get("user_wishlist_df", []))
-        num_stores = problem_data.get("num_stores", 10)
-        time_limit = config.get("time_limit_seconds", 300)
+        for name, optimizer_class in cls._optimizers.items():
+            if optimizer_class not in seen_classes:
+                unique_algorithms.append(name)
+                seen_classes.add(optimizer_class)
 
-        logger.info(
-            f"Problem characteristics: {problem_size} listings, "
-            f"{num_cards} cards, {num_stores} stores, {time_limit}s limit"
-        )
+        return sorted(unique_algorithms)
 
-        # Decision logic based on research and testing
-        if problem_size < 500 and num_cards < 20:
-            return "milp"  # Small problems: exact solution
-        elif problem_size < 2000 and time_limit > 180:
-            return "hybrid_milp_moead" if "hybrid_milp_moead" in self._algorithms else "milp"
-        elif "moead" in self._algorithms:
-            return "moead"  # Large problems: MOEA/D if available
-        else:
-            return "nsga2"  # Fallback: improved NSGA-II
+    @classmethod
+    def get_algorithm_info(cls, algorithm: str) -> Dict[str, Any]:
+        """Get information about a specific algorithm"""
+        algorithm_lower = algorithm.lower()
 
-    def get_available_algorithms(self) -> List[str]:
-        """Get list of available algorithms"""
-        return list(self._algorithms.keys())
+        if algorithm_lower not in cls._optimizers:
+            return None
+
+        optimizer_class = cls._optimizers[algorithm_lower]
+
+        # Get algorithm metadata if available
+        info = {
+            "name": algorithm,
+            "class": optimizer_class.__name__,
+            "description": optimizer_class.__doc__ or "No description available",
+        }
+
+        # Add algorithm-specific parameter info if available
+        if hasattr(optimizer_class, "get_parameter_info"):
+            info["parameters"] = optimizer_class.get_parameter_info()
+
+        return info
+
+    @classmethod
+    def validate_config(cls, algorithm: str, config: Dict[str, Any]) -> bool:
+        """Validate configuration for a specific algorithm"""
+        algorithm_lower = algorithm.lower()
+
+        if algorithm_lower not in cls._optimizers:
+            return False
+
+        optimizer_class = cls._optimizers[algorithm_lower]
+
+        # Use optimizer's validation method if available
+        if hasattr(optimizer_class, "validate_config"):
+            return optimizer_class.validate_config(config)
+
+        # Default validation - check for required parameters
+        required_params = ["time_limit", "max_iterations"]
+        return all(param in config for param in required_params)
+
+
+# Auto-discovery of new optimizers (optional)
+def auto_register_optimizers():
+    """
+    Automatically discover and register optimizer classes.
+    This is useful for plugin-based architecture.
+    """
+    import importlib
+    import pkgutil
+
+    # Import all modules in the algorithms package
+    import app.optimization.algorithms as algorithms_package
+
+    for importer, modname, ispkg in pkgutil.iter_modules(algorithms_package.__path__):
+        if ispkg:
+            continue
+
+        try:
+            module = importlib.import_module(f"app.optimization.algorithms.{modname}")
+
+            # Look for BaseOptimizer subclasses
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+
+                if isinstance(attr, type) and issubclass(attr, BaseOptimizer) and attr is not BaseOptimizer:
+
+                    # Register with a sensible name
+                    optimizer_name = attr_name.lower().replace("optimizer", "")
+                    OptimizerFactory.register_optimizer(optimizer_name, attr)
+
+        except Exception as e:
+            logger.warning(f"Failed to auto-register from {modname}: {e}")

@@ -110,6 +110,16 @@ class SiteService(AsyncBaseService[Site]):
             return False
 
     @classmethod
+    async def delete_sites_by_ids(cls, session: AsyncSession, site_ids: List[int]) -> int:
+        """Bulk delete sites by a list of IDs"""
+        try:
+            result = await session.execute(cls.delete(Site).where(Site.id.in_(site_ids)))
+            return result.rowcount or 0
+        except Exception as e:
+            logger.error(f"Error bulk deleting sites: {str(e)}")
+            raise
+
+    @classmethod
     async def init_site_details_cache_async(
         cls, session: AsyncSession, site_ids: List[int]
     ) -> Dict[int, Tuple[str, Dict[str, str]]]:

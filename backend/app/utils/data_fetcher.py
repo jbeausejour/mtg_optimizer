@@ -155,8 +155,6 @@ class ExternalDataSynchronizer:
         site_data,
         card_names,
         scrape_stats: SiteScrapeStats,
-        progress_increment,
-        celery_task=None,
         progress_callback=None,
     ):
         """Process a single site and return results without saving to DB
@@ -166,7 +164,6 @@ class ExternalDataSynchronizer:
             card_names: List of card names to search for
             scrape_stats: Stats object to record site scraping statistics
             progress_increment: Progress increment for Celery task
-            celery_task: Optional Celery task for progress tracking
 
         Returns:
             List of card results or None if no results
@@ -276,12 +273,12 @@ class ExternalDataSynchronizer:
 
                 if cards_df is not None and not cards_df.empty:
                     # Create summary of results
-                    total_cards = len(card_names)
-                    found_cards = cards_df["name"].nunique()
+                    total_cards_to_scrappe = len(card_names)
+                    unique_cards_found = cards_df["name"].nunique()
                     elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
 
                     logger.info(
-                        f"Successfully processed {site_name} [{site_method}] found {found_cards} / {total_cards} ({len(cards_df)} total variants)"
+                        f"Successfully processed {site_name} [{site_method}] found {unique_cards_found} / {total_cards_to_scrappe} ({len(cards_df)} total variants)"
                     )
 
                     # Record into scrape_stats
@@ -291,8 +288,8 @@ class ExternalDataSynchronizer:
                         search_time=elapsed_time_search,
                         extract_time=elapsed_time_extract,
                         total_time=elapsed_time,
-                        found_cards=found_cards,
-                        total_cards=total_cards,
+                        unique_cards_found=unique_cards_found,
+                        total_cards_to_scrappe=total_cards_to_scrappe,
                         total_variants=len(cards_df),
                     )
 
@@ -328,14 +325,10 @@ class ExternalDataSynchronizer:
                         r["site_id"] = site_id
                         r["site_name"] = site_name
 
-                    # logger.info(
-                    #     f"Updating progress for {site_name} from {celery_task.progress} to {celery_task.progress + progress_increment}"
-                    # )
-
-                    progress_fraction = found_cards / total_cards if total_cards > 0 else 0
+                    progress_fraction = unique_cards_found / total_cards_to_scrappe if total_cards_to_scrappe > 0 else 0
                     increment = progress_fraction * 100  # Scale to percentage
                     if progress_callback:
-                        progress_callback(increment, total_cards)
+                        progress_callback(increment, total_cards_to_scrappe)
 
                     return results
                 else:
@@ -963,7 +956,7 @@ class ExternalDataSynchronizer:
                             test_code = await CardService.get_clean_set_code_from_set_name(set_name)
                             if not test_code:
                                 logger.warning(
-                                    f"[SET CODE] [SHOPIFY] Skipping card {name} unknown set: {test_code} for site: {site.name}"
+                                    f"[SET CODE] [SHOPIFY] Skipping card {name} unknown set: {test_code} for site: {site.get('name')}"
                                 )
                                 continue
                             logger.debug(f"[SHOPIFY] set_code was empty for {name} setting to -> {test_code}")
@@ -985,7 +978,7 @@ class ExternalDataSynchronizer:
                         cards.append(card_info)
 
             if not cards:
-                logger.warning(f"No valid cards found in Shopify response for {site.name}")
+                logger.warning(f"No valid cards found in Shopify response for {site.get('name')}")
                 return pd.DataFrame()
 
             df = self.standardize_card_dataframe(cards)
@@ -993,7 +986,7 @@ class ExternalDataSynchronizer:
             return df
         except Exception as e:
             logger.error(
-                f"Error processing Shopify JSON for {site.name}: {str(e)}",
+                f"Error processing Shopify JSON for {site.get('name')}: {str(e)}",
                 exc_info=True,
             )
             return pd.DataFrame()
@@ -1233,10 +1226,6 @@ class ExternalDataSynchronizer:
                 logger.error(f"[F2F] Error processing batch {batch_index+1}: {str(e)}")
                 continue
 
-        # Log final results
-        # total_cards_found = len(all_results["Cards"])
-        # logger.info(f"[F2F] Total cards found across all batches: {total_cards_found}/{len(card_names)}")
-
         # Check how many requested cards were found
         found_requested = set(all_results["Cards"].keys()).intersection(set(card_names))
         logger.info(f"[F2F] Found {len(found_requested)} of the {len(card_names)} requested cards")
@@ -1264,6 +1253,9 @@ class ExternalDataSynchronizer:
             _, relevant_headers = await SiteService.get_site_details_async(site_data)
             api_url, json_payload = CardService.create_shopify_url_and_payload(site_data, card_names)
 
+            # logger.info(f"[SHOPIFY DEBUG] API URL: {api_url}")
+            # logger.info(f"[SHOPIFY DEBUG] Payload card count: {len(card_names)}")
+            # logger.info(f"[SHOPIFY DEBUG] First few card names: {card_names[:5]}")
             # logger.info(f"Searching Shopify url and payload returned: {api_url}, {json_payload}")
             response = await network.post_request(api_url, json_payload, headers=relevant_headers, site=site_data)
             await asyncio.sleep(2)  # Add delay to avoid rate limiting
@@ -1272,11 +1264,26 @@ class ExternalDataSynchronizer:
                 logger.error(f"Failed to get response from Binder API for {site_name}")
                 return None
 
+            # logger.info(f"[SHOPIFY DEBUG] Raw response length: {len(response)}")
+            # logger.info(f"[SHOPIFY DEBUG] Raw response first 500 chars: {response[:500]}")
             try:
-                # logger.info(f"Returning JSON: {site_name}")
-                return json.loads(response)
+                json_response = json.loads(response)
+                # DEBUG: Log parsed response structure
+                # logger.info(f"[SHOPIFY DEBUG] Parsed JSON type: {type(json_response)}")
+                # if isinstance(json_response, list):
+                #     logger.info(f"[SHOPIFY DEBUG] JSON array length: {len(json_response)}")
+                #     if len(json_response) > 0:
+                #         logger.info(
+                #             f"[SHOPIFY DEBUG] First item keys: {list(json_response[0].keys()) if isinstance(json_response[0], dict) else 'Not a dict'}"
+                #         )
+                # elif isinstance(json_response, dict):
+                #     logger.info(f"[SHOPIFY DEBUG] JSON dict keys: {list(json_response.keys())}")
+
+                return json_response
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON response from {site_name}: {str(e)}", exc_info=True)
+                # DEBUG: Log the problematic response
+                logger.error(f"[SHOPIFY DEBUG] Problematic response: {response}")
                 return None
 
         except Exception as e:
@@ -1369,6 +1376,7 @@ class ExternalDataSynchronizer:
                     href = category_link.get("href", "").lower()
                     if (
                         "magic_singles" in href
+                        or "magic_mtg_singles" in href  # ✅ ADD THIS LINE
                         or "cartes_individuelles_magic" in href
                         or "magic_the_gathering_singles" in href
                         or "unfinity" in href

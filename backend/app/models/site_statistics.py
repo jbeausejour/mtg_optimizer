@@ -13,8 +13,8 @@ class SiteStatistics(Base):
     site_id = Column(Integer, ForeignKey("site.id"), nullable=False)
     scan_id = Column(Integer, ForeignKey("scan.id"), nullable=False)
 
-    found_cards = Column(Integer, nullable=False, default=0)
-    total_cards = Column(Integer, nullable=False, default=0)
+    unique_cards_found = Column(Integer, nullable=False, default=0)
+    total_cards_to_scrappe = Column(Integer, nullable=False, default=0)
     total_variants = Column(Integer, nullable=False, default=0)
 
     search_time = Column(Float, nullable=True)
@@ -30,8 +30,8 @@ class SiteStatistics(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "site_id": self.site_id,
             "scan_id": self.scan_id,
-            "found_cards": self.found_cards,
-            "total_cards": self.total_cards,
+            "unique_cards_found": self.unique_cards_found,
+            "total_cards_to_scrappe": self.total_cards_to_scrappe,
             "total_variants": self.total_variants,
             "search_time": self.search_time,
             "extract_time": self.extract_time,
@@ -45,15 +45,23 @@ class SiteScrapeStats:
         self.site_stats = {}
 
     def record_site(
-        self, site_id, site_name, search_time, extract_time, total_time, found_cards, total_cards, total_variants
+        self,
+        site_id,
+        site_name,
+        search_time,
+        extract_time,
+        total_time,
+        unique_cards_found,
+        total_cards_to_scrappe,
+        total_variants,
     ):
         self.site_stats[site_id] = {
             "site_name": site_name,
             "search_time": search_time,
             "extract_time": extract_time,
             "total_time": total_time,
-            "found_cards": found_cards,
-            "total_cards": total_cards,
+            "unique_cards_found": unique_cards_found,
+            "total_cards_to_scrappe": total_cards_to_scrappe,
             "total_variants": total_variants,
         }
 
@@ -66,8 +74,8 @@ class SiteScrapeStats:
                 "search_time": stat.search_time,
                 "extract_time": stat.extract_time,
                 "total_time": stat.total_time,
-                "found_cards": stat.found_cards,
-                "total_cards": stat.total_cards,
+                "unique_cards_found": stat.unique_cards_found,
+                "total_cards_to_scrappe": stat.total_cards_to_scrappe,
                 "total_variants": stat.total_variants,
             }
         return instance
@@ -79,8 +87,8 @@ class SiteScrapeStats:
             entry = SiteStatistics(
                 site_id=site_id,  # ✅ This is now truly an integer ID
                 scan_id=scan_id,
-                found_cards=stats["found_cards"],
-                total_cards=stats["total_cards"],
+                unique_cards_found=stats["unique_cards_found"],
+                total_cards_to_scrappe=stats["total_cards_to_scrappe"],
                 total_variants=stats["total_variants"],
                 search_time=stats["search_time"],
                 extract_time=stats["extract_time"],
@@ -96,18 +104,20 @@ class SiteScrapeStats:
         )
         logger.info("-" * 95)
 
-        for site_id, stats in sorted(self.site_stats.items(), key=lambda item: item[1]["found_cards"], reverse=True):
+        for site_id, stats in sorted(
+            self.site_stats.items(), key=lambda item: item[1]["unique_cards_found"], reverse=True
+        ):
             try:
                 site_name = stats.get("site_name", "Unknown")
-                found_cards = stats.get("found_cards", 0)
-                total_cards = stats.get("total_cards", 0)
+                unique_cards_found = stats.get("unique_cards_found", 0)
+                total_cards_to_scrappe = stats.get("total_cards_to_scrappe", 0)
                 total_variants = stats.get("total_variants", 0)
                 search_time = stats.get("search_time", 0.0)
                 extract_time = stats.get("extract_time", 0.0)
                 total_time = stats.get("total_time", 0.0)
 
                 logger.info(
-                    f"{site_name:<25} {found_cards:<8} {total_cards:<12} {total_variants:<9} "
+                    f"{site_name:<25} {unique_cards_found:<8} {total_cards_to_scrappe:<12} {total_variants:<9} "
                     f"{search_time:<10.2f} {extract_time:<11.2f} {total_time:<9.2f}"
                 )
             except KeyError as e:

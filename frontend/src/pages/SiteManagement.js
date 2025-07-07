@@ -210,24 +210,31 @@ const SiteManagement = () => {
     deleteSiteMutation.mutate(id);
   }, [deleteSiteMutation]);
   
-  // Handle bulk deletion
-  const handleBulkDelete = useCallback(() => {
+  const handleBulkDelete = useCallback(async () => {
     if (selectedSiteIds.size === 0) {
       messageApi.warning('No sites selected for deletion.');
       return;
     }
   
-    deleteWithNotifications(
+    await deleteWithNotifications(
       async () => {
-        const deletionPromises = Array.from(selectedSiteIds).map(id => deleteSiteMutation.mutateAsync(id));
-        await Promise.all(deletionPromises);
-        setSelectedSiteIds(new Set());
-        return { count: selectedSiteIds.size };
+        const siteIdList = Array.from(selectedSiteIds);
+        await api.delete('/sites/delete-many', {
+          data: { site_ids: siteIdList }
+        });
+        return { count: siteIdList.length };
       },
       'site(s)',
-      { loadingMessage: `Deleting ${selectedSiteIds.size} site(s).` }
+      {
+        loadingMessage: `Deleting ${selectedSiteIds.size} site(s)...`,
+        onSuccess: () => {
+          setSelectedSiteIds(new Set());
+          queryClient.invalidateQueries(['sites']);
+        }
+      }
     );
-  }, [selectedSiteIds, deleteSiteMutation, setSelectedSiteIds]);
+  }, [selectedSiteIds, deleteWithNotifications, setSelectedSiteIds, queryClient]);
+  
 
   const handleMethodChange = useCallback((value, formType) => {
     if (formType === 'edit') {

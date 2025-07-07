@@ -11,7 +11,7 @@ export const useFetchScryfallCard = ({
 } = {}) => {
   return useMutation({
     mutationFn: async (params) => {
-      const res = await api.get('/fetch_card', { params });
+      const res = await api.get('/card/fetch', { params });
       console.log("[FetchCard] Response:", res.data);
       if (!res.data?.scryfall) {
         throw new Error('Missing Scryfall data in response');

@@ -121,7 +121,7 @@ const ScryfallCard = ({ data, isEditable, onChange }) => {
     const updatePrintings = async () => {
       const enhanced = await Promise.all(
         needsEnhancement.map(p =>
-          api.get(`/scryfall/card/${p.id}`).then(res => ({ ...p, ...res.data })).catch(() => p)
+          api.get(`/card/${p.id}`).then(res => ({ ...p, ...res.data })).catch(() => p)
         )
       );
   

@@ -20,8 +20,7 @@ from app.dto.optimization_dto import (
     OptimizationSolution,
     StoreInSolution,
 )
-from ..services.enhanced_optimization_service import EnhancedOptimizationService
-
+from ..services.optimization_engine import OptimizationEngine
 
 from app.models.site import Site
 from app.models.site_statistics import SiteStatistics
@@ -31,7 +30,6 @@ from app.services.optimization_service import OptimizationService
 from app.services.scan_service import ScanService
 from app.tasks.celery_instance import celery_app
 from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer, SiteScrapeStats
-from app.utils.optimization import PurchaseOptimizer
 from app.utils.helpers import normalize_string
 from celery.result import AsyncResult
 import nest_asyncio
@@ -40,16 +38,50 @@ nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 
-# Add flag to switch between old and new systems
-USE_ENHANCED_OPTIMIZATION = False
-
-
 def get_fresh_scan_results(fresh_cards, site_ids):
     """Get the latest scan results"""
     return ScanService.get_latest_scan_results_by_site_and_cards(fresh_cards, site_ids)
 
 
+class TaskStateUpdater:
+    """Helper class to update Celery task state using captured task ID"""
+
+    def __init__(self, task_id):
+        self.task_id = task_id
+        self.progress = 0
+        self.logger = logging.getLogger(__name__)
+
+    def update_state(self, state="PROCESSING", meta=None):
+        if not self.task_id:
+            logger.warning("No task ID available for state update")
+            return
+
+        try:
+            from celery import current_app
+
+            logger.debug(f"[DEBUG] Updating task {self.task_id} to state={state} with meta={meta}")
+
+            # Pass meta as the result so Celery stores it in result.info
+            current_app.backend.store_result(
+                self.task_id, meta, state, traceback=None, request=None  # <--- this is the critical fix
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update task state: {e}")
+
+    def update_progress(self, progress, status, **kwargs):
+        """Convenience method to update progress with proper validation"""
+        # Validate and clamp progress
+        progress = max(0, min(100, progress))
+        self.progress = progress
+
+        meta = {"status": str(status), "progress": int(progress), **kwargs}
+
+        self.update_state("PROCESSING", meta)
+        self.logger.debug(f"Progress update: {progress}% - {status}")
+
+
 class OptimizationTaskManager:
+
     def __init__(self, site_ids, sites, card_list_from_frontend, optimizationConfig):
         self.site_ids = site_ids
         self.card_list_from_frontend = card_list_from_frontend
@@ -83,10 +115,10 @@ class OptimizationTaskManager:
         try:
             card_listings = []
 
-            start_time = time.time()  # Start timing
+            start_time = time.time()
             logger.info(f"Processing {len(scraping_results)} scraping results")
             card_listings = self._process_scraping_results(scraping_results)
-            elapsed_time = round(time.time() - start_time, 2)  # Compute elapsed time
+            elapsed_time = round(time.time() - start_time, 2)
 
             logger.info(f"Processed {len(card_listings)} card listings results in {elapsed_time} seconds")
 
@@ -102,7 +134,7 @@ class OptimizationTaskManager:
 
             card_listings_df = pd.DataFrame(card_listings)
             card_listings_df = apply_currency_conversion_to_listings(card_listings_df, self.site_currency_map)
-            filtered_listings_df = self._Normalize_and_filter_dataframe(card_listings_df)
+            filtered_listings_df = self._normalize_and_filter_dataframe(card_listings_df)
             logger.info(f"[FILTER] Listings after processing: {len(filtered_listings_df)}")
             logger.info(f"[FILTER] Unique cards after filtering: {filtered_listings_df['name'].nunique()}")
             logger.info(f"[FILTER] Unique sites after filtering: {filtered_listings_df['site_name'].nunique()}")
@@ -115,6 +147,7 @@ class OptimizationTaskManager:
                 user_wishlist_df.rename(columns={"quality": "min_quality"}, inplace=True)
             else:
                 user_wishlist_df["min_quality"] = "NM"  # Default to 'NM' if not provided
+
             logger.info(f"[DATA] Raw card_listings_df: {len(card_listings_df)} rows")
             logger.info(f"[DATA] Raw buylist_df: {len(user_wishlist_df)} rows")
             return filtered_listings_df, user_wishlist_df
@@ -132,7 +165,6 @@ class OptimizationTaskManager:
                 logger.warning(f"[SITE INFO] No site info found for site_id: {r['site_id']}, skipping result.")
                 continue
 
-            # Directly trust set_code here:
             if not r["set_code"] or r["set_code"] == "unknown":
                 logger.warning(
                     f"[SET CODE] Unknown set code for '{r['set_name']}' at final processing stage, skipping."
@@ -153,7 +185,6 @@ class OptimizationTaskManager:
                     "language": r.get("language", "English"),
                     "site_id": r["site_id"],
                     "variant_id": r.get("variant_id"),
-                    # "weighted_price": round(float(r["price"]), 2),
                 }
             )
         return card_listings
@@ -163,7 +194,6 @@ class OptimizationTaskManager:
         if self.current_scan_id:
             return self.current_scan_id
         latest_scan = ScanService.get_latest_scan_results()
-        # latest_scan = Scan.query.order_by(Scan.id.desc()).first()
         return latest_scan.id if latest_scan else None
 
     def _fetch_scan_results(self, scan_id):
@@ -171,7 +201,7 @@ class OptimizationTaskManager:
         scan_results = ScanService.get_scan_results_by_id_and_sites(scan_id, site_ids=self.site_ids)
         return scan_results
 
-    def _Normalize_and_filter_dataframe(self, df):
+    def _normalize_and_filter_dataframe(self, df):
         """Normalize and filter card listings"""
         if df.empty:
             return None
@@ -183,18 +213,16 @@ class OptimizationTaskManager:
         # Step 2: Filter cards with quantity > 0
         df = df[df["quantity"] > 0].copy()
 
-        # Step 3: Sort by name and original price (simple fallback sorting)
+        # Step 3: Sort by name and original price
         return df.sort_values(["name", "price"])
 
     @staticmethod
     def display_statistics(filtered_listings_df):
-
         sites_stats = {}
-        # Populate site_stats with the required keys
         for site in filtered_listings_df["site_name"].unique():
             site_data = filtered_listings_df[filtered_listings_df["site_name"] == site]
             nbr_cards_in_buylist = site_data["name"].nunique()
-            total_cards = site_data["quantity"].sum()
+            total_cards_to_scrappe = site_data["quantity"].sum()
             min_price = site_data["price"].min()
             max_price = site_data["price"].max()
             avg_price = site_data["price"].mean()
@@ -206,7 +234,7 @@ class OptimizationTaskManager:
 
             sites_stats[site] = {
                 "nbr_cards_in_buylist": nbr_cards_in_buylist,
-                "total_cards": total_cards,
+                "total_cards_to_scrappe": total_cards_to_scrappe,
                 "min_price": min_price,
                 "max_price": max_price,
                 "avg_price": avg_price,
@@ -228,7 +256,7 @@ class OptimizationTaskManager:
         ):
             try:
                 nbr_cards_in_buylist = stats["nbr_cards_in_buylist"]
-                total_cards = stats["total_cards"]
+                total_cards_to_scrappe = stats["total_cards_to_scrappe"]
                 min_price = stats["min_price"]
                 max_price = stats["max_price"]
                 avg_price = stats["avg_price"]
@@ -236,72 +264,14 @@ class OptimizationTaskManager:
                 quality_distribution = stats["quality_distribution"]
 
                 logger.info(
-                    f"{site:<25} {nbr_cards_in_buylist:<8} {total_cards:<12} {min_price:<7.2f} {max_price:<7.2f} "
+                    f"{site:<25} {nbr_cards_in_buylist:<8} {total_cards_to_scrappe:<12} {min_price:<7.2f} {max_price:<7.2f} "
                     f"{avg_price:<7.2f} {sum_cheapest:<7.2f} {quality_distribution}"
                 )
             except KeyError as e:
                 logger.error(f"Missing key {e} in site stats for {site}")
 
         logger.info("=" * 120)
-
         return len(sites_stats)
-
-    async def run_optimization(self, filtered_listings_df, user_wishlist_df, optimizationConfig, celery_task=None):
-        """Run optimization with the prepared data"""
-
-        logger.info("=== Starting Optimization Process ===")
-
-        # Add site statistics debugging
-        if not filtered_listings_df.empty:
-            logger.info(f"Total filtered listings: {len(filtered_listings_df)}")
-
-            optimizationConfig.max_unique_store = self.display_statistics(filtered_listings_df)
-
-        try:
-            if filtered_listings_df is None or user_wishlist_df is None:
-                self.logger.error("Invalid input data for optimization")
-                return None
-
-            # Add site information to the DataFrame
-            filtered_listings_df["site_info"] = filtered_listings_df["site_id"].map(lambda x: self.site_data.get(x, {}))
-
-            optimizer = PurchaseOptimizer(filtered_listings_df, user_wishlist_df, optimizationConfig)
-
-            optimization_results = optimizer.run_optimization(self.card_names, optimizationConfig, celery_task)
-
-            # Collect errors from ErrorCollector
-            error_collector = ErrorCollector.get_instance()
-            optimization_results["errors"] = {
-                "unreachable_stores": list(error_collector.unreachable_stores),
-                "unknown_languages": list(error_collector.unknown_languages),
-                "unknown_qualities": list(error_collector.unknown_qualities),
-            }
-
-            # Log collected errors
-            if error_collector.unreachable_stores:
-                logger.warning("Unreachable stores:")
-                for store in sorted(error_collector.unreachable_stores):
-                    logger.warning(f"  - {store}")
-
-            if error_collector.unknown_languages:
-                logger.warning("Unknown languages found:")
-                for lang in sorted(error_collector.unknown_languages):
-                    logger.warning(f"  - {lang}")
-
-            if error_collector.unknown_qualities:
-                logger.warning("Unknown qualities found:")
-                for quality in sorted(error_collector.unknown_qualities):
-                    logger.warning(f"  - {quality}")
-
-            logger.info("=== Optimization Process Completed ===")
-            return optimization_results
-
-        except Exception as e:
-            self.logger.error(f"Error in run_optimization: {str(e)}")
-            self.logger.error(
-                f"DataFrame info: {filtered_listings_df.info() if filtered_listings_df is not None else None}"
-            )
-            return None
 
 
 def serialize_results(obj):
@@ -312,11 +282,11 @@ def serialize_results(obj):
         return {k: serialize_results(v) for k, v in obj.__dict__.items() if not k.startswith("_") and not callable(v)}
     elif isinstance(obj, (list, tuple)):
         return [serialize_results(k) for k, v in obj.items()]
-    elif pd.isna(obj):  # Handle NaN/None values
+    elif pd.isna(obj):
         return None
-    elif hasattr(obj, "item"):  # Handle numpy types
+    elif hasattr(obj, "item"):
         return obj.item()
-    elif callable(obj):  # Handle methods/functions
+    elif callable(obj):
         return None
     return obj
 
@@ -327,10 +297,9 @@ def _get_site_queue(site):
     site_id = site.id
 
     if method == "crystal":
-        # Distribute crystal sites between two workers
-        if site_id % 2 == 0:  # Even IDs go to crystal_1
+        if site_id % 2 == 0:
             return "site_crystal_1"
-        else:  # Odd IDs go to crystal_2
+        else:
             return "site_crystal_2"
     elif method == "shopify":
         return "site_shopify"
@@ -347,6 +316,9 @@ def scrape_site_task(self, site_id, card_names, scan_id):
     """Task to scrape a single site."""
     if not hasattr(self, "progress"):
         self.progress = 0
+    # Capture task ID immediately
+    task_id = self.request.id
+    task_updater = TaskStateUpdater(task_id)
 
     result = {
         "site_id": site_id,
@@ -358,7 +330,7 @@ def scrape_site_task(self, site_id, card_names, scan_id):
     }
 
     try:
-        self.update_state(
+        task_updater.update_state(
             state="PROCESSING",
             meta={
                 "site_id": site_id,
@@ -366,13 +338,14 @@ def scrape_site_task(self, site_id, card_names, scan_id):
                 "progress": 0,
                 "status": "Initializing",
                 "cards_processed": 0,
-                "total_cards": len(card_names),
+                "total_cards_to_scrappe": len(card_names),
             },
         )
     except Exception as e:
         logger.warning(f"Failed to update initial task state: {e}")
+
     try:
-        return asyncio.run(_async_scrape_site(self, site_id, card_names, scan_id, result))
+        return asyncio.run(_async_scrape_site(task_updater, site_id, card_names, scan_id, result))
     except Exception as e:
         logger.exception(f"Fatal error in scrape_site_task for site {site_id}: {e}")
         result["error"] = str(e)
@@ -380,8 +353,8 @@ def scrape_site_task(self, site_id, card_names, scan_id):
         result["end_time"] = datetime.now(timezone.utc)
 
         try:
-            self.update_state(
-                state="PROCESSING",  # Keep as PROCESSING, don't set FAILURE manually
+            task_updater.update_state(
+                state="PROCESSING",
                 meta={
                     "site_id": site_id,
                     "site_name": result["site_name"],
@@ -393,14 +366,12 @@ def scrape_site_task(self, site_id, card_names, scan_id):
         except Exception as update_error:
             logger.error(f"Failed to update task state on error: {update_error}")
 
-        # Re-raise the original exception so Celery can handle the failure properly
         raise e
 
 
-async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
+async def _async_scrape_site(task_updater, site_id, card_names, scan_id, result):
     """Async implementation of the scrape site task."""
     try:
-        # Get the site data from the database
         async with celery_session_scope() as session:
             site_query = await session.execute(select(Site).filter(Site.id == site_id))
             site = site_query.scalars().first()
@@ -411,7 +382,6 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
                 result["status"] = "failed"
                 return result
 
-            # Store site data in dictionary to avoid session dependency
             site_data = {
                 "id": site.id,
                 "name": site.name,
@@ -420,10 +390,9 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
                 "api_url": site.api_url,
             }
 
-            # Update result with site name
             result["site_name"] = site.name
 
-        celery_task.update_state(
+        task_updater.update_state(
             state="PROCESSING",
             meta={
                 "site_id": site_id,
@@ -431,63 +400,67 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
                 "progress": 10,
                 "status": f"Scraping {site.name}",
                 "cards_processed": 0,
-                "total_cards": len(card_names),
+                "total_cards_to_scrappe": len(card_names),
             },
         )
-        # Create scraper and stats objects
+
         scraper = ExternalDataSynchronizer()
         stats = SiteScrapeStats()
 
-        # Create a progress callback
-        def progress_callback(progress_increment, total_cards):
-            progress = 10 + (progress_increment if total_cards > 0 else 10)
-            celery_task.update_state(
-                state="PROCESSING",
-                meta={
-                    "site_id": site_id,
-                    "site_name": site.name,
-                    "progress": progress,
-                    "status": f"Completed scraping {site.name}",
-                    "cards_processed": total_cards,
-                    "total_cards": total_cards,
-                },
+        def progress_callback(cards_processed, total_cards_to_scrappe, current_card_name=None):
+            # Calculate progress percentage (10% for init, 80% for scraping, 10% for saving)
+            if total_cards_to_scrappe > 0:
+                scraping_progress = (cards_processed / total_cards_to_scrappe) * 80
+                total_progress = 10 + scraping_progress
+            else:
+                total_progress = 50  # Default if no total
+
+            # Clamp progress between 10 and 90
+            total_progress = max(10, min(90, total_progress))
+
+            status_message = f"Scraping {site.name}: {cards_processed}/{total_cards_to_scrappe} cards"
+            if current_card_name:
+                status_message += f" (processing: {current_card_name})"
+
+            task_updater.update_progress(
+                progress=total_progress,
+                status=status_message,
+                site_id=site_id,
+                site_name=site.name,
+                cards_processed=cards_processed,
+                total_cards_to_scrappe=total_cards_to_scrappe,
+                current_card=current_card_name,
+                step="scraping_in_progress",
             )
 
         requested_cards = set(normalize_string(name) for name in card_names)
+        attempt_status = defaultdict(bool)
+        unique_cards_found = set()
 
-        attempt_status = defaultdict(bool)  # card_name → found=True/False
-        found_cards = set()
+        scraping_results = await scraper.process_site(site_data, card_names, stats, progress_callback=progress_callback)
 
-        # Run the scraping with site_data instead of site
-        scraping_results = await scraper.process_site(
-            site_data, card_names, stats, 0, celery_task, progress_callback=progress_callback
-        )
-
-        # Save results to database
         if scraping_results:
-            celery_task.update_state(
-                state="PROCESSING",
-                meta={
-                    "site_id": site_id,
-                    "site_name": site.name,
-                    "progress": 90,
-                    "status": "Saving results to database",
-                    "cards_found": len(scraping_results),
-                },
+            task_updater.update_progress(
+                progress=90,
+                status=f"Saving {len(scraping_results)} results to database",
+                site_id=site_id,
+                site_name=site.name,
+                cards_found=len(scraping_results),
+                step="saving_results",
             )
+
             async with celery_session_scope() as session:
                 for card_result in scraping_results:
                     name_norm = normalize_string(card_result["name"])
                     await ScanService.create_scan_result(session, scan_id, card_result)
-                    found_cards.add(name_norm)
+                    unique_cards_found.add(name_norm)
                     attempt_status[name_norm] = True
 
-                not_found_cards = requested_cards - found_cards
+                not_found_cards = requested_cards - unique_cards_found
                 for card_name in not_found_cards:
                     name_norm = normalize_string(card_name)
                     attempt_status[name_norm] = False
 
-                # Write scan_attempts (once per card name)
                 for name_norm, found in attempt_status.items():
                     await ScanService.create_scan_attempt(session, scan_id, site_id, name_norm, found=found)
 
@@ -507,11 +480,21 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
 
         result["end_time"] = datetime.now(timezone.utc)
 
-        # Clean up scraper resources if needed
         if hasattr(scraper, "__aexit__"):
             await scraper.__aexit__(None, None, None)
+        # Final success update
+        task_updater.update_progress(
+            progress=100,
+            status=f'Completed: {result["count"]} cards found',
+            site_id=site_id,
+            site_name=site.name,
+            cards_found=result["count"],
+            cards_not_found=result.get("not_found_count", 0),
+            step="completed",
+        )
 
-        celery_task.update_state(
+        # Mark task as SUCCESS
+        task_updater.update_state(
             state="SUCCESS",
             meta={
                 "site_id": site_id,
@@ -519,6 +502,8 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
                 "progress": 100,
                 "status": f'Completed: {result["count"]} cards found',
                 "cards_found": result["count"],
+                "cards_not_found": result.get("not_found_count", 0),
+                "step": "completed",
             },
         )
         return result
@@ -529,22 +514,18 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
         result["status"] = "failed"
         result["end_time"] = datetime.now(timezone.utc)
 
-        # Update state but don't set to FAILURE manually
         try:
-            celery_task.update_state(
-                state="PROCESSING",  # Keep as PROCESSING
-                meta={
-                    "site_id": site_id,
-                    "site_name": result.get("site_name", "Unknown"),
-                    "progress": 100,
-                    "status": f"Failed: {str(e)}",
-                    "error": str(e),
-                },
+            task_updater.update_progress(
+                progress=100,
+                status=f"Failed: {str(e)}",
+                site_id=site_id,
+                site_name=result.get("site_name", "Unknown"),
+                error=str(e),
+                step="error",
             )
         except Exception as update_error:
             logger.error(f"Failed to update task state: {update_error}")
 
-        # Re-raise so the parent function can handle it
         raise e
 
 
@@ -552,10 +533,15 @@ async def _async_scrape_site(celery_task, site_id, card_names, scan_id, result):
 def start_scraping_task(self, *args, **kwargs):
     if not hasattr(self, "progress"):
         self.progress = 0
+    # Capture task ID immediately
+    task_id = self.request.id
+    logger.info(f"Starting scraping task with ID: {task_id}")
 
+    # Create task state updater
+    task_updater = TaskStateUpdater(task_id)
     try:
-        # Use the safe async runner instead of manual event loop handling
-        return asyncio.run(_async_start_scraping_task(self, *args, **kwargs))
+        # Use the safe async runner
+        return asyncio.run(_async_start_scraping_task(task_updater, *args, **kwargs))
     except Exception as e:
         logger.exception(f"Fatal error in start_scraping_task: {e}")
         return {
@@ -569,7 +555,7 @@ def start_scraping_task(self, *args, **kwargs):
 
 
 async def _async_start_scraping_task(
-    celery_task,
+    task_updater,
     site_ids,
     card_list_from_frontend,
     strategy,
@@ -582,51 +568,65 @@ async def _async_start_scraping_task(
     strict_preferences,
     user_preferences,
     weights,
+    complete_config=None,  # New parameter for complete configuration
 ) -> Dict:
     """Async implementation of the start_scraping_task"""
 
-    def update_progress(status: str, progress: float, details: Optional[dict] = None):
-        celery_task.progress = progress
-        celery_task.update_state(
-            state="PROCESSING",
-            meta={"status": status, "progress": progress, **({"details": details} if details else {})},
-        )
-
     try:
         total_start_time = time.time()
-        optimizationConfig = OptimizationConfigDTO(
-            strategy=strategy,
-            min_store=min_store,
-            max_store=max_store,
-            find_min_store=find_min_store,
-            buylist_id=buylist_id,
-            user_id=user_id,
-            strict_preferences=strict_preferences,
-            user_preferences=user_preferences,
-            weights=weights or {},
-        )
+
+        # Create optimization config - use complete_config if provided
+        if complete_config:
+            # Merge with base parameters to ensure all required fields are present
+            config_dict = {
+                "strategy": strategy,
+                "min_store": min_store,
+                "max_store": max_store,
+                "find_min_store": find_min_store,
+                "buylist_id": buylist_id,
+                "user_id": user_id,
+                "strict_preferences": strict_preferences,
+                "user_preferences": user_preferences,
+                "weights": weights or {},
+            }
+            config_dict.update(complete_config)
+            optimizationConfig = config_dict
+        else:
+            # Legacy path - create DTO
+            optimizationConfig = OptimizationConfigDTO(
+                strategy=strategy,
+                min_store=min_store,
+                max_store=max_store,
+                find_min_store=find_min_store,
+                buylist_id=buylist_id,
+                user_id=user_id,
+                strict_preferences=strict_preferences,
+                user_preferences=user_preferences,
+                weights=weights or {},
+            )
 
         # Initialize scan
         card_names = [card["name"] for card in card_list_from_frontend]
         site_ids = list(map(int, site_ids))
-        # logger.info(f"Using buylist_id={buylist_id}, site_ids={site_ids}, min_age_seconds={min_age_seconds}")
 
-        # MOVE freshness check before initializing scan
+        # Check freshness before initializing scan
+        task_updater.update_progress(2.0, "Evaluating card freshness")
         fresh_pairs, outdated_pairs = await _evaluate_card_freshness(buylist_id, card_names, min_age_seconds, site_ids)
 
-        # Now initialize scan AFTER freshness evaluation
-        scan_id = await _initialize_scan(buylist_id, celery_task)
+        # Initialize scan after freshness evaluation
+        task_updater.update_progress(5.0, "Initializing scan")
+        scan_id = await _initialize_scan(buylist_id, task_updater)
 
         # Organize fresh results
         fresh_by_card = defaultdict(set)
         for name, site_id in fresh_pairs:
             fresh_by_card[name.strip()].add(site_id)
 
-        # Convert to regular dict with int site IDs
         fresh_by_card = {name: {int(site_id) for site_id in sites} for name, sites in fresh_by_card.items()}
         logger.info(f"Found {len(fresh_pairs)} fresh (card,site) pairs, {len(outdated_pairs)} outdated")
 
         # Load fresh results from DB
+        task_updater.update_progress(8.0, "Loading fresh results from database")
         all_results = []
         if fresh_by_card:
             all_card_names = list(fresh_by_card.keys())
@@ -644,17 +644,14 @@ async def _async_start_scraping_task(
             site_id = int(site_id)
             outdated_by_site.setdefault(site_id, set()).add(name)
 
-        # for site, cards in outdated_by_site.items():
-        #     logger.info(f"[Scrape Plan] Site: {site} | Cards: {', '.join(cards) if cards else 'None'}")
-
         # Launch scrapes
         if outdated_by_site:
-            failed_sites = await _launch_and_track_scraping_tasks(celery_task, outdated_by_site, scan_id)
+            task_updater.update_progress(15.0, "Launching scraping tasks")
+            failed_sites = await _launch_and_track_scraping_tasks(task_updater, outdated_by_site, scan_id)
             if failed_sites:
                 logger.warning(f"Scraping failures detected for: {failed_sites}")
 
-        celery_task.progress = 55
-        update_progress("Retrieving scraping results", celery_task.progress)
+        task_updater.update_progress(45.0, "Retrieving scraping results")
 
         # Build final scan result set
         outdated_cards = list({name for name, _ in outdated_pairs})
@@ -669,23 +666,24 @@ async def _async_start_scraping_task(
         # Log scrape statistics
         await _log_scrape_statistics(scan_id)
 
-        # Run optimization
+        # Run optimization using the enhanced service
+        task_updater.update_progress(60, "Starting optimization")
         result = await _optimize_and_return_result(
-            celery_task, optimizationConfig, card_list_from_frontend, all_results, site_ids, scan_id, total_start_time
+            task_updater, optimizationConfig, card_list_from_frontend, all_results, site_ids, scan_id, total_start_time
         )
         return result
+
     except Exception as e:
         logger.exception(f"Error in _async_start_scraping_task: {str(e)}")
         raise
 
 
-async def _initialize_scan(buylist_id, celery_task):
-
+async def _initialize_scan(buylist_id, task_updater):
     async with celery_session_scope() as session:
         scan = await ScanService.create(session, buylist_id=buylist_id)
         await session.commit()
-        celery_task.progress = 5
-        celery_task.update_state(state="PROCESSING", meta={"status": "Created scan"})
+        task_updater.progress = 5
+        task_updater.update_progress(5, "Created scan", step="scan_created")
     return scan.id
 
 
@@ -702,13 +700,11 @@ async def _evaluate_card_freshness(buylist_id: int, card_names: list[str], min_a
         if latest_scan:
             scan_results = await ScanService.get_scan_freshness_map_by_scan_id(session, latest_scan.id)
 
-        # Evaluate each card-site pair
         for name in card_names:
             normalized_name = normalize_string(name)
             for site_id in site_ids:
                 key = (normalized_name, site_id)
 
-                # Check if we've ever attempted to scan this card on this site
                 if key in scan_attempts:
                     attempted_at = scan_attempts[key]
                     if attempted_at.tzinfo is None:
@@ -719,16 +715,14 @@ async def _evaluate_card_freshness(buylist_id: int, card_names: list[str], min_a
 
                     if age_sec > min_age_seconds:
                         outdated_pairs.append(key)
-                        logger.debug(f"Outdated: {key} last attempted at {attempted_at} " f"({age_sec} seconds old)")
+                        logger.debug(f"Outdated: {key} last attempted at {attempted_at} ({age_sec} seconds old)")
                     else:
                         fresh_pairs.append(key)
-                        # Check if this was a positive result
                         if key in scan_results:
                             logger.debug(f"Fresh (found): {key} - {age_sec} seconds old")
                         else:
                             logger.debug(f"Fresh (not found): {key} - {age_sec} seconds old")
                 else:
-                    # Never attempted to scan this card on this site
                     never_scanned_pairs.append(key)
                     outdated_pairs.append(key)
                     logger.debug(f"Never scanned: {key}")
@@ -741,13 +735,14 @@ async def _evaluate_card_freshness(buylist_id: int, card_names: list[str], min_a
     return fresh_pairs, outdated_pairs
 
 
-async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[int, set], scan_id: int):
+async def _launch_and_track_scraping_tasks(task_updater, outdated_by_site: Dict[int, set], scan_id: int):
     async with celery_session_scope() as session:
         sites = await SiteService.get_sites_by_ids(session, list(outdated_by_site.keys()))
 
     if not sites:
         logger.warning("No sites to scrape")
         return []
+
     progress_increment = 30 / len(sites) if sites else 0
     site_tasks = []
     task_metadata = {}
@@ -771,14 +766,12 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
             "status": "pending",
             "progress": 0,
         }
-        celery_task.progress = 15 + ((idx + 1) * progress_increment)
-        celery_task.update_state(
-            state="PROCESSING",
-            meta={
-                "status": f"Dispatched {idx + 1}/{len(sites)} sites",
-                "progress": celery_task.progress,
-                "subtasks": task_metadata,
-            },
+        current_progress = 15 + ((idx + 1) * progress_increment)
+        task_updater.update_progress(
+            progress=current_progress,
+            status=f"Dispatched {idx + 1}/{len(sites)} sites",
+            subtasks=task_metadata,
+            step="dispatching_subtasks",
         )
 
     if not site_tasks:
@@ -790,8 +783,7 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
     remaining = set(tid for _, tid in site_tasks)
     failed = []
     completed_count = 0
-    completed_count = 0
-    max_wait_time = 3600  # Maximum wait time in seconds (1 hour)
+    max_wait_time = 3600
     wait_start = time.time()
 
     while remaining and (time.time() - wait_start) < max_wait_time:
@@ -802,11 +794,9 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
 
             res = AsyncResult(tid)
             try:
-                # Safely check task state with error handling
                 task_state = res.state
                 task_info = None
 
-                # Try to get task info, but handle any errors gracefully
                 try:
                     task_info = res.info
                 except (ValueError, KeyError) as e:
@@ -841,21 +831,18 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
                     failed.append(site_name)
                     logger.warning(f"[Scraping] Site '{site_name}' failed: {task_info}")
                 elif task_state in ["PENDING", "RETRY"]:
-                    # Task is still pending or retrying
                     task_metadata[tid].update(
                         {
                             "status": "pending",
-                            "progress": 0,
+                            "progress": 100,
                             "details": f"Task state: {task_state}",
                         }
                     )
                 else:
-                    # Unknown state, log it but don't take action
                     logger.debug(f"[Scraping] Unknown task state for {site_name}: {task_state}")
 
             except Exception as e:
                 logger.error(f"Error checking task status for {site_name} ({tid}): {e}")
-                # If we can't check the task status, mark it as failed and move on
                 task_metadata[tid].update(
                     {"status": "failed", "progress": 100, "error": f"Task status check failed: {str(e)}"}
                 )
@@ -863,22 +850,18 @@ async def _launch_and_track_scraping_tasks(celery_task, outdated_by_site: Dict[i
                 failed.append(site_name)
                 logger.warning(f"[Scraping] Site '{site_name}' failed: {res.info}")
 
-        # Update parent task state with subtask information
         overall_progress = 15 + (30 * completed_count / len(site_tasks))
-        celery_task.progress = overall_progress
 
-        celery_task.update_state(
-            state="PROCESSING",
-            meta={
-                "status": f"Scraping sites: {completed_count}/{len(site_tasks)} completed",
-                "progress": celery_task.progress,
-                "subtasks": task_metadata,
-                "completed": completed_count,
-                "total": len(site_tasks),
-                "failed": len(failed),
-            },
+        task_updater.update_progress(
+            progress=overall_progress,
+            status=f"Scraping sites: {completed_count}/{len(site_tasks)} completed",
+            current={"subtasks": task_metadata},
+            completed=completed_count,
+            total=len(site_tasks),
+            failed=len(failed),
+            step="tracking_subtasks",
         )
-    # Check if we timed out
+
     if remaining and (time.time() - wait_start) >= max_wait_time:
         logger.warning(f"[Scraping] Timeout reached, {len(remaining)} tasks still pending")
         for site_name, tid in site_tasks:
@@ -896,14 +879,12 @@ async def _build_final_results(scan_id, outdated_cards):
     """
     Fetches and prepares scan results safely within the session context.
     """
-
     async with celery_session_scope() as session:
         scan = await ScanService.get_scan_results_by_scan_id(session, scan_id)
         if not scan:
             logger.error(f"Scan ID {scan_id} not found in DB.")
             raise ValueError(f"Could not fetch scan with ID {scan_id}")
 
-        # Ensure scan_results are loaded and processed within the session
         filtered_results = []
         for r in scan.scan_results:
             if r.name not in outdated_cards:
@@ -923,7 +904,6 @@ async def _build_final_results(scan_id, outdated_cards):
                         "quantity": r.quantity,
                         "variant_id": r.variant_id,
                         "updated_at": r.updated_at.isoformat(),
-                        # Optional: add "site_name" here by manually joining it in a separate call if needed
                     }
                 )
             except Exception as e:
@@ -942,57 +922,181 @@ async def _log_scrape_statistics(scan_id):
 
 
 async def _optimize_and_return_result(
-    celery_task, optimizationConfig, cards, all_results, site_ids, scan_id, start_time
+    task_updater, optimizationConfig, cards, all_results, site_ids, scan_id, start_time
 ):
-
+    """Use only the enhanced optimization service"""
     async with celery_session_scope() as session:
-        celery_task.progress = 60
+        task_updater.progress = 60
         sites = (await session.execute(select(Site).filter(Site.id.in_(site_ids)))).scalars().all()
+
+        logger.info("Using ENHANCED optimization service")
+
+        # Prepare data for enhanced service
         task_mgr = OptimizationTaskManager(site_ids, sites, cards, optimizationConfig)
         await task_mgr.initialize(session)
-        if USE_ENHANCED_OPTIMIZATION:
-            # Use new enhanced service
-            enhanced_service = EnhancedOptimizationService()
-            result = await enhanced_service.optimize_card_purchase(
-                session, listings_df, wishlist_df, optimizationConfig, celery_task
+        listings_df, user_wishlist_df = await task_mgr.prepare_optimization_data(all_results)
+
+        if listings_df is None or listings_df.empty:
+            fail_result = await handle_failure(
+                session, "No valid card listings found", task_mgr, scan_id, None, optimizationConfig
             )
-            return result
-        else:
-            listings_df, wishlist_df = await task_mgr.prepare_optimization_data(all_results)
-
-            if listings_df is None or listings_df.empty:
-                fail_result = await handle_failure(
-                    session, "No valid card listings found", task_mgr, scan_id, None, optimizationConfig
-                )
-                await session.commit()
-                return fail_result
-
-            celery_task.progress = 70
-            optimization_result = await task_mgr.run_optimization(
-                listings_df, wishlist_df, optimizationConfig, celery_task
-            )
-
-            if not optimization_result or optimization_result.get("status") != "success":
-                fail_result = await handle_failure(
-                    session, "Optimization failed", task_mgr, scan_id, optimization_result, optimizationConfig
-                )
-                await session.commit()
-                return fail_result
-
-            celery_task.progress = 100
-            elapsed = round(time.time() - start_time, 2)
-            logger.info(f"Task completed in {elapsed} seconds")
-            good_result = await handle_success(
-                session,
-                "Optimization completed successfully",
-                task_mgr,
-                scan_id,
-                optimization_result,
-                optimizationConfig,
-            )
-
             await session.commit()
-        return good_result
+            return fail_result
+
+        # Use enhanced service
+        enhanced_service = OptimizationEngine()
+
+        # Update progress
+        task_updater.update_progress(65, "Running enhanced optimization", step="optimization_start")
+
+        # Add statistics display
+        if not listings_df.empty:
+            logger.info(f"Total filtered listings: {len(listings_df)}")
+            optimizationConfig["max_unique_store"] = task_mgr.display_statistics(listings_df)
+
+        try:
+            optimization_result = await enhanced_service.optimize_card_purchase(
+                session, listings_df, user_wishlist_df, optimizationConfig, task_updater
+            )
+
+            # Enhanced service returns formatted result
+            if optimization_result and optimization_result.get("status") == "success":
+                task_updater.update_progress(100, "Optimization completed successfully", step="optimization_complete")
+                elapsed = round(time.time() - start_time, 2)
+                logger.info(f"Enhanced optimization completed in {elapsed} seconds")
+
+                good_result = await handle_success(
+                    session,
+                    "Optimization completed successfully",
+                    task_mgr,
+                    scan_id,
+                    optimization_result,
+                    optimizationConfig,
+                )
+                await session.commit()
+                return good_result
+            else:
+                # Enhanced optimization failed
+                fail_result = await handle_failure(
+                    session,
+                    optimization_result.get("error", "Enhanced optimization failed"),
+                    task_mgr,
+                    scan_id,
+                    optimization_result,
+                    optimizationConfig,
+                )
+                await session.commit()
+                return fail_result
+
+        except Exception as e:
+            logger.error(f"Enhanced optimization error: {str(e)}")
+            fail_result = await handle_failure(
+                session, f"Optimization error: {str(e)}", task_mgr, scan_id, None, optimizationConfig
+            )
+            await session.commit()
+            return fail_result
+
+
+@celery_app.task
+def compare_optimization_algorithms(card_list, site_ids, optimization_config):
+    """
+    Task to compare performance between different optimization algorithms including NSGA-III.
+    """
+
+    async def run_comparison():
+        async with celery_session_scope() as session:
+            sites = (await session.execute(select(Site).filter(Site.id.in_(site_ids)))).scalars().all()
+
+            task_mgr = OptimizationTaskManager(site_ids, sites, card_list, optimization_config)
+            await task_mgr.initialize(session)
+
+            # Get some test listings (you'd need to implement this)
+            listings_df = pd.DataFrame()  # Would be populated with real data
+            user_wishlist_df = pd.DataFrame(card_list)
+
+            results = {
+                "test_timestamp": datetime.now(timezone.utc).isoformat(),
+                "problem_size": {"num_cards": len(card_list), "num_sites": len(site_ids)},
+            }
+
+            # Test different algorithms including NSGA-III
+            enhanced_service = OptimizationEngine()
+
+            algorithms = ["milp", "nsga2", "nsga3", "moead", "hybrid_milp_moead", "hybrid_milp_nsga3"]
+
+            for algorithm in algorithms:
+                start_time = time.time()
+
+                # Override algorithm in config
+                config_copy = optimization_config.copy()
+                config_copy["primary_algorithm"] = algorithm
+
+                # Add NSGA-III specific parameters if needed
+                if algorithm in ["nsga3", "hybrid_milp_nsga3"]:
+                    config_copy["reference_point_divisions"] = optimization_config.get("reference_point_divisions", 12)
+                    config_copy["population_size"] = optimization_config.get("population_size", 300)
+
+                try:
+                    result = await enhanced_service.optimize_card_purchase(
+                        session, listings_df, user_wishlist_df, config_copy
+                    )
+                    execution_time = time.time() - start_time
+
+                    results[algorithm] = {
+                        "success": result.get("status") == "success",
+                        "execution_time": execution_time,
+                        "cards_found": result.get("best_solution", {}).get("nbr_card_in_solution", 0),
+                        "total_cost": result.get("best_solution", {}).get("total_price", 0),
+                        "stores_used": result.get("best_solution", {}).get("number_store", 0),
+                        "performance_stats": result.get("performance_stats", {}),
+                        # NSGA-III specific metrics
+                        "diversity_metric": result.get("performance_stats", {}).get("diversity_metric", 0),
+                        "reference_points_used": result.get("performance_stats", {}).get("reference_points_used", 0),
+                    }
+
+                    # Add algorithm-specific insights
+                    if algorithm in ["nsga3", "hybrid_milp_nsga3"]:
+                        results[algorithm]["algorithm_type"] = "reference_point_based"
+                        results[algorithm]["expected_diversity"] = "high"
+                    elif algorithm in ["nsga2"]:
+                        results[algorithm]["algorithm_type"] = "crowding_distance_based"
+                        results[algorithm]["expected_diversity"] = "medium"
+                    elif algorithm == "milp":
+                        results[algorithm]["algorithm_type"] = "exact_optimization"
+                        results[algorithm]["expected_diversity"] = "low"
+
+                except Exception as e:
+                    results[algorithm] = {"success": False, "error": str(e)}
+
+            # Calculate performance rankings
+            successful_results = {k: v for k, v in results.items() if isinstance(v, dict) and v.get("success", False)}
+
+            if successful_results:
+                # Rank by different criteria
+                results["rankings"] = {
+                    "by_speed": sorted(
+                        successful_results.keys(), key=lambda x: successful_results[x]["execution_time"]
+                    ),
+                    "by_cost": sorted(successful_results.keys(), key=lambda x: successful_results[x]["total_cost"]),
+                    "by_completeness": sorted(
+                        successful_results.keys(), key=lambda x: successful_results[x]["cards_found"], reverse=True
+                    ),
+                    "by_diversity": sorted(
+                        successful_results.keys(),
+                        key=lambda x: successful_results[x].get("diversity_metric", 0),
+                        reverse=True,
+                    ),
+                }
+
+            # Log results
+            logger.info(f"Algorithm comparison results: {results}")
+            return results
+
+    try:
+        return asyncio.run(run_comparison())
+    except Exception as e:
+        logger.error(f"Comparison task failed: {str(e)}")
+        return {"error": str(e)}
 
 
 async def handle_success(session, message, task_manager, scan_id, optimization_result, optimizationConfig):
@@ -1032,7 +1136,7 @@ async def handle_success(session, message, task_manager, scan_id, optimization_r
                 total_price=best_solution["total_price"],
                 number_store=best_solution["number_store"],
                 nbr_card_in_solution=best_solution["nbr_card_in_solution"],
-                total_qty=best_solution["total_qty"],
+                cards_required_total=best_solution["cards_required_total"],
                 list_stores=best_solution["list_stores"],
                 missing_cards=best_solution["missing_cards"],
                 missing_cards_count=best_solution["missing_cards_count"],
@@ -1062,7 +1166,7 @@ async def handle_success(session, message, task_manager, scan_id, optimization_r
                 total_price=iteration["total_price"],
                 number_store=iteration["number_store"],
                 nbr_card_in_solution=iteration["nbr_card_in_solution"],
-                total_qty=iteration["total_qty"],
+                cards_required_total=iteration["cards_required_total"],
                 list_stores=iteration["list_stores"],
                 missing_cards=iteration["missing_cards"],
                 missing_cards_count=iteration["missing_cards_count"],
@@ -1074,12 +1178,15 @@ async def handle_success(session, message, task_manager, scan_id, optimization_r
     result_dto = OptimizationResultDTO(
         status="Completed",
         message=message,
-        buylist_id=optimizationConfig.buylist_id,
-        user_id=optimizationConfig.user_id,
+        buylist_id=optimizationConfig["buylist_id"],
+        user_id=optimizationConfig["user_id"],
         sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=solutions,
         errors=optimization_result.get("errors", create_empty_errors()),
+        algorithm_used=optimization_result.get("algorithm_used", "Unknown"),
+        execution_time=optimization_result.get("execution_time"),
+        performance_stats=optimization_result.get("performance_stats"),
     )
 
     # Create the optimization result in the database
@@ -1094,14 +1201,18 @@ async def handle_failure(session, message, task_manager, scan_id, optimization_r
     result_dto = OptimizationResultDTO(
         status="Failed",
         message=message,
-        buylist_id=optimizationConfig.buylist_id,
-        user_id=optimizationConfig.user_id,
+        buylist_id=optimizationConfig["buylist_id"],
+        user_id=optimizationConfig["user_id"],
         sites_scraped=len(task_manager.site_ids),
         cards_scraped=len(task_manager.card_list_from_frontend),
         solutions=[],
         errors=(
             optimization_result.get("errors", create_empty_errors()) if optimization_result else create_empty_errors()
         ),
+        # Fix: Add conditional checks for these fields too
+        algorithm_used=optimization_result.get("algorithm_used", "Unknown") if optimization_result else "Unknown",
+        execution_time=optimization_result.get("execution_time") if optimization_result else None,
+        performance_stats=optimization_result.get("performance_stats") if optimization_result else None,
     )
 
     # Create the optimization result in the database
@@ -1131,7 +1242,6 @@ def refresh_scryfall_cache():
 async def _async_refresh_cache():
     """Async implementation of cache refresh"""
     async with celery_session_scope() as session:
-
         await CardService.fetch_scryfall_card_names_async(session)
         await CardService.fetch_scryfall_set_codes_async(session)
 

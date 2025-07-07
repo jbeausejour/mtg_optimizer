@@ -1,6 +1,7 @@
 import os
 
 from celery.schedules import crontab
+from datetime import timedelta
 
 
 class CeleryConfig:
@@ -28,15 +29,18 @@ class CeleryConfig:
         "socket_timeout": 10.0,
         "socket_connect_timeout": 10.0,
     }  # 1 hour.
-    imports = ["app.tasks.optimization_tasks"]
+    imports = [
+        "app.tasks.optimization_tasks",
+        "app.tasks.watchlist_tasks",  # Add watchlist tasks
+    ]
 
     task_track_started = True
     task_time_limit = 30 * 60  # 30 minutes
 
-    worker_hijack_root_logger = True  # Changed to True for prefork
-    worker_redirect_stdouts = True  # Redirect stdout/stderr to the Celery logger
-    worker_redirect_stdouts_level = "INFO"  # Ensure all standard output is logged
-    worker_log_color = False  # Disable color in logs for better file output
+    worker_hijack_root_logger = True
+    worker_redirect_stdouts = True
+    worker_redirect_stdouts_level = "INFO"
+    worker_log_color = False
     worker_disable_rate_limits = False
 
     # Logging configuration
@@ -51,7 +55,7 @@ class CeleryConfig:
     result_expires = 300  # Results expire after 1 hour
 
     worker_concurrency = 20
-    # worker_pool = "solo"
+
     worker_pool = "prefork"
 
     # Enable detailed logging
@@ -68,12 +72,77 @@ class CeleryConfig:
             "task": "app.tasks.optimization_tasks.refresh_scryfall_cache",
             "schedule": crontab(hour=3, minute=0),
         },
+        # NEW: Watchlist tasks
+        "watchlist-check-prices": {
+            "task": "watchlist.check_all_prices",
+            "schedule": timedelta(minutes=30),  # Every 30 minutes
+            "args": (1, False),  # max_age_hours=1, force_check=False
+            "options": {
+                "queue": "watchlist",
+                "expires": 1500,  # Expire after 25 minutes
+            },
+        },
+        "watchlist-update-mtgstocks": {
+            "task": "watchlist.update_mtgstocks_prices",
+            "schedule": timedelta(hours=2),  # Every 2 hours
+            "args": (5,),  # batch_size=5
+            "options": {
+                "queue": "watchlist",
+                "expires": 7200,  # Expire after 2 hours
+            },
+        },
+        "watchlist-cleanup-alerts": {
+            "task": "watchlist.cleanup_old_alerts",
+            "schedule": crontab(hour=3, minute=30),  # Daily at 3:30 AM
+            "args": (30,),  # days_to_keep=30
+            "options": {
+                "queue": "watchlist",
+                "expires": 86400,  # Expire after 24 hours
+            },
+        },
+        "watchlist-daily-full-check": {
+            "task": "watchlist.check_all_prices",
+            "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
+            "args": (24, True),  # max_age_hours=24, force_check=True
+            "options": {
+                "queue": "watchlist",
+                "expires": 21600,  # Expire after 6 hours
+            },
+        },
+        "watchlist-health-check": {
+            "task": "watchlist.health_check",
+            "schedule": timedelta(minutes=15),  # Every 15 minutes
+            "options": {
+                "queue": "watchlist",
+                "expires": 900,  # 15 minutes
+            },
+        },
     }
 
     task_routes = {
-        "app.tasks.optimization_tasks.scrape_site_task": {"queue": "main"},  # fallback/default queue,
+        "app.tasks.optimization_tasks.scrape_site_task": {"queue": "main"},
         "app.tasks.optimization_tasks.start_scraping_task": {"queue": "main"},
         "app.tasks.optimization_tasks.refresh_scryfall_cache": {"queue": "main"},
+        "watchlist.check_all_prices": {"queue": "watchlist"},
+        "watchlist.check_single_item": {"queue": "watchlist"},
+        "watchlist.cleanup_old_alerts": {"queue": "watchlist"},
+        "watchlist.update_mtgstocks_prices": {"queue": "watchlist"},
+        "watchlist.manual_check_user_watchlist": {"queue": "watchlist"},
+        "watchlist.health_check": {"queue": "watchlist"},
+    }
+    task_annotations = {
+        "watchlist.check_all_prices": {
+            "rate_limit": "1/m",  # Max 1 per minute
+        },
+        "watchlist.update_mtgstocks_prices": {
+            "rate_limit": "1/h",  # Max 1 per hour
+        },
+        "watchlist.check_single_item": {
+            "rate_limit": "30/m",  # Max 30 per minute
+        },
+        "watchlist.manual_check_user_watchlist": {
+            "rate_limit": "10/m",  # Max 10 per minute
+        },
     }
 
     @staticmethod

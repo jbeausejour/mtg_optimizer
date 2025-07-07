@@ -63,9 +63,17 @@ def create_app(config_class=get_config()):
     async def load_blueprints():
         from app.api.admin_routes import admin_routes
         from app.api.card_routes import card_routes
+        from app.api.optimization_routes import optimization_routes
+        from app.api.scan_routes import scan_routes
+        from app.api.site_routes import site_routes
+        from app.api.watchlist_routes import watchlist_routes
 
         app.register_blueprint(admin_routes, url_prefix="/api/v1")
         app.register_blueprint(card_routes, url_prefix="/api/v1")
+        app.register_blueprint(optimization_routes, url_prefix="/api/v1")
+        app.register_blueprint(scan_routes, url_prefix="/api/v1")
+        app.register_blueprint(site_routes, url_prefix="/api/v1")
+        app.register_blueprint(watchlist_routes, url_prefix="/api/v1")
 
     @app.before_serving
     async def initialize_caches():

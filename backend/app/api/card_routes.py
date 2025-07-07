@@ -4,13 +4,10 @@ import aiohttp
 from quart import Blueprint, request, jsonify
 
 from app.services.card_service import CardService
-from app.services.scan_service import ScanService
-from app.services.site_service import SiteService
 from app.services.user_buylist_service import BuylistService
-from app.services.optimization_service import OptimizationService
 from app.services.user_buylist_card_service import UserBuylistCardService
 
-from app.tasks.optimization_tasks import celery_app, start_scraping_task
+
 from celery.result import AsyncResult
 from app.utils.async_context_manager import flask_session_scope
 from quart_jwt_extended import jwt_required, get_jwt_identity
@@ -97,7 +94,6 @@ async def delete_buylist(buylistId):
     Delete a buylist by its ID.
     """
     try:
-        logger.info("Trying to delete")
         user_id = get_jwt_identity()
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
@@ -229,6 +225,21 @@ async def delete_cards():
     return jsonify({"deletedCards": deleted_cards}), 200
 
 
+@card_routes.route("/buylist/cards/delete-many", methods=["DELETE"])
+@jwt_required
+async def delete_multiple_buylist_cards():
+    user_id = get_jwt_identity()
+    data = await request.get_json()
+    buylist_id = data.get("buylistId")
+    cards = data.get("cards", [])
+
+    async with flask_session_scope() as session:
+        count = await UserBuylistCardService.delete_cards_from_buylist(session, buylist_id, user_id, cards)
+        await session.commit()
+
+    return jsonify({"deleted_count": count}), 200
+
+
 @card_routes.route("/buylist/cards/import", methods=["POST"])
 @jwt_required
 async def import_cards_to_buylist():
@@ -320,7 +331,7 @@ async def update_user_buylist_card(card_id):
 ############################################################################################################
 
 
-@card_routes.route("/fetch_card", methods=["GET"])
+@card_routes.route("/card/fetch", methods=["GET"])
 @jwt_required
 async def fetch_scryfall_card():
 
@@ -391,7 +402,7 @@ async def fetch_scryfall_card():
         )
 
 
-@card_routes.route("/card_suggestions", methods=["GET"])
+@card_routes.route("/card/suggestions", methods=["GET"])
 @jwt_required
 async def get_card_suggestions():
     query = request.args.get("query", "")
@@ -399,7 +410,7 @@ async def get_card_suggestions():
     return jsonify(suggestions)
 
 
-@card_routes.route("/scryfall/card/<string:card_id>", methods=["GET"])
+@card_routes.route("/card/<string:card_id>", methods=["GET"])
 @jwt_required
 async def get_card_by_scryfall_id(card_id):
     """
@@ -421,500 +432,46 @@ async def get_card_by_scryfall_id(card_id):
         return jsonify({"error": "Internal Server Error", "details": str(e)}), 500
 
 
-############################################################################################################
-# Task Operations
-############################################################################################################
-
-
-@card_routes.route("/task_status/<task_id>")
-def get_task_status(task_id):
-    """Get task status with better error handling"""
+@card_routes.route("/card/<card_name>/sets", methods=["GET"])
+@jwt_required
+async def get_card_sets(card_name):
+    """Get available sets for a specific card from Scryfall data"""
     try:
-        result = AsyncResult(task_id)
-
-        # Check if task exists and is valid
-        if not result:
-            return jsonify({"state": "PENDING", "status": "Task not found", "progress": 0, "error": "Task not found"})
-
-        # Get task state safely
-        try:
-            state = result.state
-        except Exception as e:
-            logger.warning(f"Failed to get task state for {task_id}: {e}")
-            state = "UNKNOWN"
-
-        # Get task info safely
-        task_info = None
-        try:
-            if hasattr(result, "info") and result.info:
-                task_info = result.info
-        except (ValueError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to get task info for {task_id}: {e}")
-            task_info = None
-
-        # Handle different states
-        if state == "PENDING":
-            response = {"state": state, "status": "Task is pending...", "progress": 0}
-        elif state == "PROCESSING":
-            if task_info and isinstance(task_info, dict):
-                response = {
-                    "state": state,
-                    "status": task_info.get("status", "Processing..."),
-                    "progress": task_info.get("progress", 0),
-                    "current": task_info,
-                    "details": task_info.get("details"),
-                }
-            else:
-                response = {"state": state, "status": "Processing...", "progress": 0}
-        elif state == "SUCCESS":
-            if task_info:
-                response = {
-                    "state": state,
-                    "status": "Task completed successfully",
-                    "progress": 100,
-                    "result": task_info,
-                }
-            else:
-                # Try to get the actual result
-                try:
-                    task_result = result.result
-                    response = {
-                        "state": state,
-                        "status": "Task completed successfully",
-                        "progress": 100,
-                        "result": task_result,
-                    }
-                except Exception as e:
-                    logger.warning(f"Failed to get task result for {task_id}: {e}")
-                    response = {
-                        "state": state,
-                        "status": "Task completed but result unavailable",
-                        "progress": 100,
-                        "error": str(e),
-                    }
-        elif state == "FAILURE":
-            # Handle failure state carefully
-            error_message = "Task failed"
-            if task_info:
-                if isinstance(task_info, dict):
-                    error_message = task_info.get("error", str(task_info))
-                else:
-                    error_message = str(task_info)
-
-            response = {"state": state, "status": "Task failed", "progress": 100, "error": error_message}
-        else:
-            # Unknown or other states
-            response = {
-                "state": state,
-                "status": f"Task in unknown state: {state}",
-                "progress": 0,
-                "error": f"Unknown task state: {state}",
-            }
-
-        return jsonify(response)
-
-    except Exception as e:
-        logger.exception(f"Error checking task status for {task_id}: {e}")
-        return jsonify({"state": "ERROR", "status": "Failed to check task status", "progress": 0, "error": str(e)}), 500
-
-
-# Also add this helper function for better task monitoring
-def safe_get_task_info(task_id, max_retries=3):
-    """Safely get task information with retries"""
-    for attempt in range(max_retries):
-        try:
-            result = AsyncResult(task_id)
-            return {
-                "state": result.state,
-                "info": result.info if hasattr(result, "info") else None,
-                "result": result.result if result.state == "SUCCESS" else None,
-            }
-        except Exception as e:
-            logger.warning(f"Attempt {attempt + 1} failed to get task info for {task_id}: {e}")
-            if attempt == max_retries - 1:
-                return {"state": "ERROR", "info": None, "result": None, "error": str(e)}
-            time.sleep(0.1 * (attempt + 1))  # Exponential backoff
-
-    return None
-
-
-@card_routes.route("/cancel_task/<task_id>", methods=["POST"])
-@jwt_required
-async def cancel_task(task_id):
-    main_result = AsyncResult(task_id)
-
-    # Try to find subtasks from state or result
-    subtasks = []
-    if isinstance(main_result.result, dict) and "subtask_ids" in main_result.result:
-        subtasks = main_result.result["subtask_ids"]
-
-    elif isinstance(main_result.info, dict) and "subtask_ids" in main_result.info:
-        subtasks = main_result.info["subtask_ids"]
-
-    # Revoke subtasks
-    for sid in subtasks:
-        celery_app.control.revoke(sid, terminate=True, signal="SIGTERM")
-
-    # Revoke main task
-    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
-
-    logger.info(f"Canceled task {task_id} and subtasks {subtasks}")
-    return jsonify({"status": "REVOKED", "task_id": task_id, "subtasks": subtasks})
-
-
-############################################################################################################
-# Optimization Operations
-############################################################################################################
-
-
-@card_routes.route("/start_scraping", methods=["POST"])
-@jwt_required
-async def start_scraping():
-    """Starts the scraping task."""
-    data = await request.get_json()
-    # logger.info("Received data: %s", data)
-
-    user_id = get_jwt_identity()
-    logger.info(f"got user {user_id}")
-
-    buylist_id = int(data.get("buylist_id", None))
-    site_ids = data.get("sites", [])
-    card_list_from_frontend = data.get("card_list", [])
-    strategy = data.get("strategy", "milp")
-    min_store = data.get("min_store", 1)
-    max_store = data.get("max_store", 0)
-    find_min_store = data.get("find_min_store", False)
-    min_age_seconds = data.get("min_age_seconds", 3600)
-    strict_preferences = data.get("strict_preferences", False)
-    user_preferences = data.get("user_preferences", {})
-    weights = data.get("weights", {})
-    logger.info(f"Task start_scraping received:")
-    logger.info(f"buylist_id: {buylist_id}")
-    logger.info(f"strategy: {strategy}")
-    logger.info(f"min_store: {min_store}")
-    logger.info(f"max_store: {max_store}")
-    logger.info(f"find_min_store: {find_min_store}")
-    logger.info(f"strict_preferences: {strict_preferences}")
-    DEFAULT_PREFS = {"set_name": None, "language": "English", "quality": "NM", "version": "Standard"}
-
-    filtered_user_preferences = {card: prefs for card, prefs in user_preferences.items() if prefs != DEFAULT_PREFS}
-
-    logger.info(f"Non-default user_preferences: {filtered_user_preferences}")
-    logger.info(f"weights: {weights}")
-
-    if not site_ids or not card_list_from_frontend:
-        return jsonify({"error": "Missing site_ids or card_list"}), 400
-    # logger.info(f"Task start_scraping about to start")
-    task = start_scraping_task.apply_async(
-        args=[
-            site_ids,
-            card_list_from_frontend,
-            strategy,
-            min_store,
-            max_store,
-            find_min_store,
-            min_age_seconds,
-            buylist_id,
-            user_id,
-            strict_preferences,
-            user_preferences,
-            weights,
-        ]
-    )
-    return jsonify({"task_id": task.id}), 202
-
-
-@card_routes.route("/purchase_order", methods=["POST"])
-@jwt_required
-async def generate_purchase_links():
-    try:
-        data = await request.get_json()
-        purchase_data = data.get("purchase_data", [])
-
         async with flask_session_scope() as session:
-            active_sites = {site.id: site for site in await SiteService.get_all_sites(session)}
-            results = await CardService.generate_purchase_links(purchase_data, active_sites)
-            # logger.info(f"return data: {results}")
-            return jsonify(results), 200
-
-    except Exception as e:
-        logger.error(f"Error generating purchase links: {str(e)}")
-        return jsonify({"error": "Failed to generate purchase links"}), 500
-
-
-############################################################################################################
-# Set Operations
-############################################################################################################
-
-
-@card_routes.route("/sets", methods=["GET"])
-@jwt_required
-async def get_sets():
-    try:
-        sets = await CardService.fetch_all_sets()
-        return jsonify(sets)
-    except Exception as e:
-        logger.error(f"Error fetching sets: {str(e)}")
-        return jsonify({"error": "Failed to fetch sets"}), 500
-
-
-############################################################################################################
-# Scan Operations
-############################################################################################################
-
-
-@card_routes.route("/scans/<int:scan_id>", methods=["GET"])
-@jwt_required
-async def get_scan_by_id(scan_id):
-    async with flask_session_scope() as session:
-        try:
-            scan = await ScanService.get_scan_results_by_scan_id(session, scan_id)
-            if not scan:
-                return jsonify({"error": "Scan not found"}), 404
-            return jsonify(scan.to_dict())
-        except Exception as e:
-            logger.error(f"Error fetching scan results: {str(e)}")
-            return jsonify({"error": "Failed to fetch scan results"}), 500
-
-
-@card_routes.route("/scans", methods=["GET"])
-@jwt_required
-async def get_all_scans():
-    async with flask_session_scope() as session:
-        try:
-            scans = await ScanService.get_all_scans(session)
-            return jsonify(
-                [
-                    {
-                        "id": scan.id,
-                        "created_at": scan.created_at.isoformat(),
-                        "cards_scraped": len(scan.scan_results) if scan.scan_results else 0,
-                        "sites_scraped": len(set(r.site_id for r in scan.scan_results)) if scan.scan_results else 0,
-                    }
-                    for scan in scans
-                ]
-            )
-        except Exception as e:
-            logger.error(f"Error fetching scans: {str(e)}")
-            return jsonify({"error": "Failed to fetch scans"}), 500
-
-
-@card_routes.route("/scans/", methods=["GET"])
-@jwt_required
-async def get_scan_history():
-    """Get scan history without optimization results"""
-    async with flask_session_scope() as session:
-        scans = await ScanService.get_all_scans(session)
-        return jsonify(
-            [
-                {
-                    "id": scan.id,
-                    "created_at": scan.created_at.isoformat(),
-                    "cards_scraped": len(scan.scan_results),
-                    "sites_scraped": len(set(r.site_id for r in scan.scan_results)),
-                    "scan_results": [r.to_dict() for r in scan.scan_results],
-                }
-                for scan in scans
-            ]
-        )
-
-
-@card_routes.route("/scans", methods=["DELETE"])
-@jwt_required
-async def delete_scans():
-    """
-    Delete one or more scans.
-
-    Expects a JSON payload with:
-    - user_id: The ID of the user
-    - scan_ids: A list of scan IDs to delete
-    """
-    try:
-        data = await request.get_json()
-        user_id = get_jwt_identity()
-        scan_ids = data.get("scan_ids")
-
-        if not user_id or not scan_ids:
-            return jsonify({"error": "user_id and scan_ids are required"}), 400
-
-        async with flask_session_scope() as session:
-            deleted, errors = await ScanService.delete_scans(session, scan_ids)
-
-        return jsonify({"deleted": deleted, "errors": errors}), 200 if deleted else 400
-
-    except Exception as e:
-        logger.error(f"Error during bulk scan deletion: {e}", exc_info=True)
-        return jsonify({"error": "Bulk deletion failed"}), 500
-
-
-############################################################################################################
-# Site Operations
-############################################################################################################
-
-
-@card_routes.route("/sites", methods=["GET"])
-@jwt_required
-async def get_sites():
-    async with flask_session_scope() as session:
-        try:
-            sites = await SiteService.get_all_sites(session=session)
-            return jsonify([site.to_dict() for site in sites])
-
-        except Exception as e:
-            logger.exception(f"Error fetching sites: {e}")
-            return jsonify({"error": str(e)}), 500
-
-
-@card_routes.route("/sites", methods=["POST"])
-@jwt_required
-async def add_site():
-    try:
-        data = await request.get_json()
-        async with flask_session_scope() as session:
-            new_site = await SiteService.add_site(session, data)
-            await session.commit()
-            return jsonify(new_site.to_dict()), 201
-    except Exception as e:
-        logger.error(f"Error adding site: {str(e)}")
-        return jsonify({"error": "Failed to add site"}), 500
-
-
-@card_routes.route("/sites/<int:site_id>", methods=["PUT"])
-@jwt_required
-async def update_site(site_id):
-    try:
-        data = await request.get_json()
-        if not data:
-            return jsonify({"status": "warning", "message": "No data provided for update"}), 400
-
-        async with flask_session_scope() as session:
-            updated_site = await SiteService.update_site(session, site_id, data)
-            await session.commit()
-            if not updated_site:
-                return (
-                    jsonify({"status": "info", "message": "No changes were needed - site data is already up to date"}),
-                    200,
-                )
-            return (
-                jsonify(
-                    {
-                        "status": "success",
-                        "message": "Site updated successfully",
-                        "site": updated_site.to_dict(),
-                    }
-                ),
-                200,
+            # Use your existing CardService to get Scryfall data
+            card_data = await CardService.fetch_scryfall_card_data(
+                session, card_name, set_code=None, language="en", version=None
             )
 
-    except ValueError as ve:
-        return jsonify({"status": "warning", "message": str(ve)}), 400
+            if not card_data or "scryfall" not in card_data:
+                logger.warning(f"No Scryfall data found for card: {card_name}")
+                return jsonify([])
+
+            # Extract sets from all_printings
+            all_printings = card_data["scryfall"].get("all_printings", [])
+
+            if not all_printings:
+                logger.warning(f"No printings found for card: {card_name}")
+                return jsonify([])
+
+            # Create set options from the printings
+            sets_seen = set()
+            set_options = []
+
+            for printing in all_printings:
+                set_code = printing.get("set_code")
+                set_name = printing.get("set_name")
+
+                if set_code and set_name and set_code not in sets_seen:
+                    sets_seen.add(set_code)
+                    set_options.append({"value": set_code, "label": f"{set_code.upper()} - {set_name}"})
+
+            # Sort by set code for consistency
+            set_options.sort(key=lambda x: x["value"])
+
+            logger.info(f"Found {len(set_options)} sets for card: {card_name}")
+            return jsonify(set_options)
+
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return jsonify({"status": "error", "message": "An unexpected error occurred while updating the site"}), 500
-
-
-@card_routes.route("/sites/<int:site_id>", methods=["DELETE"])
-@jwt_required
-async def delete_site(site_id):
-    try:
-        async with flask_session_scope() as session:
-            deleted = await SiteService.delete_site(session, site_id)
-            await session.commit()
-            if deleted:
-                return jsonify({"status": "success", "message": "Site deleted successfully"}), 200
-            else:
-                return jsonify({"status": "error", "message": "Site not found"}), 404
-    except Exception as e:
-        logger.error(f"Error deleting site: {str(e)}")
-        return jsonify({"status": "error", "message": "Failed to delete site"}), 500
-
-
-############################################################################################################
-# Results Operations
-############################################################################################################
-
-
-@card_routes.route("/results", methods=["GET"])
-@jwt_required
-async def get_optimization_results():
-    """Get recent optimization results"""
-    async with flask_session_scope() as session:
-        results = await OptimizationService.get_optimization_results(session)
-        logger.info(f"Found {len(results)} optimization results")
-        response = []
-        for opt_result, scan, buylist in results:
-            response.append(
-                {
-                    "id": opt_result.scan_id,
-                    "created_at": opt_result.created_at.isoformat(),
-                    "solutions": opt_result.solutions,
-                    "status": opt_result.status,
-                    "message": opt_result.message,
-                    "sites_scraped": opt_result.sites_scraped,
-                    "cards_scraped": opt_result.cards_scraped,
-                    "errors": opt_result.errors,
-                    "buylist_name": buylist.name if buylist else None,
-                }
-            )
-
-        # logger.info(f"Optimization results: {response}")
-        return jsonify(response)
-
-
-@card_routes.route("/results/<int:scan_id>", methods=["GET"])
-@jwt_required
-async def get_scan_optimization_result(scan_id):
-    """Get optimization results for a specific scan"""
-    async with flask_session_scope() as session:
-        opt_results = await OptimizationService.get_optimization_results_by_scan(session, scan_id)
-        if not opt_results or len(opt_results) == 0:
-            return jsonify({"error": "No optimization results found"}), 404
-
-        opt_result = opt_results[0]  # Get the first/latest result
-
-        response = {
-            "id": scan_id,
-            "created_at": opt_result.created_at.isoformat(),
-            "solutions": opt_result.solutions,
-            "status": opt_result.status,
-            "message": opt_result.message,
-            "sites_scraped": opt_result.sites_scraped,
-            "cards_scraped": opt_result.cards_scraped,
-            "errors": opt_result.errors,
-        }
-
-        return jsonify(response)
-
-
-@card_routes.route("/results/latest", methods=["GET"])
-@jwt_required
-async def get_latest_optimization_results():
-    async with flask_session_scope() as session:
-        opt_result = await OptimizationService.get_latest_optimization(session)
-        if not opt_result:
-            return jsonify({"error": "No optimization results found"}), 404
-
-        response = {
-            "id": opt_result.scan_id,
-            "created_at": opt_result.created_at.isoformat(),
-            "optimization": opt_result.to_dict(),
-        }
-
-        return jsonify(response)
-
-
-@card_routes.route("/results/<int:scan_id>", methods=["DELETE"])
-@jwt_required
-async def delete_optimization_result(scan_id):
-    """Delete optimization result for a specific scan ID"""
-    user_id = get_jwt_identity()
-    logger.info(f"User {user_id} requested deletion of optimization result for scan {scan_id}")
-
-    async with flask_session_scope() as session:
-        success = await OptimizationService.delete_optimization_by_scan_id(session, scan_id)
-        await session.commit()
-
-        if success:
-            return jsonify({"message": f"Optimization result for scan {scan_id} deleted"}), 200
-        else:
-            return jsonify({"error": f"No result found for scan {scan_id}"}), 404
+        logger.error(f"Error getting sets for card {card_name}: {str(e)}")
+        return jsonify([])

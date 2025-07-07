@@ -211,7 +211,7 @@ const EnhancedTable = ({
     style: { cursor: onRowClick ? 'pointer' : 'default' }
   });
 
-  // Enhanced pagination configuration
+  // pagination configuration
   const paginationConfig = {
     ...pagination,
     onChange: (page, pageSize) => {

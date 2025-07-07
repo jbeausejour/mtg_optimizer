@@ -30,7 +30,7 @@ const Dashboard = () => {
   
   const { data: scansData, isLoading: scansLoading } = useQuery({
     queryKey: ['scans'],
-    queryFn: () => api.get('/scans', { params: { limit: 3 } }).then(res => res.data),
+    queryFn: () => api.get('/scans/history', { params: { limit: 10 } }).then(res => res.data),
     staleTime: 300000
   });
   
@@ -97,7 +97,7 @@ const Dashboard = () => {
         totalPrice: Number(solution.total_price || 0).toFixed(2),
         storesUsed: solution.number_store || 0,
         cardsFound: solution.nbr_card_in_solution || 0,
-        totalQty: solution.total_qty || solution.nbr_card_in_solution || 0,
+        totalQty: solution.cards_required_total || solution.nbr_card_in_solution || 0,
         missedCards: solution.missing_cards?.length || 0
     };
   }, []);

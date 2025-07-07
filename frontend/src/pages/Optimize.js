@@ -8,7 +8,8 @@ import {
   DollarOutlined, 
   CheckCircleOutlined, 
   ExclamationCircleOutlined,
-  EyeOutlined  
+  EyeOutlined,
+  ExperimentOutlined
 } from '@ant-design/icons';
 import {
   Alert, 
@@ -28,7 +29,8 @@ import {
   Space,
   Tag, 
   Tooltip, 
-  Collapse
+  Collapse,
+  Badge
 } from 'antd';
 import { useTheme } from '../utils/ThemeContext';
 import NormalizedWeightSliders, { weightConfig } from '../components/NormalizedWeightSliders';
@@ -44,8 +46,8 @@ import { useFetchScryfallCard } from '../hooks/useFetchScryfallCard';
 import ScryfallCardView from '../components/Shared/ScryfallCardView';
 
 const { Title, Text } = Typography;
-
 const { Panel } = Collapse;
+const { Option, OptGroup } = Select;
 
 const Optimize = () => {
   const navigate = useNavigate();
@@ -63,7 +65,10 @@ const Optimize = () => {
   const [siteType, setSiteType] = useState('extended');
   const [selectedSites, setSelectedSites] = useState({});
 
-  const [optimizationStrategy, setOptimizationStrategy] = useState('hybrid');
+  // optimization strategy state
+  const [optimizationStrategy, setOptimizationStrategy] = useState('auto');
+  const [fallbackStrategy, setFallbackStrategy] = useState('milp');
+  
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isOptimizationComplete, setIsOptimizationComplete] = useState(false);
   const [optimizationResult, setOptimizationResult] = useState(null);
@@ -93,9 +98,24 @@ const Optimize = () => {
   const [selectedSiteCount, setSelectedSiteCount] = useState(0); 
   const [buylists, setBuylists] = useState([]); 
   const { selectedBuylist, setSelectedBuylist} = useBuylistState();
-  const [minAge, setMinAge] = useState(3600);  // default 30 minutes
+  const [minAge, setMinAge] = useState(3600);  // default 1 hour
   const [strictPreferences, setStrictPreferences] = useState(false);
-  const defaultWeights = { cost: 1.0, quality: 1.0, availability: 100.0, store_count: 0.3 };
+  
+  // algorithm configuration with NSGA-III support
+  const [algorithmConfig, setAlgorithmConfig] = useState({
+    time_limit: 300,
+    max_iterations: 1000,
+    early_stopping: true,
+    convergence_threshold: 0.001,
+    population_size: 200,
+    neighborhood_size: 20,
+    decomposition_method: 'tchebycheff',
+    milp_gap_tolerance: 0.01,
+    hybrid_milp_time_fraction: 0.3,
+    reference_point_divisions: 12  // NSGA-III specific parameter
+  });
+
+  const defaultWeights = { cost: 1.0, quality: 1.0, store_count: 0.3 };
   const [weights, setWeights] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('mtg_weights'));
@@ -114,32 +134,188 @@ const Optimize = () => {
     mutateAsync: fetchCard,
   } = useFetchScryfallCard();
 
+  // Enhanced presets with algorithm-specific configurations including all algorithms
   const presets = {
+    // MILP Presets
     cheapest: {
       cost: 10.0,
       quality: 0.1,
-      availability: 10,
       store_count: 0.1,
+      algorithm: 'milp',
+      description: 'Find absolute lowest cost using precise MILP optimization'
     },
+    optimal_small: {
+      cost: 5.0,
+      quality: 3.0,
+      store_count: 2.0,
+      algorithm: 'milp',
+      description: 'Guaranteed optimal solution for small problems (≤50 cards)'
+    },
+    
+    // NSGA-II Presets
+    large_balanced: {
+      cost: 3.0,
+      quality: 3.0,
+      store_count: 1.0,
+      algorithm: 'nsga2',
+      description: 'Balanced multi-objective optimization for large problems'
+    },
+    quality_diversity: {
+      cost: 1.0,
+      quality: 5.0,
+      store_count: 2.0,
+      algorithm: 'nsga2',
+      description: 'High quality cards with good solution diversity using NSGA-II'
+    },
+    
+    // NSGA-III Presets
     best_quality: {
       cost: 0.1,
       quality: 10.0,
-      availability: 10,
       store_count: 0.1,
+      algorithm: 'nsga3',
+      description: 'Maximum quality focus with systematic diversity via reference points'
     },
-    high_availability: {
+    maximum_diversity: {
+      cost: 1.0,
+      quality: 3.0,
+      store_count: 1.0,
+      algorithm: 'nsga3',
+      description: 'Systematic solution diversity using NSGA-III reference points'
+    },
+    very_large_problems: {
       cost: 2.0,
-      quality: 2.0,
-      availability: 1000,
-      store_count: 0.1,
+      quality: 4.0,
+      store_count: 1.5,
+      algorithm: 'nsga3',
+      description: 'Optimized for very large problems (>100 cards) with enhanced diversity'
     },
+    
+    // MOEA/D Presets
+    constrained_optimization: {
+      cost: 4.0,
+      quality: 4.0,
+      store_count: 3.0,
+      algorithm: 'moead',
+      description: 'Decomposition-based approach for complex constrained problems'
+    },
+    convergence_focused: {
+      cost: 3.0,
+      quality: 5.0,
+      store_count: 2.0,
+      algorithm: 'moead',
+      description: 'Superior convergence for multi-objective problems using MOEA/D'
+    },
+    
+    // Hybrid MILP+MOEA/D Presets
     fewest_stores: {
       cost: 1.0,
       quality: 1.0,
-      availability: 50,
       store_count: 5.0,
+      algorithm: 'hybrid',
+      description: 'Minimize stores using hybrid MILP+MOEA/D approach'
     },
+    robust_medium: {
+      cost: 3.0,
+      quality: 3.0,
+      store_count: 2.0,
+      algorithm: 'hybrid',
+      description: 'Robust performance for medium problems (20-100 cards)'
+    },
+    
+    // Hybrid MILP+NSGA-III Presets
+    premium_complex: {
+      cost: 1.0,
+      quality: 8.0,
+      store_count: 1.0,
+      algorithm: 'hybrid_milp_nsga3',
+      description: 'Premium quality with maximum diversity for complex scenarios'
+    },
+    enterprise_scale: {
+      cost: 2.0,
+      quality: 4.0,
+      store_count: 3.0,
+      algorithm: 'hybrid_milp_nsga3',
+      description: 'Enterprise-scale optimization combining MILP precision with NSGA-III diversity'
+    },
+    
+    // Auto-Select Presets
+    balanced: {
+      cost: 3.0,
+      quality: 3.0,
+      store_count: 1.0,
+      algorithm: 'auto',
+      description: 'Let the system choose the best algorithm automatically'
+    },
+    smart_adaptive: {
+      cost: 2.0,
+      quality: 4.0,
+      store_count: 2.0,
+      algorithm: 'auto',
+      description: 'Adaptive algorithm selection based on problem characteristics'
+    }
   };
+
+  // Algorithm metadata for user guidance with complete information
+  const algorithmInfo = {
+    auto: {
+      name: 'Auto-Select',
+      description: 'Automatically chooses the best algorithm based on problem size and characteristics',
+      icon: '🤖',
+      bestFor: 'General use - let the system decide based on problem complexity',
+      pros: ['Optimal algorithm selection', 'No configuration needed', 'Adapts to problem size'],
+      cons: ['Less control over specific behavior', 'May not use preferred algorithm']
+    },
+    milp: {
+      name: 'MILP',
+      description: 'Mixed Integer Linear Programming - finds mathematically optimal solutions',
+      icon: '🎯',
+      bestFor: 'Small to medium problems (≤50 cards, ≤20 stores) requiring guaranteed optimality',
+      pros: ['Guaranteed optimal solution', 'Fast for small problems', 'Precise mathematical approach'],
+      cons: ['Memory intensive for large problems', 'May timeout on complex instances', 'Not scalable']
+    },
+    nsga2: {
+      name: 'NSGA-II',
+      description: 'Non-dominated Sorting Genetic Algorithm II - proven multi-objective optimization',
+      icon: '🧬',
+      bestFor: 'Large problems (50-100 cards) with multiple competing objectives',
+      pros: ['Scalable to large problems', 'Good solution diversity', 'Handles constraints well', 'Well-established'],
+      cons: ['No optimality guarantee', 'Requires parameter tuning', 'Can struggle with many objectives']
+    },
+    nsga3: {
+      name: 'NSGA-III',
+      description: 'Reference point-based genetic algorithm with systematic diversity maintenance',
+      icon: '🔬',
+      bestFor: 'Very large problems (>100 cards) requiring systematic solution diversity',
+      pros: ['Superior diversity maintenance', 'Reference point guidance', 'Better convergence for many objectives', 'Systematic exploration'],
+      cons: ['More complex than NSGA-II', 'Requires larger populations', 'Longer execution time', 'Parameter sensitive']
+    },
+    moead: {
+      name: 'MOEA/D',
+      description: 'Multi-Objective Evolutionary Algorithm based on Decomposition',
+      icon: '🔬',
+      bestFor: 'Complex multi-objective problems with tight constraints and convergence requirements',
+      pros: ['Excellent convergence properties', 'Good for constrained problems', 'Efficient resource utilization', 'Robust performance'],
+      cons: ['Slower than NSGA-II', 'Complex parameter configuration', 'Less diversity than NSGA-III']
+    },
+    hybrid: {
+      name: 'Hybrid MILP+MOEA/D',
+      description: 'Combines MILP precision with evolutionary algorithm scalability',
+      icon: '⚡',
+      bestFor: 'Medium to large problems (20-100 cards) needing balance of quality and performance',
+      pros: ['Robust performance across problem sizes', 'Good quality solutions', 'Combines best of both worlds', 'Adaptive approach'],
+      cons: ['Longer execution time', 'More complex parameter tuning', 'Resource intensive']
+    },
+    hybrid_milp_nsga3: {
+      name: 'Hybrid MILP+NSGA-III',
+      description: 'Advanced hybrid combining MILP optimization with NSGA-III diversity for complex problems',
+      icon: '🚀',
+      bestFor: 'Very large, complex problems (>75 cards) requiring both optimality and systematic diversity',
+      pros: ['MILP precision for subproblems', 'Enhanced diversity via reference points', 'Excellent for complex scenarios', 'State-of-the-art approach'],
+      cons: ['Longest execution time', 'Most complex configuration', 'Very resource intensive', 'Requires expert tuning']
+    }
+  };
+  const [isCollapsed, setIsCollapsed] = useState(false);
   
   const cancelTask = async (taskId) => {
     try {
@@ -152,18 +328,30 @@ const Optimize = () => {
   };
 
   const handlePresetChange = (presetKey) => {
-    const selectedWeights = presets[presetKey] || weights;
-    setWeights(selectedWeights);
-    setPresetMode(presetKey);
+    const preset = presets[presetKey];
+    if (preset) {
+      setWeights({
+        cost: preset.cost,
+        quality: preset.quality,
+        store_count: preset.store_count
+      });
+      
+      // Set recommended algorithm for this preset
+      if (preset.algorithm && preset.algorithm !== 'auto') {
+        setOptimizationStrategy(preset.algorithm);
+      }
+      
+      setPresetMode(presetKey);
+      
+      messageApi.info(`Applied ${presetKey.replace('_', ' ')} preset - ${preset.description}`);
+    }
   };
 
   useEffect(() => {
     const allMaxed = Object.entries(weights).every(([key, val]) => {
-      const max = key === 'availability' ? 200 : 5;
-      return val >= max;
+      return val >= key;
     });
   
-    // Avoid setting the same value or spamming messages
     if (allMaxed && !window.__allWeightsWarned) {
       messageApi.warning('All weights are maxed — this may lead to conflicting optimization goals.');
       window.__allWeightsWarned = true;
@@ -171,21 +359,46 @@ const Optimize = () => {
       window.__allWeightsWarned = false;
     }
   
-    // Save only if different
     const current = localStorage.getItem('mtg_weights');
     const next = JSON.stringify(weights);
     if (current !== next) {
       localStorage.setItem('mtg_weights', next);
     }
-  }, [weights, messageApi.warning]);
+  }, [weights, messageApi]);
 
-  const findMinStoretooltipContent = (
-    <div>
-      <p><strong>When enabled:</strong> The algorithm tries to minimize the number of stores needed to fulfill the wishlist, starting from one and going up, prioritizing feasibility and cost efficiency.</p>
-      <p><strong>When disabled:</strong> It uses the fixed <code>min_store</code> value from the config, without trying to reduce store count further—useful when the user prefers a specific number of stores.</p>
-    </div>
-  );
+  // optimization configuration with NSGA-III support
+  const getOptimizationConfig = () => {
+    const problemSize = {
+      num_cards: cards.length,
+      num_stores: selectedSiteCount,
+      complexity_score: (cards.length * selectedSiteCount) / 1000
+    };
 
+    return {
+      primary_algorithm: optimizationStrategy,
+      weights: weights,
+      min_store: findMinStore ? 1 : minStore,
+      max_store: findMinStore ? 50 : maxStore,
+      find_min_store: findMinStore,
+      strict_preferences: strictPreferences,
+      time_limit: algorithmConfig.time_limit,
+      max_iterations: algorithmConfig.max_iterations,
+      early_stopping: algorithmConfig.early_stopping,
+      convergence_threshold: algorithmConfig.convergence_threshold,
+      
+      // Algorithm-specific parameters
+      population_size: algorithmConfig.population_size,
+      neighborhood_size: algorithmConfig.neighborhood_size,
+      decomposition_method: algorithmConfig.decomposition_method,
+      milp_gap_tolerance: algorithmConfig.milp_gap_tolerance,
+      hybrid_milp_time_fraction: algorithmConfig.hybrid_milp_time_fraction,
+      reference_point_divisions: algorithmConfig.reference_point_divisions, // NSGA-III specific
+      
+      // Problem characteristics for algorithm selection
+      problem_characteristics: problemSize,
+      
+    };
+  };
 
   const filteredSites = sites.filter(site => {
     if (!site.active) return false;
@@ -241,7 +454,6 @@ const Optimize = () => {
     setSelectedSiteCount(filteredSites.filter(site => selectedSites[site.id]).length);
   }, [filteredSites, selectedSites]);
 
-  
   const checkTaskStatus = async (id) => {
     try {
       const response = await api.get(`/task_status/${id}`);
@@ -250,9 +462,19 @@ const Optimize = () => {
       setTaskProgress(response.data.progress ?? 0);
       setTaskDetails(response.data.details ?? null);
 
-      // Extract subtasks from the response
-      if (response.data.current && response.data.current.subtasks) {
-        setSubtasks(response.data.current.subtasks);
+      // Extract subtasks and details
+      if (response.data.current) {
+        if (response.data.current.subtasks) {
+          setSubtasks(response.data.current.subtasks);
+        }
+        
+        // Show algorithm information if available
+        if (response.data.current.algorithm_used) {
+          setTaskDetails(prev => ({
+            ...prev,
+            algorithm_used: response.data.current.algorithm_used,
+          }));
+        }
       }
       
       if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
@@ -261,17 +483,17 @@ const Optimize = () => {
         localStorage.removeItem('mtg_task_id');
         
         if (response.data.state === 'SUCCESS') {
+          const optimizationData = response.data.result;
+          
+          // Show success notification
           notificationApi.success({
             message: 'Optimization completed successfully',
+            description: `Algorithm used: ${optimizationData.algorithm_used || 'Unknown'}`,
             placement: 'topRight',
           });
           
-          // The result is directly in response.data.result (not .optimization)
-          const optimizationData = response.data.result;
-          
           console.log('Setting optimization result:', optimizationData);
           
-          // Add best_solution property by finding it from solutions array
           if (optimizationData && optimizationData.solutions) {
             const bestSolution = optimizationData.solutions.find(s => s.is_best_solution);
             optimizationData.best_solution = bestSolution;
@@ -280,11 +502,10 @@ const Optimize = () => {
           setOptimizationResult(optimizationData);
           setIsOptimizationComplete(true);
           
-          // Keep taskId for a bit longer to show the success summary
           setTimeout(() => {
             setTaskId(null);
             setIsOptimizationComplete(false);
-          }, 10000); // Show success summary for 10 seconds
+          }, 10000);
         } else {
           notificationApi.error({
             message: 'Optimization failed',
@@ -304,24 +525,21 @@ const Optimize = () => {
     }
   };
 
-  // Add this function to handle viewing results:
   const handleViewResults = () => {
     if (optimizationResult) {
-      // Scroll to results section
       const resultsElement = document.getElementById('optimization-results');
       if (resultsElement) {
         resultsElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
-      
-      // Optional: Navigate to a dedicated results page
       navigate('/results');
     }
   };
+
   const handleGoToResultsPage = () => {
     navigate('/results', { 
       state: { 
         fromOptimization: true,
-        optimizationId: optimizationResult?.id // if you have the result ID
+        optimizationId: optimizationResult?.id
       } 
     });
   };
@@ -379,22 +597,21 @@ const Optimize = () => {
           throw new Error('Please select at least one site to optimize');
         }
 
-        let minStoreValue = minStore;
-        let maxStoreValue = maxStore;
-        if (findMinStore) {
-          minStoreValue = 1;
-          maxStoreValue = 0;  
+        if (cards.length === 0) {
+          throw new Error('Please select a buylist with cards to optimize');
         }
+
+        const config = getOptimizationConfig();
 
         const response = await api.post('/start_scraping', {
           sites: sitesToOptimize,
-          strategy: optimizationStrategy,
-          min_store: minStoreValue,
-          max_store: maxStoreValue,
-          find_min_store: findMinStore,
+          strategy: config.primary_algorithm,
+          min_store: config.min_store,
+          max_store: config.max_store,
+          find_min_store: config.find_min_store,
           min_age_seconds: minAge,
           buylist_id: selectedBuylist?.buylistId,
-          strict_preferences: strictPreferences,
+          strict_preferences: config.strict_preferences,
           user_preferences: Object.fromEntries(
             cards.map(card => [
               card.name,
@@ -413,7 +630,11 @@ const Optimize = () => {
             quality: card.quality,
             quantity: card.quantity
           })),
-          weights: weights,
+          weights: config.weights,
+          
+          // configuration with NSGA-III support
+          optimization_config: config,
+          algorithm_config: algorithmConfig
         });
 
         setTaskId(response.data.task_id);
@@ -421,14 +642,20 @@ const Optimize = () => {
         setSubtasks(null);
         localStorage.setItem('mtg_task_id', response.data.task_id);
         
-        return { taskId: response.data.task_id, siteCount: sitesToOptimize.length };
+        return { 
+          taskId: response.data.task_id, 
+          siteCount: sitesToOptimize.length,
+          algorithm: config.primary_algorithm,
+        };
       },
       {
         operation: 'start',
         item: 'optimization',
         loadingMessage: 'Starting optimization...',
         onSuccess: (result) => {
-          messageApi.info(`Optimization task started with ${result.siteCount} sites!`);
+          messageApi.info(
+            `optimization started with ${result.siteCount} sites using ${result.algorithm.toUpperCase()} algorithm!`
+          );
         }
       }
     );
@@ -474,14 +701,13 @@ const Optimize = () => {
         description: err.message || 'Failed to fetch card data',
         placement: 'topRight',
       });
-      setIsModalVisible(false);    // Close modal on error
+      setIsModalVisible(false);
     } finally {
-      setIsModalLoading(false);    // Stop spinner
+      setIsModalLoading(false);
     }
   };
 
   const handleSaveEdit = (updatedData) => {
-    // console.log('[Optimize] Saved card data:', updatedData);
     setIsModalVisible(false);
   };
 
@@ -544,178 +770,501 @@ const Optimize = () => {
       ...newSelectedSites
     }));
   };
+
+  // Calculate problem size indicators with NSGA-III consideration
+  const problemSize = cards.length * selectedSiteCount;
+  const problemComplexity = problemSize > 1000 ? 'High' : problemSize > 200 ? 'Medium' : 'Low';
   
+  // Enhanced recommendation logic with NSGA-III
+  const getRecommendedAlgorithm = () => {
+    if (problemSize > 1500) return 'hybrid_milp_nsga3';  // Very large/complex problems
+    if (problemSize > 1000) return 'nsga3';              // Large problems requiring diversity
+    if (problemSize > 500) return 'nsga2';               // Large problems
+    if (problemSize > 100) return 'hybrid';              // Medium-large problems
+    return 'milp';                                       // Small problems
+  };
+  
+  const recommendedAlgorithm = getRecommendedAlgorithm();
+
+  // Group presets by algorithm for better organization
+  const presetsByAlgorithm = Object.entries(presets).reduce((acc, [key, preset]) => {
+    const algo = preset.algorithm;
+    if (!acc[algo]) acc[algo] = [];
+    acc[algo].push({ key, ...preset });
+    return acc;
+  }, {});
 
   return (
     <div className={`optimize section ${theme}`}>
-      <Title level={2}>Optimize</Title>
-      
-      <Row gutter={[16, 8]} className="mb-4">
-        <Col span={6}>
-          <Select value={optimizationStrategy} onChange={setOptimizationStrategy} className="w-full">
-            <Option value="milp">MILP</Option>
-            <Option value="nsga-ii">NSGA-II</Option>
-            <Option value="hybrid">Hybrid</Option>
-          </Select>
-          <Button 
-            type="primary" 
-            onClick={handleOptimize} 
-            className={`optimize-button ${theme}`}
-            disabled={isOptimizing || !!taskId}
+      <Title level={2}>
+        Optimization 
+      </Title>
+        <Collapse
+          defaultActiveKey={['1']}
+            activeKey={isCollapsed ? [] : ['1']}
+            onChange={(keys) => setIsCollapsed(keys.length === 0)}
           >
-            {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
-          </Button>
-          {taskId && (
-            <Button 
-              danger 
-              onClick={() => cancelTask(taskId)}
-              style={{ marginLeft: '8px' }}
-            >
-              Cancel Task
-            </Button>
-          )}
-        </Col>
-        <Col span={24}>
-          <Collapse defaultActiveKey={['1']}>
-          <Panel header={<p><strong>Optimization Weights and Config</strong></p>} key="1">
-            <Row gutter={16}>
-              <Col span={12}>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Select
-                    value={presetMode}
-                    onChange={handlePresetChange}
-                    style={{ width: 240 }}
+          <Panel
+            key="1"
+            header={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                <span><strong>Optimization Configuration & Controls</strong></span>
+                {isCollapsed && (
+                  <Button
+                    type="primary"
+                    size="large"
+                    onClick={handleOptimize}
+                    disabled={isOptimizing || !!taskId}
                   >
-                    <Option value="custom">🎛 Custom (Manual sliders)</Option>
-                    <Option value="cheapest">💸 Cheapest</Option>
-                    <Option value="best_quality">✨ Best Quality</Option>
-                    <Option value="high_availability">📦 High Availability</Option>
-                    <Option value="fewest_stores">📬 Fewest Stores</Option>
-                  </Select>
-                  {presetMode === 'custom' ? (
-                    <NormalizedWeightSliders
-                      onChange={(newOrUpdater) => {
-                        const nextWeights = typeof newOrUpdater === 'function'
-                          ? newOrUpdater(weights)
-                          : newOrUpdater;
-                    
-                        if (JSON.stringify(weights) !== JSON.stringify(nextWeights)) {
-                          setWeights(nextWeights);
-                        }
-                      }}
-                      findMinStore={findMinStore}
-                    />
-                  ) : (
-                    <Card size="small" title="Preset Values">
-                      <p><strong>Cost:</strong> {presets[presetMode]?.cost ?? 0}</p>
-                      <p><strong>Quality:</strong> {presets[presetMode]?.quality ?? 0}</p>
-                      <p><strong>Availability:</strong> {presets[presetMode]?.availability ?? 0}</p>
-                      <p><strong>Store Count:</strong> {presets[presetMode]?.store_count ?? 0}</p>
-                    </Card>
-                  )}
-                  <Row gutter={12}>
-                    <Col span={12}>
-                      <Card size="small" title="Store Strategy">
-                        <Space direction="vertical" style={{ width: '100%' }}>
-                          <Tooltip title="Try to find the smallest number of stores that can fulfill your buylist. May take longer.">
-                            <Switch
-                              checked={findMinStore}
-                              onChange={(checked) => {
-                                setFindMinStore(checked);
-                                if (!checked && previousMinStore > 0) {
-                                  setMinStore(previousMinStore);
-                                }
-                                setFindMinStore(checked);
-                              }}
-                              checkedChildren="Find Minimum Stores"
-                              unCheckedChildren="Use Fixed Store Count"
-                              style={{ width: '100%' }}
-                            />
-                          </Tooltip>
-                          {!findMinStore && (
-                            <InputNumber
-                              min={1}
-                              value={minStore}
-                              onChange={(value) => {
-                                setMinStore(value);
-                                setPreviousMinStore(value);
-                              }}
-                              addonBefore="Min Store Count"
-                              className="w-full"
-                              disabled={findMinStore}
-                            />
-                          )}
-                          {!findMinStore && (
-                            <InputNumber
-                              min={1}
-                              value={maxStore}
-                              onChange={(value) => {
-                                setMaxStore(value);
-                                setPreviousMaxStore(value);
-                              }}
-                              addonBefore="Max Store Count"
-                              className="w-full"
-                              disabled={findMinStore}
-                            />
-                          )}
-                        </Space>
-                      </Card>
-                    </Col>
+                  {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
+                  </Button>
+                )}
+              </div>
+            }
+          >
 
-                    <Col span={12}>
-                      <Card
-                        size="small"
-                        title="Card Matching Preferences"
-                        extra={
-                          <Tooltip title="When enabled, cards must exactly match your preferred quality, language, and version. Disable to allow fallback options with small penalties.">
-                            <Tag color={strictPreferences ? 'red' : 'green'}>
-                              {strictPreferences ? 'Strict' : 'Flexible'}
-                            </Tag>
-                          </Tooltip>
-                        }
+            <Row gutter={[16, 8]} className="mb-4">
+                <Col span={6}>
+                  <Card size="small" title="Algorithm Selection">
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      
+                      <Select 
+                        value={optimizationStrategy} 
+                        onChange={setOptimizationStrategy} 
+                        style={{ width: '100%' }}
                       >
-                        <Switch
-                          checked={strictPreferences}
-                          onChange={setStrictPreferences}
-                          checkedChildren="Strict Preferences"
-                          unCheckedChildren="Flexible Preferences"
-                          style={{ width: '100%' }}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
+                        {Object.entries(algorithmInfo).map(([key, info]) => (
+                          <Option key={key} value={key}>
+                            <Space>
+                              <span>{info.icon}</span>
+                              <span>{info.name}</span>
+                              {key === recommendedAlgorithm && (
+                                <Tag size="small" color="green">Recommended</Tag>
+                              )}
+                            </Space>
+                          </Option>
+                        ))}
+                      </Select>
+                      
+                      {algorithmInfo[optimizationStrategy] && (
+                        <Card size="small" style={{ backgroundColor: '#f6ffed' }}>
+                          <Text style={{ fontSize: '12px' }}>
+                            {algorithmInfo[optimizationStrategy].description}
+                          </Text>
+                          <br />
+                          <Text type="secondary" style={{ fontSize: '11px' }}>
+                            Best for: {algorithmInfo[optimizationStrategy].bestFor}
+                          </Text>
+                        </Card>
+                      )}
+                    </Space>
+                  </Card>
+                  
 
-                  <InputNumber
-                    min={60}
-                    step={60}
-                    value={minAge}
-                    onChange={setMinAge}
-                    addonBefore="Refresh Age"
-                    addonAfter="sec"
-                    className="w-full"
-                  />
-
-                  {findMinStore && strictPreferences && (
-                    <Alert
-                      message="Strict preferences may prevent finding a minimum-store solution."
-                      description="Enable flexible preferences to allow fallback listings and improve feasibility."
-                      type="warning"
-                      showIcon
-                    />
+                  
+                  {taskId && (
+                    <Button 
+                      danger 
+                      onClick={() => cancelTask(taskId)}
+                      style={{ width: '100%' }}
+                    >
+                      Cancel Task
+                    </Button>
                   )}
-                </Space>
-              </Col>
-              <Col span={12}>
-                <div style={{ maxWidth: '600px', width: '100%', height: '500px', margin: '0 auto' }}>
-                  <RadarChart weights={weights} weightConfig={weightConfig} />
-                </div>
-              </Col>
+                  
+                  {/* Problem size indicator with enhanced complexity assessment */}
+                  <Card size="small" title="Problem Analysis">
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <div>
+                        <Text strong>Problem Size: </Text>
+                        <Tag color={problemComplexity === 'High' ? 'red' : problemComplexity === 'Medium' ? 'orange' : 'green'}>
+                          {problemComplexity}
+                        </Tag>
+                        <Text type="secondary"> ({cards.length} cards × {selectedSiteCount} sites)</Text>
+                      </div>
+                      <div>
+                        <Text strong>Recommended: </Text>
+                        <Tag color="blue">{algorithmInfo[recommendedAlgorithm]?.name}</Tag>
+                      </div>
+                      {problemSize > 1000 && (
+                        <Alert
+                          message="Large Problem Detected"
+                          description="Consider using NSGA-III or Hybrid MILP+NSGA-III for better diversity and performance."
+                          type="info"
+                          showIcon
+                          style={{ fontSize: '11px' }}
+                        />
+                      )}
+                    </Space>
+                  </Card>
+                  
+                  {!isCollapsed && (
+                    <Button 
+                      type="primary" 
+                      onClick={handleOptimize} 
+                      className={`optimize-button ${theme}`}
+                      disabled={isOptimizing || !!taskId}
+                      size="large"
+                      style={{ width: '100%' }}
+                    >
+                      {isOptimizing ? 'Optimization in Progress...' : 'Run Optimization'}
+                    </Button>
+                  )}
+                </Col>
+                
+                <Col span={18}>
+                  <Collapse defaultActiveKey={['1']}>
+                    <Panel header={<strong>Optimization Configuration</strong>} key="1">
+                      <Row gutter={16}>
+                        <Col span={12}>
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            <Card size="small" title="Optimization Presets">
+                              <Select
+                                value={presetMode}
+                                onChange={handlePresetChange}
+                                style={{ width: '100%' }}
+                                optionLabelProp="label"
+                              >
+                                <Option value="custom" label="🎛 Custom Configuration">
+                                  🎛 Custom Configuration
+                                </Option>
+                                
+                                {/* Group presets by algorithm */}
+                                {Object.entries(presetsByAlgorithm).map(([algorithm, presetList]) => (
+                                  <Select.OptGroup key={algorithm} label={`${algorithmInfo[algorithm]?.icon || '⚙️'} ${algorithmInfo[algorithm]?.name || algorithm.toUpperCase()} Presets`}>
+                                    {presetList.map(preset => (
+                                      <Option 
+                                        key={preset.key} 
+                                        value={preset.key}
+                                        label={`${algorithmInfo[algorithm]?.icon || '⚙️'} ${preset.key.charAt(0).toUpperCase() + preset.key.slice(1).replace('_', ' ')}`}
+                                      >
+                                        <Space>
+                                          <span>{algorithmInfo[algorithm]?.icon || '⚙️'}</span>
+                                          <span>{preset.key.charAt(0).toUpperCase() + preset.key.slice(1).replace('_', ' ')}</span>
+                                          <Text type="secondary" style={{ fontSize: '11px' }}>
+                                            ({algorithm.toUpperCase()})
+                                          </Text>
+                                        </Space>
+                                      </Option>
+                                    ))}
+                                  </Select.OptGroup>
+                                ))}
+                              </Select>
+                              
+                              {presetMode !== 'custom' && presets[presetMode] && (
+                                <Alert
+                                  message={presets[presetMode].description}
+                                  type="info"
+                                  showIcon
+                                  style={{ marginTop: '8px', fontSize: '12px' }}
+                                />
+                              )}
+                            </Card>
+
+                            {presetMode === 'custom' ? (
+                              <NormalizedWeightSliders
+                                onChange={(newOrUpdater) => {
+                                  const nextWeights = typeof newOrUpdater === 'function'
+                                    ? newOrUpdater(weights)
+                                    : newOrUpdater;
+                              
+                                  if (JSON.stringify(weights) !== JSON.stringify(nextWeights)) {
+                                    setWeights(nextWeights);
+                                  }
+                                }}
+                                findMinStore={findMinStore}
+                              />
+                            ) : (
+                              <Card size="small" title="Current Preset Values">
+                                <Space direction="vertical" style={{ width: '100%' }}>
+                                  <div><Text strong>Cost:</Text> {presets[presetMode]?.cost ?? 0}</div>
+                                  <div><Text strong>Quality:</Text> {presets[presetMode]?.quality ?? 0}</div>
+                                  <div><Text strong>Store Count:</Text> {presets[presetMode]?.store_count ?? 0}</div>
+                                  <div><Text strong>Algorithm:</Text> 
+                                    <Tag color="blue">{presets[presetMode]?.algorithm?.toUpperCase()}</Tag>
+                                  </div>
+                                </Space>
+                              </Card>
+                            )}
+
+                            <Collapse 
+                              size="small"
+                              items={[
+                                {
+                                  key: 'advanced',
+                                  label: 'Advanced Algorithm Settings',
+                                  children: (
+                                    <Space direction="vertical" style={{ width: '100%' }}>
+                                      <Row gutter={8}>
+                                        <Col span={12}>
+                                          <Text strong>Time Limit (seconds)</Text>
+                                          <InputNumber
+                                            min={60}
+                                            max={3600}
+                                            value={algorithmConfig.time_limit}
+                                            onChange={(value) => setAlgorithmConfig(prev => ({
+                                              ...prev,
+                                              time_limit: value
+                                            }))}
+                                            style={{ width: '100%' }}
+                                          />
+                                        </Col>
+                                        <Col span={12}>
+                                          <Text strong>Max Iterations</Text>
+                                          <InputNumber
+                                            min={100}
+                                            max={5000}
+                                            value={algorithmConfig.max_iterations}
+                                            onChange={(value) => setAlgorithmConfig(prev => ({
+                                              ...prev,
+                                              max_iterations: value
+                                            }))}
+                                            style={{ width: '100%' }}
+                                          />
+                                        </Col>
+                                      </Row>
+                                      
+                                      {(optimizationStrategy === 'nsga2' || optimizationStrategy === 'nsga3' || optimizationStrategy === 'moead' || optimizationStrategy === 'hybrid' || optimizationStrategy === 'hybrid_milp_nsga3') && (
+                                        <Row gutter={8}>
+                                          <Col span={12}>
+                                            <Text strong>Population Size</Text>
+                                            <InputNumber
+                                              min={50}
+                                              max={1000}
+                                              value={algorithmConfig.population_size}
+                                              onChange={(value) => setAlgorithmConfig(prev => ({
+                                                ...prev,
+                                                population_size: value
+                                              }))}
+                                              style={{ width: '100%' }}
+                                            />
+                                          </Col>
+                                          <Col span={12}>
+                                            <Text strong>Convergence Threshold</Text>
+                                            <InputNumber
+                                              min={0.0001}
+                                              max={0.1}
+                                              step={0.001}
+                                              value={algorithmConfig.convergence_threshold}
+                                              onChange={(value) => setAlgorithmConfig(prev => ({
+                                                ...prev,
+                                                convergence_threshold: value
+                                              }))}
+                                              style={{ width: '100%' }}
+                                            />
+                                          </Col>
+                                        </Row>
+                                      )}
+                                      
+                                      {/* NSGA-III specific parameters */}
+                                      {(optimizationStrategy === 'nsga3' || optimizationStrategy === 'hybrid_milp_nsga3') && (
+                                        <Row gutter={8}>
+                                          <Col span={12}>
+                                            <Text strong>Reference Point Divisions</Text>
+                                            <Tooltip title="Number of divisions for reference points. Higher values provide more diversity but require larger populations.">
+                                              <InputNumber
+                                                min={6}
+                                                max={20}
+                                                value={algorithmConfig.reference_point_divisions}
+                                                onChange={(value) => setAlgorithmConfig(prev => ({
+                                                  ...prev,
+                                                  reference_point_divisions: value
+                                                }))}
+                                                style={{ width: '100%' }}
+                                              />
+                                            </Tooltip>
+                                          </Col>
+                                          <Col span={12}>
+                                            <Alert
+                                              message="NSGA-III uses reference points for systematic diversity"
+                                              type="info"
+                                              style={{ fontSize: '11px' }}
+                                            />
+                                          </Col>
+                                        </Row>
+                                      )}
+                                      
+                                      {optimizationStrategy === 'moead' && (
+                                        <Row gutter={8}>
+                                          <Col span={12}>
+                                            <Text strong>Neighborhood Size</Text>
+                                            <InputNumber
+                                              min={10}
+                                              max={50}
+                                              value={algorithmConfig.neighborhood_size}
+                                              onChange={(value) => setAlgorithmConfig(prev => ({
+                                                ...prev,
+                                                neighborhood_size: value
+                                              }))}
+                                              style={{ width: '100%' }}
+                                            />
+                                          </Col>
+                                          <Col span={12}>
+                                            <Text strong>Decomposition Method</Text>
+                                            <Select
+                                              value={algorithmConfig.decomposition_method}
+                                              onChange={(value) => setAlgorithmConfig(prev => ({
+                                                ...prev,
+                                                decomposition_method: value
+                                              }))}
+                                              style={{ width: '100%' }}
+                                            >
+                                              <Option value="tchebycheff">Tchebycheff</Option>
+                                              <Option value="weighted_sum">Weighted Sum</Option>
+                                              <Option value="pbi">PBI</Option>
+                                            </Select>
+                                          </Col>
+                                        </Row>
+                                      )}
+                                      
+                                      {/* Hybrid algorithm time allocation */}
+                                      {(optimizationStrategy === 'hybrid' || optimizationStrategy === 'hybrid_milp_nsga3') && (
+                                        <Row gutter={8}>
+                                          <Col span={12}>
+                                            <Text strong>MILP Time Fraction</Text>
+                                            <Tooltip title="Fraction of total time allocated to MILP phase (0.1 = 10%, 0.3 = 30%)">
+                                              <InputNumber
+                                                min={0.1}
+                                                max={0.5}
+                                                step={0.05}
+                                                value={algorithmConfig.hybrid_milp_time_fraction}
+                                                onChange={(value) => setAlgorithmConfig(prev => ({
+                                                  ...prev,
+                                                  hybrid_milp_time_fraction: value
+                                                }))}
+                                                style={{ width: '100%' }}
+                                              />
+                                            </Tooltip>
+                                          </Col>
+                                          <Col span={12}>
+                                            <Alert
+                                              message={`${algorithmInfo[optimizationStrategy]?.name} combines MILP precision with evolutionary diversity`}
+                                              type="info"
+                                              style={{ fontSize: '11px' }}
+                                            />
+                                          </Col>
+                                        </Row>
+                                      )}
+                                      
+                                      <Switch
+                                        checked={algorithmConfig.early_stopping}
+                                        onChange={(checked) => setAlgorithmConfig(prev => ({
+                                          ...prev,
+                                          early_stopping: checked
+                                        }))}
+                                        checkedChildren="Early Stopping ON"
+                                        unCheckedChildren="Early Stopping OFF"
+                                      />
+                                    </Space>
+                                  )
+                                }
+                              ]}
+                            />
+                            
+
+                            <Row gutter={12}>
+                              <Col span={12}>
+                                <Card size="small" title="Store Strategy">
+                                  <Space direction="vertical" style={{ width: '100%' }}>
+                                    <Tooltip title="Try to find the smallest number of stores that can fulfill your buylist. May take longer.">
+                                      <Switch
+                                        checked={findMinStore}
+                                        onChange={(checked) => {
+                                          setFindMinStore(checked);
+                                          if (!checked && previousMinStore > 0) {
+                                            setMinStore(previousMinStore);
+                                          }
+                                        }}
+                                        checkedChildren="Find Minimum Stores"
+                                        unCheckedChildren="Use Fixed Store Count"
+                                        style={{ width: '100%' }}
+                                      />
+                                    </Tooltip>
+                                    {!findMinStore && (
+                                      <>
+                                        <InputNumber
+                                          min={1}
+                                          value={minStore}
+                                          onChange={(value) => {
+                                            setMinStore(value);
+                                            setPreviousMinStore(value);
+                                          }}
+                                          addonBefore="Min Store Count"
+                                          className="w-full"
+                                          disabled={findMinStore}
+                                        />
+                                        <InputNumber
+                                          min={1}
+                                          value={maxStore}
+                                          onChange={(value) => {
+                                            setMaxStore(value);
+                                            setPreviousMaxStore(value);
+                                          }}
+                                          addonBefore="Max Store Count"
+                                          className="w-full"
+                                          disabled={findMinStore}
+                                        />
+                                      </>
+                                    )}
+                                  </Space>
+                                </Card>
+                              </Col>
+
+                              <Col span={12}>
+                                <Card
+                                  size="small"
+                                  title="Card Matching Preferences"
+                                  extra={
+                                    <Tooltip title="When enabled, cards must exactly match your preferred quality, language, and version. Disable to allow fallback options with small penalties.">
+                                      <Tag color={strictPreferences ? 'red' : 'green'}>
+                                        {strictPreferences ? 'Strict' : 'Flexible'}
+                                      </Tag>
+                                    </Tooltip>
+                                  }
+                                >
+                                  <Switch
+                                    checked={strictPreferences}
+                                    onChange={setStrictPreferences}
+                                    checkedChildren="Strict Preferences"
+                                    unCheckedChildren="Flexible Preferences"
+                                    style={{ width: '100%' }}
+                                  />
+                                </Card>
+                              </Col>
+                            </Row>
+
+                            <InputNumber
+                              min={60}
+                              step={60}
+                              value={minAge}
+                              onChange={setMinAge}
+                              addonBefore="Refresh Age"
+                              addonAfter="sec"
+                              className="w-full"
+                            />
+
+                            {findMinStore && strictPreferences && (
+                              <Alert
+                                message="Strict preferences may prevent finding a minimum-store solution."
+                                description="Enable flexible preferences to allow fallback listings and improve feasibility."
+                                type="warning"
+                                showIcon
+                              />
+                            )}
+                          </Space>
+                        </Col>
+                        <Col span={12}>
+                          <div style={{ maxWidth: '600px', width: '100%', height: '500px', margin: '0 auto' }}>
+                            <RadarChart weights={weights} weightConfig={weightConfig} />
+                          </div>
+                        </Col>
+                      </Row>
+                    </Panel>
+                  </Collapse>
+                </Col>
             </Row>
           </Panel>
-
-          </Collapse>
-        </Col>
-      </Row>
+        </Collapse>
 
       {(isOptimizing || isOptimizationComplete) && (
         <div style={{ marginBottom: '24px' }}>
@@ -728,9 +1277,27 @@ const Optimize = () => {
             onViewResults={optimizationResult ? handleViewResults : null}
           />
 
-          {/* Subtask Progress - only show during optimization, not after completion */}
+          {/* Subtask Progress */}
           {isOptimizing && !isOptimizationComplete && subtasks && (
             <SubtaskProgress subtasks={subtasks} theme={theme} />
+          )}
+          
+          {/* Show algorithm performance info during optimization */}
+          {isOptimizing && taskDetails?.algorithm_used && (
+            <Alert
+              message={
+                <Space>
+                  <ExperimentOutlined />
+                  <Text strong>Algorithm: {taskDetails.algorithm_used}</Text>
+                  {taskDetails.algorithm_used.toLowerCase().includes('nsga-iii') && (
+                    <Tag color="blue" size="small">Reference Points</Tag>
+                  )}
+                </Space>
+              }
+              type="info"
+              showIcon={false}
+              style={{ marginTop: '16px' }}
+            />
           )}
           
           <Divider />
@@ -756,6 +1323,11 @@ const Optimize = () => {
               <Title level={2} style={{ margin: 0, color: '#52c41a' }}>
                 Optimization Results
               </Title>
+              {optimizationResult.algorithm_used && (
+                <Tag color="blue" style={{ fontSize: '14px' }}>
+                  {optimizationResult.algorithm_used}
+                </Tag>
+              )}
             </div>
             
             <Button 
@@ -774,16 +1346,16 @@ const Optimize = () => {
             </Button>
           </div>
           
-          {/* Render the optimization summary */}
+          {/* optimization summary */}
           <OptimizationSummary 
             result={optimizationResult} 
             onCardClick={handleCardClick}
           />
           
-          {/* Show best solution summary */}
+          {/* Show best solution summary with metrics */}
           {optimizationResult.best_solution && (
             <div className="mt-4">
-              <Title level={4}>Best Solution Summary</Title>
+              <Title level={4}>Solution Performance</Title>
               <Space wrap>
                 <Tag color="blue" icon={<ShopOutlined />} style={{ fontSize: '14px', padding: '4px 8px' }}>
                   {optimizationResult.best_solution.number_store} Stores
@@ -794,15 +1366,36 @@ const Optimize = () => {
                   style={{ fontSize: '14px', padding: '4px 8px' }}
                 >
                   {optimizationResult.best_solution.missing_cards_count === 0 ? 'Complete' : 
-                    `${((optimizationResult.best_solution.nbr_card_in_solution / optimizationResult.best_solution.total_qty) * 100).toFixed(1)}%`
+                    `${((optimizationResult.best_solution.nbr_card_in_solution / optimizationResult.best_solution.cards_required_total) * 100).toFixed(1)}%`
                   }
                 </Tag>
                 <Tag color="gold" icon={<DollarOutlined />} style={{ fontSize: '14px', padding: '4px 8px' }}>
                   ${optimizationResult.best_solution.total_price.toFixed(2)}
                 </Tag>
                 <Tag color="purple" style={{ fontSize: '14px', padding: '4px 8px' }}>
-                  {optimizationResult.best_solution.nbr_card_in_solution}/{optimizationResult.best_solution.total_qty} Cards
+                  {optimizationResult.best_solution.nbr_card_in_solution}/{optimizationResult.best_solution.cards_required_total} Cards
                 </Tag>
+                {optimizationResult.execution_time && (
+                  <Tag color="cyan" style={{ fontSize: '14px', padding: '4px 8px' }}>
+                    {optimizationResult.execution_time.toFixed(2)}s
+                  </Tag>
+                )}
+                {optimizationResult.iterations && (
+                  <Tag color="lime" style={{ fontSize: '14px', padding: '4px 8px' }}>
+                    {optimizationResult.iterations} Iterations
+                  </Tag>
+                )}
+                {/* Show NSGA-III specific metrics if available */}
+                {optimizationResult.performance_stats?.reference_points_used && (
+                  <Tag color="geekblue" style={{ fontSize: '14px', padding: '4px 8px' }}>
+                    {optimizationResult.performance_stats.reference_points_used} Reference Points
+                  </Tag>
+                )}
+                {optimizationResult.performance_stats?.diversity_metric && (
+                  <Tag color="purple" style={{ fontSize: '14px', padding: '4px 8px' }}>
+                    Diversity: {(optimizationResult.performance_stats.diversity_metric * 100).toFixed(1)}%
+                  </Tag>
+                )}
               </Space>
             </div>
           )}
@@ -819,7 +1412,7 @@ const Optimize = () => {
               <Button type="link" onClick={handleGoToResultsPage} style={{ padding: '0 4px' }}>
                 Results Page
               </Button>
-              to view all your optimizations and compare different runs.
+              to view all your optimizations and compare different algorithms and approaches.
             </Text>
           </div>
         </div>

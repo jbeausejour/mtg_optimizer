@@ -241,3 +241,22 @@ class UserBuylistCardService(AsyncBaseService[UserBuylistCard]):
         except Exception as e:
             logger.error(f"Error deleting card '{card_name}' from buylist ID {buylist_id}: {str(e)}")
             return False
+
+    @classmethod
+    async def delete_cards_from_buylist(
+        cls, session: AsyncSession, buylist_id: int, user_id: int, cards: List[Dict[str, Any]]
+    ) -> int:
+        """Delete cards from a buylist based on name and quantity"""
+        try:
+            card_names = [card["name"].strip() for card in cards]
+            result = await session.execute(
+                cls.delete(UserBuylistCard).where(
+                    UserBuylistCard.buylist_id == buylist_id,
+                    UserBuylistCard.user_id == user_id,
+                    UserBuylistCard.name.in_(card_names),
+                )
+            )
+            return result.rowcount or 0
+        except Exception as e:
+            logger.error(f"Error deleting cards from buylist {buylist_id}: {str(e)}")
+            raise

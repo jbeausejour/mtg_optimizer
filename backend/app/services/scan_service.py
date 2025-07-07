@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Tuple
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, distinct, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -36,46 +36,19 @@ class ScanService(AsyncBaseService[Scan]):
             raise
 
     @classmethod
-    async def delete_scans(cls, session: AsyncSession, scan_ids: List[int]) -> Tuple[List[int], List[Dict]]:
-        """
-        Deletes scans by their IDs.
-
-        Returns:
-        - deleted: List of successfully deleted scan IDs
-        - errors: List of {scan_id, error} dicts
-        """
-        deleted = []
-        errors = []
-
-        for scan_id in scan_ids:
-            try:
-                scan = await session.get(Scan, scan_id)
-                if not scan:
-                    logger.warning(f"[delete_scans] Scan ID {scan_id} not found.")
-                    errors.append({"scan_id": scan_id, "error": "Not found"})
-                    continue
-
-                await cls.delete(session, scan)
-                logger.info(f"[delete_scans] Deleted Scan ID {scan_id}.")
-                deleted.append(scan_id)
-
-            except Exception as e:
-                logger.error(f"[delete_scans] Error deleting scan ID {scan_id}: {str(e)}")
-                errors.append({"scan_id": scan_id, "error": str(e)})
-
-        return deleted, errors
-
-    @classmethod
-    async def get_all_scans(cls, session: AsyncSession) -> List[Scan]:
-        """Get all scans ordered by creation date with preloaded scan_results"""
-        try:
-            result = await session.execute(
-                select(Scan).options(selectinload(Scan.scan_results)).order_by(Scan.created_at.desc())
-            )
-            return result.scalars().all()
-        except Exception as e:
-            logger.error(f"Error getting all scans: {str(e)}")
-            return []
+    async def create_scan_attempt(
+        cls, session: AsyncSession, scan_id: int, site_id: int, card_name: str, found: bool
+    ) -> ScanAttempt:
+        """Record that we attempted to scan a card on a site"""
+        attempt = ScanAttempt(
+            scan_id=scan_id,
+            site_id=site_id,
+            card_name=normalize_string(card_name),
+            found=found,
+            attempted_at=datetime.now(timezone.utc),
+        )
+        session.add(attempt)
+        return attempt
 
     @classmethod
     async def create_scan_result(cls, session: AsyncSession, scan_id: int, card_result: Dict[str, Any]) -> ScanResult:
@@ -108,6 +81,93 @@ class ScanService(AsyncBaseService[Scan]):
             await session.rollback()
             logger.error(f"Error creating scan result: {str(e)}")
             raise
+
+    @classmethod
+    async def delete_scans(cls, session: AsyncSession, scan_ids: List[int]) -> Tuple[List[int], List[Dict]]:
+        """
+        Deletes scans by their IDs.
+
+        Returns:
+        - deleted: List of successfully deleted scan IDs
+        - errors: List of {scan_id, error} dicts
+        """
+        deleted = []
+        errors = []
+
+        for scan_id in scan_ids:
+            try:
+                scan = await session.get(Scan, scan_id)
+                if not scan:
+                    logger.warning(f"[delete_scans] Scan ID {scan_id} not found.")
+                    errors.append({"scan_id": scan_id, "error": "Not found"})
+                    continue
+
+                await cls.delete(session, scan)
+                logger.info(f"[delete_scans] Deleted Scan ID {scan_id}.")
+                deleted.append(scan_id)
+
+            except Exception as e:
+                logger.error(f"[delete_scans] Error deleting scan ID {scan_id}: {str(e)}")
+                errors.append({"scan_id": scan_id, "error": str(e)})
+
+        return deleted, errors
+
+    @classmethod
+    async def delete_scans_by_ids(cls, session: AsyncSession, scan_ids: List[int]) -> int:
+        """Bulk delete scans by a list of IDs"""
+        try:
+            from sqlalchemy import delete
+
+            # Delete scan results first (foreign key constraint)
+            await session.execute(delete(ScanResult).where(ScanResult.scan_id.in_(scan_ids)))
+
+            # Delete scan attempts
+            await session.execute(delete(ScanAttempt).where(ScanAttempt.scan_id.in_(scan_ids)))
+
+            # Delete scans
+            result = await session.execute(delete(Scan).where(Scan.id.in_(scan_ids)))
+
+            deleted_count = result.rowcount or 0
+            logger.info(f"Successfully deleted {deleted_count} scans and their related data")
+
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Error bulk deleting scans: {str(e)}")
+            raise
+
+    @classmethod
+    async def get_all_scans(cls, session: AsyncSession) -> List[Scan]:
+        """Get all scans ordered by creation date with preloaded scan_results"""
+        try:
+            result = await session.execute(
+                select(Scan).options(selectinload(Scan.scan_results)).order_by(Scan.created_at.desc())
+            )
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting all scans: {str(e)}")
+            return []
+
+    @classmethod
+    async def get_scans_history(cls, session: AsyncSession, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get all scans ordered by creation date with preloaded scan_results"""
+        try:
+            stmt = (
+                select(
+                    Scan.id,
+                    Scan.created_at,
+                    func.count(ScanResult.id).label("cards_required_total"),
+                    func.count(distinct(ScanResult.site_id)).label("sites_scraped"),
+                )
+                .join(Scan.scan_results)
+                .group_by(Scan.id)
+                .order_by(Scan.created_at.desc())
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            return [dict(row) for row in result.mappings()]
+        except Exception as e:
+            logger.error(f"Error getting all scans: {str(e)}")
+            return []
 
     @classmethod
     async def get_scan_results_by_id_and_sites(
@@ -284,21 +344,6 @@ class ScanService(AsyncBaseService[Scan]):
         except Exception as e:
             logger.error(f"Error in get_scan_freshness_map_by_scan_id: {str(e)}")
             return {}
-
-    @classmethod
-    async def create_scan_attempt(
-        cls, session: AsyncSession, scan_id: int, site_id: int, card_name: str, found: bool
-    ) -> ScanAttempt:
-        """Record that we attempted to scan a card on a site"""
-        attempt = ScanAttempt(
-            scan_id=scan_id,
-            site_id=site_id,
-            card_name=normalize_string(card_name),
-            found=found,
-            attempted_at=datetime.now(timezone.utc),
-        )
-        session.add(attempt)
-        return attempt
 
     @classmethod
     async def get_latest_scan_attempts(

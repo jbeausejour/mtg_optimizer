@@ -19,13 +19,6 @@ export const weightConfig = {
     step: 0.1,
     tooltip: 'Favor higher quality cards (e.g., NM over PLD).',
   },
-  availability: {
-    label: 'Availability',
-    min: 10,
-    max: 1000,
-    step: 10,
-    tooltip: 'Ensure the full wishlist is completed.',
-  },
   store_count: {
     label: 'Minimize Stores',
     min: 0.1,
@@ -39,7 +32,6 @@ const NormalizedWeightSliders = ({ onChange, findMinStore = false }) => {
   const [localWeights, setLocalWeights] = useState({
     cost: 4.0,
     store_count: 0.1,
-    availability: 0.5,
     quality: 2.5,
   });
 
