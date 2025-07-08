@@ -180,7 +180,7 @@ class MTGStocksService:
     def _parse_api_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Parse API response into standardized format"""
         try:
-            return {
+            results = {
                 "id": data.get("id"),
                 "name": data.get("name"),
                 "set": data.get("set", {}).get("name"),
@@ -193,6 +193,8 @@ class MTGStocksService:
                 "last_updated": data.get("updated_at"),
                 "foil_only": data.get("foil_only", False),
             }
+            logger.info(f"Parsed API response: {results}")
+            return results
         except Exception as e:
             logger.error(f"Error parsing API response: {str(e)}")
             return None
