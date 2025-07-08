@@ -171,7 +171,9 @@ async def _async_check_single_item(watchlist_id: int, include_mtgstocks: bool):
                 logger.warning(f"Watchlist item {watchlist_id} not found")
                 return {"status": "not_found", "watchlist_id": watchlist_id}
 
-            logger.info(f"🔍 Checking prices for {watchlist_item.card_name}")
+            logger.info(
+                f"🔍 Checking prices for {watchlist_item.card_name} id: {watchlist_item.id} mtgstock_id: {watchlist_item.mtgstocks_id}"
+            )
 
             # Get market price if requested
             market_price = None
@@ -179,7 +181,7 @@ async def _async_check_single_item(watchlist_id: int, include_mtgstocks: bool):
                 try:
                     market_price = await get_mtgstocks_price(watchlist_item.mtgstocks_id)
                     if market_price:
-                        logger.debug(f"Got MTGStocks price: ${market_price} for {watchlist_item.card_name}")
+                        logger.info(f"Got MTGStocks price: ${market_price} for {watchlist_item.card_name}")
                 except Exception as e:
                     logger.warning(f"Failed to get MTGStocks price for {watchlist_item.card_name}: {str(e)}")
 

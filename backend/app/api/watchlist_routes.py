@@ -33,7 +33,7 @@ async def get_user_watchlist():
         return jsonify({"error": "Failed to fetch watchlist"}), 500
 
 
-@watchlist_routes.route("/watchlist/add", methods=["POST"])
+@watchlist_routes.route("/watchlist", methods=["POST"])
 @jwt_required
 async def add_to_watchlist():
     """Add a new item to the user's watchlist"""

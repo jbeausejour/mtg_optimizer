@@ -63,9 +63,9 @@ class WatchlistService:
                     )
                 )
                 .order_by(
-                    # Prioritize items that have never been scanned
-                    latest_scan_subq.c.last_scanned.asc().nulls_first(),
-                    Watchlist.created_at.asc(),
+                    func.isnull(latest_scan_subq.c.last_scanned).desc(),  # NULLs first
+                    latest_scan_subq.c.last_scanned.asc(),  # Then by timestamp
+                    Watchlist.created_at.asc(),  # Finally by creation
                 )
             )
 
@@ -169,8 +169,10 @@ class WatchlistService:
 
         stmt = select(ScanResult).where(
             and_(
-                ScanResult.created_at >= cutoff_time,
-                or_(*[ScanResult.card_name.ilike(f"%{variation}%") for variation in card_variations]),
+                ScanResult.updated_at >= cutoff_time,  # FIXED: Use updated_at instead of created_at
+                or_(
+                    *[ScanResult.name.ilike(f"%{variation}%") for variation in card_variations]
+                ),  # FIXED: Use .name instead of .card_name
             )
         )
 
