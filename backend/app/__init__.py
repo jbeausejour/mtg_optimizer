@@ -39,7 +39,7 @@ def create_app(config_class=get_config()):
 
     app = cors(
         app,
-        allow_origin=cors_origins,
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],

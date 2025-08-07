@@ -1,0 +1,165 @@
+# .claude/project-context.yml
+# SuperClaude Project Configuration for MTG Optimizer
+
+project:
+  name: "MTG Optimizer"
+  type: "full-stack-web-application"
+  domain: "trading-card-game-optimization"
+  complexity: "high"
+  status: "active-development"
+
+## Core Architecture
+stack:
+  backend:
+    framework: "quart"  # Async Python web framework
+    language: "python-3.12"
+    database: "mysql-with-sqlalchemy-async"
+    cache: "redis"
+    task_queue: "celery"
+    auth: "jwt-with-quart-jwt-extended"
+    server: "uvicorn-asgi"
+  
+  frontend:
+    framework: "react-19.1.0"
+    ui_library: "ant-design-5.24.9"
+    state_management: "react-query-tanstack"
+    charts: "chartjs-with-react-chartjs-2"
+    http_client: "axios"
+    build_tool: "create-react-app"
+
+  optimization:
+    algorithms: ["MILP", "NSGA-II", "NSGA-III", "MOEA-D", "hybrid-approaches"]
+    libraries: ["PuLP", "DEAP"]
+    focus: "multi-objective-pareto-optimization"
+
+## Project Structure
+directories:
+  backend: "/backend/"
+  frontend: "/frontend/"
+  key_backend_modules:
+    - "app/api/"           # REST API routes
+    - "app/models/"        # SQLAlchemy models  
+    - "app/services/"      # Business logic
+    - "app/optimization/"  # Advanced optimization algorithms
+    - "app/tasks/"         # Celery background tasks
+    - "app/utils/"         # Helper utilities
+    - "app/constants/"     # Card/currency mappings
+
+## Domain Knowledge
+business_context:
+  primary_function: "Magic: The Gathering card purchase optimization"
+  key_features:
+    - "multi-vendor-price-comparison"
+    - "advanced-optimization-algorithms"  
+    - "pareto-optimal-solution-finding"
+    - "automated-web-scraping"
+    - "real-time-price-monitoring"
+    - "user-buylist-management"
+    - "background-task-processing"
+
+  optimization_objectives:
+    - "minimize-total-cost"
+    - "minimize-vendor-count" 
+    - "maximize-card-quality"
+    - "optimize-shipping-efficiency"
+
+  data_sources:
+    - "scryfall-api"          # Comprehensive card database
+    - "multiple-card-vendors"  # Price scraping targets
+    - "user-generated-buylists"
+
+## Development Standards  
+code_quality:
+  python:
+    formatter: "black"
+    line_length: 120
+    import_sorter: "isort"
+    linter: "flake8"
+    type_checker: "mypy"
+    test_framework: "pytest"
+  
+  javascript:
+    linter: "eslint-with-import-plugin"
+    style: "react-best-practices"
+
+  git_workflow:
+    commit_format: "conventional-commits"
+    branches:
+      main: "production-ready"
+      develop: "integration-branch"
+      feature: "feature/*"
+      hotfix: "hotfix/*"
+      release: "release/*"
+
+## Performance & Scalability
+performance_requirements:
+  optimization_algorithms: "handle-large-card-sets-efficiently"
+  web_scraping: "respect-rate-limits-avoid-blocks"
+  database: "async-patterns-proper-indexing"
+  frontend: "virtualization-for-large-lists"
+  caching: "redis-for-price-data-and-sessions"
+
+## Key Integration Points
+external_apis:
+  scryfall:
+    purpose: "card-data-and-metadata"
+    rate_limit: "respect-api-guidelines"
+    caching: "essential-for-performance"
+  
+  card_vendors:
+    scraping_targets: "multiple-vendor-sites"
+    challenges: "anti-bot-measures"
+    tools: ["selenium", "beautifulsoup", "cloudscraper", "undetected-chromedriver"]
+
+## Development Context
+current_priorities:
+  - "optimization-algorithm-refinement"
+  - "web-scraping-reliability"
+  - "user-experience-improvements"  
+  - "performance-optimization"
+  - "testing-coverage-expansion"
+
+common_tasks:
+  - "algorithm-parameter-tuning"
+  - "vendor-scraper-maintenance"
+  - "price-data-validation"
+  - "ui-component-development"
+  - "background-task-monitoring"
+
+## Architecture Flags
+flags:
+  USE_NEW_OPTIMIZATION_ARCHITECTURE: "toggle-between-optimization-implementations"
+  async_patterns: "throughout-codebase"
+  microservice_ready: "containerized-components"
+  scalability_focus: "handle-growth-efficiently"
+
+## Testing Strategy
+testing_approach:
+  backend: "pytest-with-async-support"
+  frontend: "react-testing-library"
+  optimization: "algorithm-correctness-and-performance"
+  integration: "end-to-end-workflow-testing"
+  services: "comprehensive-service-layer-testing"
+
+## Deployment Context
+deployment:
+  containerization: "docker-ready"
+  environment_config: "environment-based-settings"
+  static_files: "served-from-frontend-build"
+  external_dependencies: "redis-database-externalized"
+
+## Troubleshooting Context
+common_issues:
+  - "redis-connection-task-queue-problems"
+  - "scryfall-api-rate-limiting"
+  - "vendor-scraping-detection-avoidance"
+  - "optimization-algorithm-performance"
+  - "database-migration-async-patterns"
+
+## Development Philosophy
+principles:
+  - "async-first-development"
+  - "optimization-algorithm-accuracy"
+  - "user-experience-priority"
+  - "data-integrity-essential"
+  - "performance-monitoring-continuous"

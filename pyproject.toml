@@ -1,3 +1,76 @@
+[build-system]
+requires = ["setuptools>=75.1.0", "wheel>=0.44.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "your-project-name"  # Replace with your actual project name
+version = "0.1.0"  # Replace with your actual version
+description = "Your project description"  # Replace with actual description
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},  # Replace with actual info
+]
+readme = "README.md"
+license = {text = "MIT"}  # Replace with your actual license
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core Stack
+    "quart==0.20.0",
+    "quart-cors==0.8.0",
+    "quart-jwt-extended==0.1.0",
+    "SQLAlchemy==2.0.40",
+    "asyncmy==0.2.10",
+    "redis[async]==5.0.1",  # Consolidated redis dependency
+    "uvicorn==0.34.2",
+    "nest-asyncio==1.6.0",
+    
+    # Task Queue
+    "celery==5.4.0",
+    
+    # Web/Data Scraping & Processing
+    "requests==2.32.2",
+    "aiohttp==3.9.5",
+    "beautifulsoup4==4.12.3",
+    "cloudscraper==1.2.71",
+    "selenium==4.22.0",
+    "selenium-stealth==1.0.6",
+    "undetected-chromedriver==3.5.5",
+    "thefuzz==0.18.0",
+    "htmldom==2.0",
+    
+    # Optimization & Math
+    "deap==1.4.1",
+    "PuLP==2.8.0",
+    "pandas==2.2.2",
+    "numpy==2.0.0",
+    
+    # Utilities / Config
+    "python-dotenv==1.0.0",
+    "tenacity==9.0.0",
+    "colorama==0.4.6",
+    "pydantic==2.10.3",
+    "python-Levenshtein==0.27.1",
+    "psutil==7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.2",
+    "black",
+    "isort",
+    "flake8",
+]
+
+test = [
+    "pytest==8.3.2",
+]
+
 [tool.black]
 line-length = 120
 target-version = ["py312"]
