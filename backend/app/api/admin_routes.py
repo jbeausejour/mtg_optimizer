@@ -4,14 +4,13 @@ from app.models.user import User
 from app.services.admin_service import AdminService
 from app.utils.load_initial_data import load_all_data, truncate_tables
 from app.utils.validators import validate_setting_key, validate_setting_value
+from time import time
 from quart import Blueprint, request, jsonify
 from quart_jwt_extended import (
     create_access_token,
     create_refresh_token,
     jwt_required,
     get_jwt_identity,
-    verify_jwt_in_request,
-    get_jwt_claims,
 )
 from sqlalchemy.future import select
 from app.utils.async_context_manager import flask_session_scope
@@ -21,8 +20,16 @@ logger = logging.getLogger(__name__)
 # Admin Routes
 admin_routes = Blueprint("admin_routes", __name__)
 
+@admin_routes.route("/health")
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': time.time(),
+        'service': 'mtg-flask-app'
+    }), 200
 
-# Settings Operations
+
 # Settings Operations
 @admin_routes.route("/settings", methods=["GET"])
 @jwt_required
@@ -121,8 +128,10 @@ async def update_settings():
         return jsonify({"error": "Internal server error"}), 500
 
 
-@admin_routes.route("/login", methods=["POST"])
+@admin_routes.route("/login", methods=["POST", "OPTIONS"])
 async def login():
+    if request.method == "OPTIONS":
+        return jsonify({}), 204 
     data = await request.get_json()
 
     # Try Authelia-authenticated session first
@@ -165,13 +174,10 @@ async def login():
 @jwt_required
 async def refresh_token():
     try:
-        # 1. First try JWT refresh token
-        await verify_jwt_in_request()
-        claims = get_jwt_claims()
-        if claims.get("type") != "refresh":
-            return jsonify({"error": "Only refresh tokens allowed"}), 401
-
+        # Validate refresh token type
         identity = get_jwt_identity()
+        if not identity:
+            return jsonify({"error": "Invalid token identity"}), 401
 
     except Exception:
         # 2. Fallback to Authelia session
@@ -196,6 +202,7 @@ async def refresh_token():
 
 
 @admin_routes.route("/create_user", methods=["POST"])
+@jwt_required
 async def route_create_user():
 
     try:

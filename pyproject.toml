@@ -3,21 +3,15 @@ requires = ["setuptools>=75.1.0", "wheel>=0.44.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "your-project-name"  # Replace with your actual project name
-version = "0.1.0"  # Replace with your actual version
-description = "Your project description"  # Replace with actual description
+name = "mtg-optimizer"
+version = "0.1.0"
+description = "Optimizer for MTG purchases"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},  # Replace with actual info
+    {name = "Jules Beauséjour", email = "your.email@example.com"},
 ]
 readme = "README.md"
-license = {text = "MIT"}  # Replace with your actual license
+license = "MIT"  # Replace TOML table with string
 requires-python = ">=3.12"
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-]
 
 dependencies = [
     # Core Stack
@@ -75,6 +69,9 @@ test = [
 line-length = 120
 target-version = ["py312"]
 skip-string-normalization = false
+
+[tool.setuptools]
+packages = ["backend"]
 
 [tool.isort]
 profile = "black"

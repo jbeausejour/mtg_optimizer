@@ -5,6 +5,7 @@ __pypackages__/
 *.py[cod]
 *$py.class
 .ipynb_checkpoints
+*.egg-info/
 # Django stuff:
 *.log
 .env

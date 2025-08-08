@@ -7,9 +7,9 @@ load_dotenv()
 
 from .config import get_config
 from quart import Quart, jsonify
-from quart_cors import cors
 from quart_jwt_extended import JWTManager
 from .logging_config import setup_logging
+from .middleware.security_headers import add_security_headers
 
 from sqlalchemy.orm import declarative_base
 
@@ -23,9 +23,7 @@ Base = declarative_base()
 # JWT setup
 jwt = JWTManager()
 
-# Determine CORS origins
-cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
-cors_origins = cors_origins.split(",") if "," in cors_origins else [cors_origins]
+# CORS is now handled by Traefik reverse proxy
 
 
 def create_app(config_class=get_config()):
@@ -37,13 +35,7 @@ def create_app(config_class=get_config()):
         instance_relative_config=True,
     )
 
-    app = cors(
-        app,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    )
+    # CORS handling moved to Traefik - no application-level CORS needed
     app.config.from_object(config_class)
 
     jwt.init_app(app)
@@ -52,6 +44,20 @@ def create_app(config_class=get_config()):
     def expired_token_callback(expired_token):
         return (
             jsonify({"msg": "Token has expired", "token_type": expired_token["type"], "error": "token_expired"}),
+            401,
+        )
+
+    @jwt.invalid_token_loader
+    def invalid_token_callback(error_string):
+        return (
+            jsonify({"msg": error_string, "error": "invalid_token"}),
+            401,
+        )
+
+    @jwt.unauthorized_loader
+    def missing_token_callback(error_string):
+        return (
+            jsonify({"msg": error_string, "error": "authorization_required"}),
             401,
         )
 
@@ -112,5 +118,8 @@ def create_app(config_class=get_config()):
         root_logger.propagate = False
 
     root_logger.info("MTG Optimizer startup")
+    
+    # Add security headers middleware
+    add_security_headers(app)
 
     return app

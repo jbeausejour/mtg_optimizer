@@ -34,7 +34,7 @@ class Config:
     # Secret key for Flask sessions and other security features
 
     # JWT configuration
-    JWT_SECRET_KEY = "your-jwt-secret-key-here"  # Replace with a different strong, random key
+    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-jwt-secret-key-here")  # Use environment variable
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
 
@@ -61,7 +61,7 @@ class Config:
     MAIL_USE_TLS = os.environ.get("MAIL_USE_TLS") is not None
     MAIL_USERNAME = os.environ.get("MAIL_USERNAME")
     MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD")
-    ADMINS = ["your-email@example.com"]  # Replace with your admin email(s)
+    ADMINS = os.environ.get("ADMIN_EMAILS", "admin@localhost").split(",")
 
     # Optimization task config
     LOG_LEVEL_FILE = "INFO"
@@ -88,7 +88,16 @@ class DevelopmentConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
-    # Add any production-specific settings here
+    # Production security settings
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
 
 
 class TestingConfig(Config):
