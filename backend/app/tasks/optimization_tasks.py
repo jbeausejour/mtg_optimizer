@@ -32,9 +32,7 @@ from app.tasks.celery_instance import celery_app
 from app.utils.data_fetcher import ErrorCollector, ExternalDataSynchronizer, SiteScrapeStats
 from app.utils.helpers import normalize_string
 from celery.result import AsyncResult
-import nest_asyncio
 
-nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 

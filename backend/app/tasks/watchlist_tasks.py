@@ -14,10 +14,7 @@ from app.utils.async_context_manager import celery_session_scope
 from app.services.watchlist_service import WatchlistService
 from app.services.mtgstocks_service import get_mtgstocks_price, MTGStocksService
 from app.models.watchlist import Watchlist, PriceAlert
-import nest_asyncio
 
-# Apply nest_asyncio at module level
-nest_asyncio.apply()
 logger = logging.getLogger(__name__)
 
 
